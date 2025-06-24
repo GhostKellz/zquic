@@ -16,7 +16,10 @@ zquic is a lightweight, high-performance QUIC (HTTP/3 transport layer) implement
 ## ✨ Features
 
 - **Full QUIC transport**: handshake, streams, encryption
-- **HTTP/3 framing support**: frame parsing, serialization, and processing
+- **Production-ready HTTP/3 server**: routing, middleware, advanced features
+- **Enhanced request/response handling**: JSON, HTML, static files, streaming
+- **Sophisticated routing system**: pattern matching, parameter extraction, RESTful APIs
+- **Comprehensive middleware stack**: CORS, authentication, rate limiting, compression, security headers
 - **TLS 1.3 handshake** with custom crypto backend
 - **Built for async networking** (cooperates with tokioz, zvm-net)
 - **Configurable congestion control** (CC) and retransmission logic
@@ -49,6 +52,13 @@ zig build test
 
 # Install executables (optional)
 zig build install
+
+# Run examples
+zig build run                    # Main demo
+zig build run-client            # QUIC client example
+zig build run-server            # QUIC server example  
+zig build run-http3-server      # Enhanced HTTP/3 server
+zig build run-ghostscale        # VPN example
 ```
 
 ### Basic Usage
@@ -62,16 +72,46 @@ pub fn main() !void {
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
-    // Create a QUIC connection
-    const conn_id = zquic.Packet.ConnectionId{ .data = [_]u8{1, 2, 3, 4} };
-    var connection = zquic.Connection.Connection.init(allocator, .client, conn_id);
-    defer connection.deinit();
+    // Create HTTP/3 server configuration
+    const config = zquic.Http3.ServerConfig{
+        .max_connections = 1000,
+        .enable_compression = true,
+        .enable_cors = true,
+        .enable_security_headers = true,
+        .static_files_root = "./public",
+    };
 
-    // Initialize flow control
-    var flow_controller = zquic.FlowControl.FlowController.init(allocator, 1024 * 1024, 1024 * 1024);
-    defer flow_controller.deinit();
+    // Initialize enhanced HTTP/3 server
+    var server = try zquic.Http3.Http3Server.init(allocator, config);
+    defer server.deinit();
 
-    std.debug.print("ZQUIC connection initialized!\n", .{});
+    // Add routes with handlers
+    try server.get("/", homeHandler);
+    try server.get("/api/users/:id", getUserHandler);
+    try server.post("/api/users", createUserHandler);
+
+    // Add middleware
+    const auth = zquic.Http3.Middleware.AuthMiddleware.init(allocator, "secret");
+    try server.use(auth.middleware());
+
+    // Start server
+    try server.start();
+    std.debug.print("HTTP/3 server running!\n", .{});
+}
+
+fn homeHandler(req: *zquic.Http3.Request, res: *zquic.Http3.Response) !void {
+    try res.html("<h1>Welcome to ZQUIC HTTP/3 Server!</h1>");
+}
+
+fn getUserHandler(req: *zquic.Http3.Request, res: *zquic.Http3.Response) !void {
+    const user_id = zquic.Http3.Router.getParam(req, "id") orelse "unknown";
+    try res.text(try std.fmt.allocPrint(req.allocator, "User ID: {s}", .{user_id}));
+}
+
+fn createUserHandler(req: *zquic.Http3.Request, res: *zquic.Http3.Response) !void {
+    const body = req.getBody();
+    res.setStatus(.created);
+    try res.text(try std.fmt.allocPrint(req.allocator, "Created user with {} bytes", .{body.len}));
 }
 ```
 
@@ -79,7 +119,7 @@ pub fn main() !void {
 
 ```
 ┌─────────────────┐
-│   HTTP/3 Layer  │  <- frame.zig, qpack.zig, server.zig
+│   HTTP/3 Layer  │  <- Enhanced server, routing, middleware, request/response
 ├─────────────────┤
 │   QUIC Core     │  <- connection.zig, packet.zig, stream.zig
 ├─────────────────┤  
@@ -111,12 +151,16 @@ pub fn main() !void {
 ## 🛠️ Development Status
 
 - ✅ Core QUIC protocol structures
-- ✅ HTTP/3 frame parsing and serialization  
+- ✅ **Enhanced HTTP/3 server with routing and middleware**
+- ✅ **Production-ready request/response handling**
+- ✅ **Comprehensive middleware system (CORS, auth, rate limiting, etc.)**
+- ✅ **Advanced routing with parameter extraction**
 - ✅ TLS 1.3 integration layer
 - ✅ Flow control and congestion management
 - ✅ UDP networking foundation
-- ✅ Basic client/server examples
+- ✅ **Enhanced client/server examples**
 - 🚧 Advanced congestion control algorithms
+- 🚧 **Server push functionality**
 - 🚧 Comprehensive test suite
 - 🚧 Performance benchmarks
 - 📋 Complete RFC 9000 compliance

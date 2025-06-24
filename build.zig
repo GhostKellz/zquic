@@ -52,6 +52,33 @@ pub fn build(b: *std.Build) void {
     });
     b.installArtifact(server_exe);
 
+    // const ghostmesh_exe = b.addExecutable(.{
+    //     .name = "ghostmesh-vpn",
+    //     .root_module = b.createModule(.{
+    //         .root_source_file = b.path("examples/ghostmesh_vpn.zig"),
+    //         .target = target,
+    //         .optimize = optimize,
+    //         .imports = &.{
+    //             .{ .name = "zquic", .module = mod },
+    //         },
+    //     }),
+    // });
+    // b.installArtifact(ghostmesh_exe);
+
+    // Enhanced HTTP/3 server example
+    const http3_server_exe = b.addExecutable(.{
+        .name = "zquic-http3-server",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("examples/http3_server.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{
+                .{ .name = "zquic", .module = mod },
+            },
+        }),
+    });
+    b.installArtifact(http3_server_exe);
+
     // Run steps
     const run_step = b.step("run", "Run the main demo");
     const run_cmd = b.addRunArtifact(exe);
@@ -68,11 +95,23 @@ pub fn build(b: *std.Build) void {
     run_server_step.dependOn(&run_server_cmd.step);
     run_server_cmd.step.dependOn(b.getInstallStep());
 
+    // const run_ghostmesh_step = b.step("run-ghostmesh", "Run the GhostMesh VPN example");
+    // const run_ghostmesh_cmd = b.addRunArtifact(ghostmesh_exe);
+    // run_ghostmesh_step.dependOn(&run_ghostmesh_cmd.step);
+    // run_ghostmesh_cmd.step.dependOn(b.getInstallStep());
+
+    const run_http3_server_step = b.step("run-http3-server", "Run the HTTP/3 server example");
+    const run_http3_server_cmd = b.addRunArtifact(http3_server_exe);
+    run_http3_server_step.dependOn(&run_http3_server_cmd.step);
+    run_http3_server_cmd.step.dependOn(b.getInstallStep());
+
     // Allow passing arguments to the applications
     if (b.args) |args| {
         run_cmd.addArgs(args);
         run_client_cmd.addArgs(args);
         run_server_cmd.addArgs(args);
+        // run_ghostmesh_cmd.addArgs(args);
+        run_http3_server_cmd.addArgs(args);
     }
 
     // Tests

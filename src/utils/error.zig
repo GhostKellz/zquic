@@ -28,6 +28,16 @@ pub const ZquicError = error{
     NetworkError,
     SocketError,
     AddressError,
+    AddressInUse,
+    NetworkUnreachable,
+    ConnectionReset,
+    PacketTooLarge,
+    WouldBlock,
+    
+    // VPN and multiplexing errors
+    UnknownConnection,
+    ConnectionLimitReached,
+    SendQueueFull,
 
     // Resource errors
     OutOfMemory,
