@@ -1,0 +1,6 @@
+../..//include/zquic.h:49:1: error: unknown type name 'ssize_t'
+../..//include/zquic.h:50:1: error: unknown type name 'ssize_t'
+../..//include/zquic.h:55:1: error: unknown type name 'ssize_t'
+../..//include/zquic.h:56:1: error: unknown type name 'ssize_t'
+../..//include/ghostbridge.h:73:1: error: unknown type name 'ssize_t'
+../..//include/ghostbridge.h:74:1: error: unknown type name 'ssize_t'

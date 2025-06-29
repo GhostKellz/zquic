@@ -93,7 +93,7 @@ pub const StatusCode = enum(u16) {
     pub fn getReasonPhrase(self: StatusCode) []const u8 {
         const full_str = self.toString();
         if (std.mem.indexOf(u8, full_str, " ")) |space_pos| {
-            return full_str[space_pos + 1..];
+            return full_str[space_pos + 1 ..];
         }
         return "Unknown";
     }
@@ -358,7 +358,7 @@ pub const Response = struct {
         // Create HEADERS frame (simplified - would need QPACK encoding)
         const headers_payload = try allocator.alloc(u8, all_headers.items.len * 32); // Simplified
         defer allocator.free(headers_payload);
-        
+
         // TODO: Properly encode headers with QPACK
         const headers_frame = Frame.Frame{
             .frame_type = .headers,
@@ -392,8 +392,8 @@ pub const Response = struct {
 /// Get content type from file extension
 fn getContentTypeFromPath(path: []const u8) []const u8 {
     if (std.mem.lastIndexOfScalar(u8, path, '.')) |dot_index| {
-        const ext = path[dot_index + 1..];
-        
+        const ext = path[dot_index + 1 ..];
+
         if (std.mem.eql(u8, ext, "html") or std.mem.eql(u8, ext, "htm")) {
             return "text/html";
         } else if (std.mem.eql(u8, ext, "css")) {
@@ -414,7 +414,7 @@ fn getContentTypeFromPath(path: []const u8) []const u8 {
             return "application/pdf";
         }
     }
-    
+
     return "application/octet-stream";
 }
 

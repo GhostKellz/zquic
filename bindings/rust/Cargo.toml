@@ -1,0 +1,40 @@
+# ZQUIC Rust Bindings - zquic-sys crate
+# Low-level FFI bindings for ZQUIC post-quantum QUIC library
+
+[package]
+name = "zquic-sys"
+version = "0.1.0"
+edition = "2024"
+description = "Low-level FFI bindings for ZQUIC post-quantum QUIC library"
+license = "Apache-2.0"
+repository = "https://github.com/ghostkellz/zquic"
+authors = ["GhostChain Team <team@ghostchain.io>"]
+keywords = ["quic", "http3", "post-quantum", "crypto", "network"]
+categories = ["network-programming", "cryptography", "api-bindings"]
+links = "zquic"
+
+[dependencies]
+libc = "0.2"
+
+[dev-dependencies]
+tokio = { version = "1.0", features = ["full"] }
+
+[build-dependencies]
+bindgen = "0.70"
+cc = "1.0"
+
+[features]
+default = ["post-quantum"]
+post-quantum = []
+services = []
+ghostbridge = ["services"]
+wraith = ["services"]
+cns = ["services"]
+
+[lib]
+name = "zquic_sys"
+crate-type = ["rlib", "cdylib"]
+
+[package.metadata.docs.rs]
+features = ["post-quantum", "services", "ghostbridge", "wraith", "cns"]
+targets = ["x86_64-unknown-linux-gnu", "aarch64-unknown-linux-gnu"]

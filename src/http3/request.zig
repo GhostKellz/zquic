@@ -221,11 +221,11 @@ pub const Request = struct {
 
     fn setPath(self: *Self, uri: []const u8) !void {
         self.uri = try self.allocator.dupe(u8, uri);
-        
+
         // Parse path and query string
         if (std.mem.indexOf(u8, uri, "?")) |query_start| {
             self.path = try self.allocator.dupe(u8, uri[0..query_start]);
-            self.query_string = try self.allocator.dupe(u8, uri[query_start + 1..]);
+            self.query_string = try self.allocator.dupe(u8, uri[query_start + 1 ..]);
             try self.parseQueryString();
         } else {
             self.path = try self.allocator.dupe(u8, uri);
@@ -238,7 +238,7 @@ pub const Request = struct {
             while (params_iter.next()) |param| {
                 if (std.mem.indexOf(u8, param, "=")) |eq_pos| {
                     const key = param[0..eq_pos];
-                    const value = param[eq_pos + 1..];
+                    const value = param[eq_pos + 1 ..];
                     try self.query_params.put(key, value);
                 } else {
                     try self.query_params.put(param, "");

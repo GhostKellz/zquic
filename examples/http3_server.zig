@@ -64,7 +64,7 @@ pub fn main() !void {
     const local_cid = try zquic.Packet.ConnectionId.init(&[_]u8{ 0xa1, 0xb2, 0xc3, 0xd4, 0xe5, 0xf6, 0x07, 0x08 });
     var connection = zquic.Connection.Connection.init(allocator, .server, local_cid);
     defer connection.deinit();
-    
+
     connection.state = .established;
     const conn_id = try server.registerConnection(&connection);
     defer server.unregisterConnection(conn_id);
@@ -94,17 +94,17 @@ fn simulateRequests(server: *zquic.Http3.Http3Server, conn_id: []const u8, alloc
 
     // Simulate GET / request
     try simulateGetRequest(server, conn_id, 1, "/", allocator);
-    
+
     // Simulate API requests
     try simulateGetRequest(server, conn_id, 2, "/api/users/123", allocator);
     try simulatePostRequest(server, conn_id, 3, "/api/users", "{\"name\": \"Alice\", \"email\": \"alice@example.com\"}", allocator);
-    
+
     // Simulate health check
     try simulateGetRequest(server, conn_id, 4, "/health", allocator);
-    
+
     // Simulate 404
     try simulateGetRequest(server, conn_id, 5, "/nonexistent", allocator);
-    
+
     // Simulate stats request
     try simulateGetRequest(server, conn_id, 6, "/api/stats", allocator);
 }
@@ -113,12 +113,12 @@ fn simulateGetRequest(server: *zquic.Http3.Http3Server, conn_id: []const u8, str
     // Create HEADERS frame
     const headers_payload = try createHeadersPayload(allocator, "GET", path, null);
     defer allocator.free(headers_payload);
-    
+
     const headers_frame = zquic.Http3.Frame.Frame{
         .frame_type = .headers,
         .payload = headers_payload,
     };
-    
+
     try server.processFrame(conn_id, stream_id, headers_frame);
     std.debug.print("  → GET {s}\n", .{path});
 }
@@ -127,21 +127,21 @@ fn simulatePostRequest(server: *zquic.Http3.Http3Server, conn_id: []const u8, st
     // Create HEADERS frame
     const headers_payload = try createHeadersPayload(allocator, "POST", path, "application/json");
     defer allocator.free(headers_payload);
-    
+
     const headers_frame = zquic.Http3.Frame.Frame{
         .frame_type = .headers,
         .payload = headers_payload,
     };
-    
+
     try server.processFrame(conn_id, stream_id, headers_frame);
-    
+
     // Create DATA frame
     const data_frame = zquic.Http3.Frame.Frame{
         .frame_type = .data,
         .payload = try allocator.dupe(u8, body),
     };
     defer allocator.free(data_frame.payload);
-    
+
     try server.processFrame(conn_id, stream_id, data_frame);
     std.debug.print("  → POST {s} ({}B body)\n", .{ path, body.len });
 }
@@ -149,21 +149,21 @@ fn simulatePostRequest(server: *zquic.Http3.Http3Server, conn_id: []const u8, st
 fn createHeadersPayload(allocator: std.mem.Allocator, method: []const u8, path: []const u8, content_type: ?[]const u8) ![]u8 {
     // Simplified QPACK encoding (in reality, this would be properly encoded)
     var headers = std.ArrayList(u8).init(allocator);
-    
+
     // Add pseudo-headers
     try headers.appendSlice(":method ");
     try headers.appendSlice(method);
     try headers.appendSlice("\n:path ");
     try headers.appendSlice(path);
     try headers.appendSlice("\n:scheme https\n:authority example.com\n");
-    
+
     // Add content-type if provided
     if (content_type) |ct| {
         try headers.appendSlice("content-type ");
         try headers.appendSlice(ct);
         try headers.appendSlice("\n");
     }
-    
+
     return headers.toOwnedSlice();
 }
 
@@ -171,8 +171,8 @@ fn createHeadersPayload(allocator: std.mem.Allocator, method: []const u8, path: 
 
 fn homeHandler(request: *zquic.Http3.Request, response: *zquic.Http3.Response) zquic.Error.ZquicError!void {
     _ = request;
-    
-    const html = 
+
+    const html =
         \\<!DOCTYPE html>
         \\<html>
         \\<head>
@@ -221,52 +221,46 @@ fn homeHandler(request: *zquic.Http3.Request, response: *zquic.Http3.Response) z
         \\</body>
         \\</html>
     ;
-    
+
     try response.html(html);
 }
 
 fn healthHandler(request: *zquic.Http3.Request, response: *zquic.Http3.Response) zquic.Error.ZquicError!void {
     _ = request;
-    
+
     response.setStatus(.ok);
     try response.text("{\"status\": \"healthy\", \"timestamp\": 1703462400, \"uptime_seconds\": 3600, \"version\": \"1.0.0\", \"http3_enabled\": true}");
 }
 
 fn getUserHandler(request: *zquic.Http3.Request, response: *zquic.Http3.Response) zquic.Error.ZquicError!void {
     const user_id = zquic.Http3.Router.getParam(request, "id") orelse "unknown";
-    
+
     var buffer: [256]u8 = undefined;
-    const json_response = std.fmt.bufPrint(&buffer, 
-        "{{\"id\": \"{s}\", \"name\": \"John Doe\", \"email\": \"john@example.com\", \"created_at\": \"2024-01-01T00:00:00Z\", \"active\": true}}", 
-        .{user_id}
-    ) catch {
+    const json_response = std.fmt.bufPrint(&buffer, "{{\"id\": \"{s}\", \"name\": \"John Doe\", \"email\": \"john@example.com\", \"created_at\": \"2024-01-01T00:00:00Z\", \"active\": true}}", .{user_id}) catch {
         response.setStatus(.internal_server_error);
         try response.text("Response too large");
         return;
     };
-    
+
     try response.text(json_response);
 }
 
 fn createUserHandler(request: *zquic.Http3.Request, response: *zquic.Http3.Response) zquic.Error.ZquicError!void {
     const body = request.getBody();
-    
+
     if (body.len == 0) {
         response.setStatus(.bad_request);
         try response.text("Request body required");
         return;
     }
-    
+
     var buffer: [256]u8 = undefined;
-    const json_response = std.fmt.bufPrint(&buffer, 
-        "{{\"id\": \"new-user-456\", \"name\": \"Created User\", \"email\": \"created@example.com\", \"created_at\": \"2024-12-24T00:00:00Z\", \"body_size\": {}}}", 
-        .{body.len}
-    ) catch {
+    const json_response = std.fmt.bufPrint(&buffer, "{{\"id\": \"new-user-456\", \"name\": \"Created User\", \"email\": \"created@example.com\", \"created_at\": \"2024-12-24T00:00:00Z\", \"body_size\": {}}}", .{body.len}) catch {
         response.setStatus(.internal_server_error);
         try response.text("Response too large");
         return;
     };
-    
+
     response.setStatus(.created);
     try response.text(json_response);
 }
@@ -274,31 +268,28 @@ fn createUserHandler(request: *zquic.Http3.Request, response: *zquic.Http3.Respo
 fn updateUserHandler(request: *zquic.Http3.Request, response: *zquic.Http3.Response) zquic.Error.ZquicError!void {
     const user_id = zquic.Http3.Router.getParam(request, "id") orelse "unknown";
     const body = request.getBody();
-    
+
     var buffer: [256]u8 = undefined;
-    const json_response = std.fmt.bufPrint(&buffer, 
-        "{{\"id\": \"{s}\", \"name\": \"Updated User\", \"email\": \"updated@example.com\", \"updated_at\": \"2024-12-24T00:00:00Z\", \"body_size\": {}}}", 
-        .{ user_id, body.len }
-    ) catch {
+    const json_response = std.fmt.bufPrint(&buffer, "{{\"id\": \"{s}\", \"name\": \"Updated User\", \"email\": \"updated@example.com\", \"updated_at\": \"2024-12-24T00:00:00Z\", \"body_size\": {}}}", .{ user_id, body.len }) catch {
         response.setStatus(.internal_server_error);
         try response.text("Response too large");
         return;
     };
-    
+
     try response.text(json_response);
 }
 
 fn deleteUserHandler(request: *zquic.Http3.Request, response: *zquic.Http3.Response) zquic.Error.ZquicError!void {
     const user_id = zquic.Http3.Router.getParam(request, "id") orelse "unknown";
-    
+
     response.setStatus(.no_content);
     try response.setHeader("x-deleted-user", user_id);
 }
 
 fn statsHandler(request: *zquic.Http3.Request, response: *zquic.Http3.Response) zquic.Error.ZquicError!void {
     _ = request;
-    
-    const stats_json = 
+
+    const stats_json =
         \\{
         \\    "server_info": {
         \\        "name": "ZQUIC HTTP/3 Server",
@@ -324,35 +315,32 @@ fn statsHandler(request: *zquic.Http3.Request, response: *zquic.Http3.Response) 
         \\    }
         \\}
     ;
-    
+
     try response.text(stats_json);
 }
 
 fn uploadHandler(request: *zquic.Http3.Request, response: *zquic.Http3.Response) zquic.Error.ZquicError!void {
     const body = request.getBody();
     const content_type = request.getContentType() orelse "application/octet-stream";
-    
+
     var buffer: [512]u8 = undefined;
-    const json_response = std.fmt.bufPrint(&buffer, 
-        "{{\"uploaded\": true, \"size\": {}, \"content_type\": \"{s}\", \"upload_id\": \"upload-123456\", \"timestamp\": {}}}", 
-        .{ body.len, content_type, std.time.timestamp() }
-    ) catch {
+    const json_response = std.fmt.bufPrint(&buffer, "{{\"uploaded\": true, \"size\": {}, \"content_type\": \"{s}\", \"upload_id\": \"upload-123456\", \"timestamp\": {}}}", .{ body.len, content_type, std.time.timestamp() }) catch {
         response.setStatus(.internal_server_error);
         try response.text("Response too large");
         return;
     };
-    
+
     response.setStatus(.created);
     try response.text(json_response);
 }
 
 fn streamHandler(request: *zquic.Http3.Request, response: *zquic.Http3.Response) zquic.Error.ZquicError!void {
     _ = request;
-    
+
     // Simulate streaming data
     try response.setHeader("content-type", "text/plain");
     try response.setHeader("cache-control", "no-cache");
-    
+
     var i: u32 = 0;
     while (i < 5) {
         try response.writeFormat("data: Streaming message {} at {}\n\n", .{ i + 1, std.time.timestamp() });
@@ -362,35 +350,29 @@ fn streamHandler(request: *zquic.Http3.Request, response: *zquic.Http3.Response)
 
 fn notFoundHandler(request: *zquic.Http3.Request, response: *zquic.Http3.Response) zquic.Error.ZquicError!void {
     var buffer: [512]u8 = undefined;
-    const json_response = std.fmt.bufPrint(&buffer, 
-        "{{\"error\": \"Not Found\", \"message\": \"The requested resource was not found\", \"path\": \"{s}\", \"method\": \"{s}\", \"timestamp\": {}}}", 
-        .{ request.path, request.method.toString(), std.time.timestamp() }
-    ) catch {
+    const json_response = std.fmt.bufPrint(&buffer, "{{\"error\": \"Not Found\", \"message\": \"The requested resource was not found\", \"path\": \"{s}\", \"method\": \"{s}\", \"timestamp\": {}}}", .{ request.path, request.method.toString(), std.time.timestamp() }) catch {
         response.setStatus(.internal_server_error);
         try response.text("Response too large");
         return;
     };
-    
+
     response.setStatus(.not_found);
     try response.text(json_response);
 }
 
 fn errorHandler(request: *zquic.Http3.Request, response: *zquic.Http3.Response, error_code: zquic.Error.ZquicError) zquic.Error.ZquicError!void {
     _ = request;
-    
+
     var buffer: [256]u8 = undefined;
     const error_name = switch (error_code) {
         else => "InternalError",
     };
-    const json_response = std.fmt.bufPrint(&buffer, 
-        "{{\"error\": \"Internal Server Error\", \"message\": \"An unexpected error occurred\", \"error_code\": \"{s}\", \"timestamp\": {}}}", 
-        .{ error_name, std.time.timestamp() }
-    ) catch {
+    const json_response = std.fmt.bufPrint(&buffer, "{{\"error\": \"Internal Server Error\", \"message\": \"An unexpected error occurred\", \"error_code\": \"{s}\", \"timestamp\": {}}}", .{ error_name, std.time.timestamp() }) catch {
         response.setStatus(.internal_server_error);
         try response.text("Error response too large");
         return;
     };
-    
+
     response.setStatus(.internal_server_error);
     try response.text(json_response);
 }

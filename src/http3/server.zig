@@ -171,7 +171,7 @@ pub const Http3Server = struct {
         self.qpack_decoder.deinit();
         self.qpack_encoder.deinit();
         self.router.deinit();
-        
+
         // Clean up connections
         var iterator = self.connections.iterator();
         while (iterator.next()) |entry| {
@@ -199,10 +199,7 @@ pub const Http3Server = struct {
 
         // Compression (if enabled)
         if (self.config.enable_compression) {
-            const compression = Middleware.CompressionMiddleware.init(
-                self.allocator, 
-                self.config.compression_level, 
-                256 // min size
+            const compression = Middleware.CompressionMiddleware.init(self.allocator, self.config.compression_level, 256 // min size
             );
             try self.middleware_stack.append(compression.middleware());
         }
@@ -235,11 +232,11 @@ pub const Http3Server = struct {
         const conn_id = try self.allocator.dupe(u8, connection.local_conn_id.bytes());
         const context = try self.allocator.create(ConnectionContext);
         context.* = ConnectionContext.init(self.allocator, connection);
-        
+
         try self.connections.put(conn_id, context);
         self.stats.connections_active += 1;
         self.stats.connections_total += 1;
-        
+
         std.log.info("Registered HTTP/3 connection: {s}", .{std.fmt.fmtSliceHexLower(conn_id)});
         return conn_id;
     }
@@ -276,14 +273,14 @@ pub const Http3Server = struct {
     fn processHeadersFrame(self: *Self, context: *ConnectionContext, stream_id: u64, payload: []const u8) !void {
         // Get or create active request
         var active_request = try self.getOrCreateActiveRequest(context, stream_id);
-        
+
         // Decode headers using QPACK
         const header_fields = try self.qpack_decoder.decode(payload, self.allocator);
         defer self.allocator.free(header_fields);
 
         // Parse request from headers
         try active_request.request.parseFromHeaders(header_fields);
-        
+
         // If this completes the request headers, process the request
         try self.processRequest(active_request);
     }
@@ -293,7 +290,7 @@ pub const Http3Server = struct {
             // Append data to request body
             try active_request.request.appendBody(payload);
             self.stats.addBytesReceived(payload.len);
-            
+
             // Check body size limit
             if (active_request.request.getBody().len > self.config.max_request_body_size) {
                 active_request.response.setStatus(.payload_too_large);
@@ -318,22 +315,22 @@ pub const Http3Server = struct {
         const active_request = try self.allocator.create(ActiveRequest);
         const conn_id_bytes = context.connection.local_conn_id.bytes();
         active_request.* = ActiveRequest.init(self.allocator, stream_id, conn_id_bytes);
-        
+
         try context.active_requests.put(stream_id, active_request);
         return active_request;
     }
 
     fn processRequest(self: *Self, active_request: *ActiveRequest) !void {
         self.stats.incrementRequest();
-        
+
         // Handle request through router
         self.router.handleRequest(&active_request.request, &active_request.response) catch |err| {
             self.stats.incrementError();
-            
+
             // Handle errors
             active_request.response.setStatus(.internal_server_error);
             try active_request.response.text("Internal Server Error");
-            
+
             std.log.err("Request processing error: {}", .{err});
         };
     }
@@ -359,7 +356,7 @@ pub const Http3Server = struct {
 
         active_request.response.markSent();
         self.stats.addBytesSent(active_request.response.getBodySize());
-        
+
         // Log response
         std.log.info("HTTP/3 response sent: {s} {s} - {}μs", .{
             active_request.request.method.toString(),
@@ -418,14 +415,14 @@ pub const Http3Server = struct {
     pub fn cleanupExpiredConnections(self: *Self) void {
         var to_remove = std.ArrayList([]const u8).init(self.allocator);
         defer to_remove.deinit();
-        
+
         var iterator = self.connections.iterator();
         while (iterator.next()) |entry| {
             if (entry.value_ptr.*.isExpired(self.config.keep_alive_timeout_ms)) {
                 to_remove.append(entry.key_ptr.*) catch continue;
             }
         }
-        
+
         for (to_remove.items) |conn_id| {
             self.unregisterConnection(conn_id);
             std.log.info("Cleaned up expired connection: {s}", .{std.fmt.fmtSliceHexLower(conn_id)});
@@ -479,12 +476,12 @@ test "server initialization" {
 
 test "server stats tracking" {
     var stats = ServerStats.init();
-    
+
     stats.incrementRequest();
     stats.incrementError();
     stats.addBytesReceived(100);
     stats.addBytesSent(200);
-    
+
     try std.testing.expect(stats.requests_handled == 1);
     try std.testing.expect(stats.errors_count == 1);
     try std.testing.expect(stats.bytes_received == 100);

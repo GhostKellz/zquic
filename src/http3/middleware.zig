@@ -75,20 +75,20 @@ pub const CorsMiddleware = struct {
         // Instead of capturing in closure, we return a function that uses global state
         // This is a simplified approach - real implementation would need proper closure handling
         _ = self;
-        
+
         return struct {
             fn handle(request: *Request, response: *Response, next: NextFn) Error.ZquicError!void {
                 // Set CORS headers (simplified)
                 try response.setHeader("Access-Control-Allow-Origin", "*");
                 try response.setHeader("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS");
                 try response.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
-                
+
                 // Handle preflight OPTIONS request
                 if (request.method == .OPTIONS) {
                     response.setStatus(.ok);
                     return;
                 }
-                
+
                 try next(request, response);
             }
         }.handle;
@@ -111,14 +111,14 @@ pub const AuthMiddleware = struct {
 
     pub fn middleware(self: *const Self) MiddlewareFn {
         _ = self;
-        
+
         return struct {
             fn handle(request: *Request, response: *Response, next: NextFn) Error.ZquicError!void {
                 // Check for Authorization header
                 if (request.getHeader("authorization")) |auth_header| {
                     if (std.mem.startsWith(u8, auth_header, "Bearer ")) {
                         const token = auth_header[7..];
-                        
+
                         // Simplified token validation
                         if (token.len > 0) {
                             try next(request, response);
@@ -126,7 +126,7 @@ pub const AuthMiddleware = struct {
                         }
                     }
                 }
-                
+
                 // Unauthorized
                 response.setStatus(.unauthorized);
                 try response.setHeader("WWW-Authenticate", "Bearer");
@@ -159,28 +159,19 @@ pub const LoggingMiddleware = struct {
 
     pub fn middleware(self: *const Self) MiddlewareFn {
         _ = self;
-        
+
         return struct {
             fn handle(request: *Request, response: *Response, next: NextFn) Error.ZquicError!void {
                 const start_time = std.time.microTimestamp();
-                
+
                 // Log request
-                std.log.info("HTTP/3 {s} {s} - Stream {}", .{ 
-                    request.method.toString(), 
-                    request.path, 
-                    request.context.stream_id 
-                });
-                
+                std.log.info("HTTP/3 {s} {s} - Stream {}", .{ request.method.toString(), request.path, request.context.stream_id });
+
                 try next(request, response);
-                
+
                 // Log response
                 const duration = std.time.microTimestamp() - start_time;
-                std.log.info("HTTP/3 {s} {s} {} - {}μs", .{ 
-                    request.method.toString(), 
-                    request.path, 
-                    response.status.getCode(),
-                    duration
-                });
+                std.log.info("HTTP/3 {s} {s} {} - {}μs", .{ request.method.toString(), request.path, response.status.getCode(), duration });
             }
         }.handle;
     }
@@ -219,14 +210,14 @@ pub const RateLimitMiddleware = struct {
                 // Check rate limit (simplified implementation)
                 // In a real implementation, would track request.context.stream_id
                 const is_allowed = true;
-                
+
                 if (!is_allowed) {
                     response.setStatus(.too_many_requests);
                     try response.setHeader("Retry-After", "60");
                     try response.text("{\"error\": \"Rate limit exceeded\", \"message\": \"Too many requests\"}");
                     return;
                 }
-                
+
                 try next(request, response);
             }
         }.handle;
@@ -251,11 +242,11 @@ pub const CompressionMiddleware = struct {
 
     pub fn middleware(self: *const Self) MiddlewareFn {
         _ = self;
-        
+
         return struct {
             fn handle(request: *Request, response: *Response, next: NextFn) Error.ZquicError!void {
                 try next(request, response);
-                
+
                 // Check if client accepts compression (simplified)
                 if (request.getHeader("accept-encoding")) |encoding| {
                     if (std.mem.indexOf(u8, encoding, "gzip") != null) {
@@ -307,11 +298,11 @@ pub const SecurityMiddleware = struct {
 
     pub fn middleware(self: *const Self) MiddlewareFn {
         _ = self;
-        
+
         return struct {
             fn handle(request: *Request, response: *Response, next: NextFn) Error.ZquicError!void {
                 try next(request, response);
-                
+
                 // Add security headers (simplified)
                 try response.setHeader("X-Content-Type-Options", "nosniff");
                 try response.setHeader("X-Frame-Options", "DENY");
@@ -342,7 +333,7 @@ pub const StaticMiddleware = struct {
 
     pub fn middleware(self: *const Self) MiddlewareFn {
         _ = self;
-        
+
         return struct {
             fn handle(request: *Request, response: *Response, next: NextFn) Error.ZquicError!void {
                 // Only handle GET requests for files
@@ -350,14 +341,14 @@ pub const StaticMiddleware = struct {
                     try next(request, response);
                     return;
                 }
-                
+
                 // Construct file path (simplified - would use self.root_dir)
                 var path_buffer: [512]u8 = undefined;
                 const file_path = std.fmt.bufPrint(&path_buffer, "./public{s}", .{request.path}) catch {
                     try next(request, response);
                     return;
                 };
-                
+
                 // Try to serve the file
                 response.sendFile(file_path) catch |err| switch (err) {
                     error.FileNotFound => {
@@ -370,7 +361,7 @@ pub const StaticMiddleware = struct {
                         return;
                     },
                 };
-                
+
                 // Set cache headers
                 try response.setHeader("Cache-Control", "public, max-age=3600");
             }
@@ -388,12 +379,12 @@ test "cors middleware creation" {
 
 test "auth middleware creation" {
     const auth = AuthMiddleware.init(std.testing.allocator, "test-secret");
-    
+
     try std.testing.expect(std.mem.eql(u8, auth.secret_key, "test-secret"));
 }
 
 test "logging middleware creation" {
     const logging = LoggingMiddleware.init(std.testing.allocator, .info);
-    
+
     try std.testing.expect(logging.log_level == .info);
 }

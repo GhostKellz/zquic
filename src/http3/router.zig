@@ -83,10 +83,10 @@ pub const RoutePattern = struct {
 
     fn parsePattern(self: *Self) !void {
         var segments_iter = std.mem.splitScalar(u8, self.pattern, '/');
-        
+
         while (segments_iter.next()) |segment| {
             if (segment.len == 0) continue; // Skip empty segments from leading/trailing slashes
-            
+
             if (std.mem.startsWith(u8, segment, ":")) {
                 // Parameter segment: :id, :name, etc.
                 const param_name = segment[1..];
@@ -114,16 +114,16 @@ pub const RoutePattern = struct {
     pub fn match(self: *const Self, path: []const u8, params: *RouteParams) bool {
         var path_segments = std.mem.splitScalar(u8, path, '/');
         var pattern_index: usize = 0;
-        
+
         while (path_segments.next()) |path_segment| {
             if (path_segment.len == 0) continue; // Skip empty segments
-            
+
             if (pattern_index >= self.segments.items.len) {
                 return false; // More path segments than pattern segments
             }
-            
+
             const pattern_segment = self.segments.items[pattern_index];
-            
+
             switch (pattern_segment.kind) {
                 .literal => {
                     if (!std.mem.eql(u8, path_segment, pattern_segment.value)) {
@@ -139,13 +139,13 @@ pub const RoutePattern = struct {
                     return true;
                 },
             }
-            
+
             pattern_index += 1;
         }
-        
+
         // Check if we matched all pattern segments (unless last was wildcard)
-        return pattern_index == self.segments.items.len or 
-               (pattern_index == self.segments.items.len - 1 and 
+        return pattern_index == self.segments.items.len or
+            (pattern_index == self.segments.items.len - 1 and
                 self.segments.items[pattern_index].kind == .wildcard);
     }
 };
@@ -182,10 +182,10 @@ pub const Route = struct {
     /// Check if this route matches the request
     pub fn matches(self: *const Self, method: Method, path: []const u8) bool {
         if (self.method != method) return false;
-        
+
         var temp_params = RouteParams.init(self.allocator);
         defer temp_params.deinit();
-        
+
         return self.pattern.match(path, &temp_params);
     }
 
@@ -194,12 +194,12 @@ pub const Route = struct {
         // Extract route parameters
         var params = RouteParams.init(self.allocator);
         defer params.deinit();
-        
+
         _ = self.pattern.match(request.path, &params);
-        
+
         // Add parameters to request context
         request.context.user_data = &params;
-        
+
         // Execute middleware chain
         if (self.middleware.items.len > 0) {
             try self.executeMiddleware(0, request, response);
@@ -359,7 +359,7 @@ test "route pattern matching" {
 
 test "route creation and matching" {
     const allocator = std.testing.allocator;
-    
+
     const testHandler = struct {
         fn handler(req: *Request, res: *Response) Error.ZquicError!void {
             _ = req;
@@ -377,7 +377,7 @@ test "route creation and matching" {
 
 test "router functionality" {
     const allocator = std.testing.allocator;
-    
+
     var router = Router.init(allocator);
     defer router.deinit();
 

@@ -94,11 +94,11 @@ pub const UdpSocket = struct {
     /// Set socket to non-blocking mode
     pub fn setNonBlocking(self: *Self, non_blocking: bool) Error.ZquicError!void {
         const flags = os.fcntl(self.socket_fd, os.F.GETFL, 0) catch return Error.ZquicError.NetworkError;
-        
+
         const new_flags = if (non_blocking) flags | os.O.NONBLOCK else flags & ~@as(u32, os.O.NONBLOCK);
-        
+
         _ = os.fcntl(self.socket_fd, os.F.SETFL, new_flags) catch return Error.ZquicError.NetworkError;
-        
+
         self.is_non_blocking = non_blocking;
     }
 
@@ -115,14 +115,14 @@ pub const UdpSocket = struct {
     /// Set receive buffer size
     pub fn setReceiveBufferSize(self: *Self, size: u32) Error.ZquicError!void {
         const size_bytes = std.mem.toBytes(size);
-        os.setsockopt(self.socket_fd, os.SOL.SOCKET, os.SO.RCVBUF, &size_bytes) catch 
+        os.setsockopt(self.socket_fd, os.SOL.SOCKET, os.SO.RCVBUF, &size_bytes) catch
             return Error.ZquicError.NetworkError;
     }
 
     /// Set send buffer size
     pub fn setSendBufferSize(self: *Self, size: u32) Error.ZquicError!void {
         const size_bytes = std.mem.toBytes(size);
-        os.setsockopt(self.socket_fd, os.SOL.SOCKET, os.SO.SNDBUF, &size_bytes) catch 
+        os.setsockopt(self.socket_fd, os.SOL.SOCKET, os.SO.SNDBUF, &size_bytes) catch
             return Error.ZquicError.NetworkError;
     }
 
@@ -130,14 +130,14 @@ pub const UdpSocket = struct {
     pub fn setPacketInfo(self: *Self, enable: bool) Error.ZquicError!void {
         const value = @as(c_int, if (enable) 1 else 0);
         const value_bytes = std.mem.toBytes(value);
-        
+
         switch (self.local_address.any.family) {
             os.AF.INET => {
-                os.setsockopt(self.socket_fd, os.IPPROTO.IP, os.IP.PKTINFO, &value_bytes) catch 
+                os.setsockopt(self.socket_fd, os.IPPROTO.IP, os.IP.PKTINFO, &value_bytes) catch
                     return Error.ZquicError.NetworkError;
             },
             os.AF.INET6 => {
-                os.setsockopt(self.socket_fd, os.IPPROTO.IPV6, os.IPV6.RECVPKTINFO, &value_bytes) catch 
+                os.setsockopt(self.socket_fd, os.IPPROTO.IPV6, os.IPV6.RECVPKTINFO, &value_bytes) catch
                     return Error.ZquicError.NetworkError;
             },
             else => return Error.ZquicError.NotSupported,
