@@ -34,9 +34,9 @@
     .dependencies = .{
         // ZCrypto v0.5.0 - Post-quantum cryptographic library
         .zcrypto = .{
-            .url = "https://github.com/ghostkellz/zcrypto/archive/v0.5.0.tar.gz",
+            .url = "https://github.com/ghostkellz/zcrypto/archive/refs/heads/main.tar.gz",
             // Hash will be computed on first fetch using: zig build --fetch
-            // .hash = "1220...",
+            .hash = "zcrypto-0.5.0-rgQAIw0vBwBwYxfz-NNHyJbWzJqnacg9PDrEOcBiwf7D",
             .lazy = false,
         },
     },
