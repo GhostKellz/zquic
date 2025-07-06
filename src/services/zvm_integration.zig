@@ -236,7 +236,7 @@ pub const WasmExecutionResult = struct {
         offset += 8;
         
         // Status
-        const status = @enumFromInt(ExecutionStatus, data[offset]);
+        const status = @as(ExecutionStatus, @enumFromInt(data[offset]));
         offset += 1;
         
         // Return value
@@ -460,7 +460,7 @@ pub const ZvmQuicServer = struct {
         std.time.sleep(1_000_000); // 1ms
         
         const end_time = std.time.microTimestamp();
-        const execution_time = @intCast(u64, end_time - start_time);
+        const execution_time = @as(u64, @intCast(end_time - start_time));
         
         // Simulate successful execution
         const return_value = "42"; // Placeholder return value
@@ -481,7 +481,6 @@ pub const ZvmQuicServer = struct {
     fn receiveRequest(self: *ZvmQuicServer) ![]u8 {
         // Placeholder implementation
         // In a real implementation, this would read from a QUIC stream
-        _ = self;
         
         // For testing, create a dummy request
         const dummy_request = WasmExecutionRequest{
@@ -502,7 +501,6 @@ pub const ZvmQuicServer = struct {
     fn sendResult(self: *ZvmQuicServer, result: WasmExecutionResult) !void {
         // Placeholder implementation
         // In a real implementation, this would send over a QUIC stream
-        _ = self;
         
         const serialized = try result.serialize(self.allocator);
         defer self.allocator.free(serialized);
@@ -521,6 +519,7 @@ pub const ZvmQuicServer = struct {
             if (execution.start_time < oldest_execution_time) {
                 oldest_execution_time = execution.start_time;
             }
+            total_gas_consumed += execution.gas_consumed;
         }
         
         return ExecutionStats{
@@ -600,11 +599,9 @@ pub const ZvmQuicClient = struct {
     }
     
     /// Send a request over QUIC
-    fn sendRequest(self: *ZvmQuicClient, data: []const u8) !void {
+    fn sendRequest(_: *ZvmQuicClient, data: []const u8) !void {
         // Placeholder implementation
         // In a real implementation, this would send over a QUIC stream
-        _ = self;
-        _ = data;
         
         std.debug.print("Sending WASM execution request ({} bytes)\n", .{data.len});
     }
@@ -613,7 +610,6 @@ pub const ZvmQuicClient = struct {
     fn receiveResult(self: *ZvmQuicClient, request_id: u64, timeout_ms: u32) ![]u8 {
         // Placeholder implementation
         // In a real implementation, this would read from a QUIC stream with timeout
-        _ = self;
         _ = timeout_ms;
         
         // Create a dummy successful result

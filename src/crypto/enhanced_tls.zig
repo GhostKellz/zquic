@@ -8,9 +8,9 @@ const Error = @import("../utils/error.zig");
 
 // Import specific zcrypto modules
 const hash = zcrypto.hash;
-const symmetric = zcrypto.symmetric;
+const symmetric = zcrypto.sym;
 const kdf = zcrypto.kdf;
-const random = zcrypto.random;
+const random = zcrypto.rand;
 
 /// Enhanced cipher suite with real cryptographic implementations
 pub const EnhancedCipherSuite = enum {
@@ -352,8 +352,8 @@ pub const EnhancedTlsContext = struct {
         };
 
         // Generate random values using zcrypto
-        random.random_bytes(&context.client_random);
-        random.random_bytes(&context.server_random);
+        random.fillBytes(&context.client_random);
+        random.fillBytes(&context.server_random);
 
         return context;
     }

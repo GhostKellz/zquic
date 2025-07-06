@@ -200,7 +200,7 @@ pub const OptimizedBlake3 = struct {
         comptime lanes: usize,
     ) void {
         const batches = inputs.len / lanes;
-        const remainder = inputs.len % lanes;
+        _ = inputs.len % lanes; // remainder
         
         // Process full batches
         var i: usize = 0;
@@ -590,7 +590,7 @@ pub const OptimizationBenchmark = struct {
 };
 
 test "cpu optimizer initialization" {
-    var optimizer = CpuOptimizer.init();
+    const optimizer = CpuOptimizer.init();
     
     // Should have detected some optimization level
     try std.testing.expect(optimizer.optimization_level != .none);
@@ -603,7 +603,7 @@ test "cpu optimizer initialization" {
 }
 
 test "optimized blake3 basic functionality" {
-    const allocator = std.testing.allocator;
+    _ = std.testing.allocator;
     
     var optimizer = CpuOptimizer.init();
     var blake3_opt = OptimizedBlake3.init(&optimizer);
@@ -619,7 +619,7 @@ test "optimized blake3 basic functionality" {
 }
 
 test "optimized chacha20-poly1305 basic functionality" {
-    const allocator = std.testing.allocator;
+    _ = std.testing.allocator;
     
     var optimizer = CpuOptimizer.init();
     var chacha_opt = OptimizedChaCha20Poly1305.init(&optimizer);

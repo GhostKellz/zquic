@@ -39,7 +39,7 @@ pub const GrpcMessageType = enum(u8) {
     response = 1,
     stream_data = 2,
     stream_end = 3,
-    error = 4,
+    grpc_error = 4,
 };
 
 /// gRPC frame header
@@ -519,6 +519,7 @@ pub const GhostBridge = struct {
         // Create QUIC connection to service
         // TODO: Implement actual QUIC connection establishment
         const quic_connection = try self.allocator.create(QuicConnection);
+        _ = service; // Will be used when implementing actual connection establishment
         // Initialize connection...
         
         const connection_id = self.next_connection_id;

@@ -132,7 +132,7 @@ pub const PacketCrypto = struct {
         const sample = protected_payload[sample_offset..sample_offset + 16];
         
         // Remove header protection
-        var mutable_header = try self.allocator.dupe(u8, header);
+        const mutable_header = try self.allocator.dupe(u8, header);
         defer self.allocator.free(mutable_header);
         
         const level = try self.determineEncryptionLevel(mutable_header);
@@ -222,7 +222,6 @@ pub const PacketCrypto = struct {
         const packet_number = try self.extractPacketNumber(packet_buffer[0..payload_start]);
         
         // Decrypt in-place (this would need careful memory management)
-        const ciphertext = packet_buffer[payload_start..used_length.*];
         const aad = try self.buildAAD(packet_buffer[0..header_len], packet_number);
         defer self.allocator.free(aad);
         
@@ -505,7 +504,7 @@ test "packet crypto initialization" {
     );
     defer tls_context.deinit();
     
-    var packet_crypto = PacketCrypto.init(allocator, &tls_context, null);
+    const packet_crypto = PacketCrypto.init(allocator, &tls_context, null);
     
     try std.testing.expect(packet_crypto.packet_number_state.next_packet_number == 0);
     try std.testing.expect(packet_crypto.packet_number_state.largest_acked == 0);

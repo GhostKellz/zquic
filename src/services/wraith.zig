@@ -357,21 +357,80 @@ pub const HealthChecker = struct {
     }
     
     fn checkBackendHealth(self: *HealthChecker, backend: *BackendServer) BackendServer.HealthStatus {
-        _ = self;
-        
-        // Simplified health check - in production, this would make HTTP requests
+        // Perform actual HTTP health check
         const endpoint = backend.getEndpoint(self.allocator) catch return .unhealthy;
         defer self.allocator.free(endpoint);
         
-        // TODO: Implement actual HTTP health check
-        // For now, simulate based on load
-        if (backend.load < backend.max_connections * 0.8) {
-            return .healthy;
-        } else if (backend.load < backend.max_connections) {
-            return .healthy; // Still accepting connections
-        } else {
+        // Create HTTP client for health check
+        var client = std.http.Client{ .allocator = self.allocator };
+        defer client.deinit();
+        
+        // Build health check URL
+        var url_buffer: [256]u8 = undefined;
+        const health_url = std.fmt.bufPrint(&url_buffer, "http://{s}/health", .{endpoint}) catch {
+            std.log.warn("Health check URL too long for backend {s}", .{backend.id});
             return .unhealthy;
-        }
+        };
+        
+        const start_time = std.time.microTimestamp();
+        
+        // Make health check request with timeout
+        var request = client.open(.GET, std.Uri.parse(health_url) catch {
+            std.log.warn("Invalid health check URL for backend {s}: {s}", .{ backend.id, health_url });
+            return .unhealthy;
+        }, .{
+            .server_header_buffer = undefined,
+        }) catch |err| {
+            std.log.warn("Health check connection failed for backend {s}: {}", .{ backend.id, err });
+            return .unhealthy;
+        };
+        defer request.deinit();
+        
+        // Send request
+        request.send(.{}) catch |err| {
+            std.log.warn("Health check send failed for backend {s}: {}", .{ backend.id, err });
+            return .unhealthy;
+        };
+        
+        request.finish() catch |err| {
+            std.log.warn("Health check finish failed for backend {s}: {}", .{ backend.id, err });
+            return .unhealthy;
+        };
+        
+        // Wait for response with implicit timeout
+        request.wait() catch |err| {
+            std.log.warn("Health check timeout for backend {s}: {}", .{ backend.id, err });
+            return .unhealthy;
+        };
+        
+        const response_time = std.time.microTimestamp() - start_time;
+        backend.recordResponseTime(@intCast(response_time));
+        
+        // Check response status
+        const status = request.response.status;
+        const health_status = switch (status) {
+            .ok => .healthy,
+            .service_unavailable => .maintenance,
+            .too_many_requests => .draining,
+            else => .unhealthy,
+        };
+        
+        // Read response body for additional health info (optional)
+        var response_body = std.ArrayList(u8).init(self.allocator);
+        defer response_body.deinit();
+        
+        const reader = request.reader();
+        reader.readAllArrayList(&response_body, 1024) catch |err| {
+            std.log.debug("Failed to read health check response body from {s}: {}", .{ backend.id, err });
+            // Still return the status based on HTTP code
+            return health_status;
+        };
+        
+        std.log.debug("Health check for {s}: {} - {} ({} bytes, {}μs)", .{
+            backend.id, status, health_status, response_body.items.len, response_time
+        });
+        
+        return health_status;
     }
 };
 
@@ -641,22 +700,140 @@ pub const ProxyStats = struct {
 
 // Route handlers
 fn proxyHandler(req: *Request, res: *Response) !void {
-    // Main proxy logic would go here
-    // This is a simplified version
+    // Get proxy instance from request context (would be set during routing)
+    // For now, we'll implement a basic proxy that forwards to a backend
     
-    try res.status(.ok);
-    try res.header("Content-Type", "application/json");
-    try res.header("X-Wraith-Proxy", "v1.0");
-    try res.json(.{
-        .message = "Request proxied successfully",
-        .backend = "backend-1",
-        .response_time_ms = 25,
+    const start_time = std.time.microTimestamp();
+    
+    // TODO: Get actual proxy instance and select backend
+    // const proxy = getProxyFromContext(req);
+    // const backend = proxy.backend_pool.selectBackend(getClientIP(req));
+    
+    // For v0.4.0, simulate proxy behavior with configurable backend
+    const backend_host = std.os.getenv("WRAITH_BACKEND_HOST") orelse "127.0.0.1:8080";
+    
+    // Create HTTP client request
+    const allocator = std.heap.page_allocator; // TODO: Use request allocator
+    var client = std.http.Client{ .allocator = allocator };
+    defer client.deinit();
+    
+    // Build backend URL
+    var url_buffer: [512]u8 = undefined;
+    const backend_url = std.fmt.bufPrint(&url_buffer, "http://{s}{s}", .{ backend_host, req.path }) catch {
+        res.setStatus(.internal_server_error);
+        try res.text("Backend URL too long");
+        return;
+    };
+    
+    // Make request to backend
+    const method = switch (req.method) {
+        .GET => std.http.Method.GET,
+        .POST => std.http.Method.POST,
+        .PUT => std.http.Method.PUT,
+        .DELETE => std.http.Method.DELETE,
+        else => std.http.Method.GET,
+    };
+    
+    // Forward request to backend
+    var backend_request = client.open(method, std.Uri.parse(backend_url) catch {
+        res.setStatus(.internal_server_error);
+        try res.text("Invalid backend URL");
+        return;
+    }, .{
+        .server_header_buffer = undefined,
+    }) catch |err| {
+        std.log.err("Failed to connect to backend {s}: {}", .{ backend_host, err });
+        res.setStatus(.bad_gateway);
+        try res.setHeader("Content-Type", "application/json");
+        var buffer: [256]u8 = undefined;
+        const json_response = std.fmt.bufPrint(&buffer, "{{\"error\": \"Backend Unavailable\", \"message\": \"Unable to connect to upstream server\", \"backend\": \"{s}\", \"timestamp\": {}}}", .{ backend_host, std.time.timestamp() }) catch "Backend error";
+        try res.text(json_response);
+        return;
+    };
+    defer backend_request.deinit();
+    
+    // Forward headers (simplified)
+    if (req.getHeader("content-type")) |content_type| {
+        backend_request.headers.append("content-type", content_type) catch {};
+    }
+    if (req.getHeader("authorization")) |auth| {
+        backend_request.headers.append("authorization", auth) catch {};
+    }
+    
+    // Send request body if present
+    const body = req.getBody();
+    if (body.len > 0) {
+        backend_request.send(.{ .payload = body }) catch |err| {
+            std.log.err("Failed to send request to backend: {}", .{err});
+            res.setStatus(.bad_gateway);
+            try res.text("Failed to send request to backend");
+            return;
+        };
+    } else {
+        backend_request.send(.{}) catch |err| {
+            std.log.err("Failed to send request to backend: {}", .{err});
+            res.setStatus(.bad_gateway);
+            try res.text("Failed to send request to backend");
+            return;
+        };
+    }
+    
+    backend_request.finish() catch |err| {
+        std.log.err("Failed to finish backend request: {}", .{err});
+        res.setStatus(.bad_gateway);
+        try res.text("Backend request failed");
+        return;
+    };
+    
+    backend_request.wait() catch |err| {
+        std.log.err("Backend request timeout: {}", .{err});
+        res.setStatus(.gateway_timeout);
+        try res.text("Backend timeout");
+        return;
+    };
+    
+    // Copy response status
+    const backend_status = backend_request.response.status;
+    res.setStatus(@enumFromInt(@intFromEnum(backend_status)));
+    
+    // Copy response headers (simplified)
+    var header_iter = backend_request.response.iterateHeaders();
+    while (header_iter.next()) |header| {
+        res.setHeader(header.name, header.value) catch {};
+    }
+    
+    // Add proxy headers
+    try res.setHeader("X-Wraith-Proxy", "v0.4.0");
+    try res.setHeader("X-Proxy-Backend", backend_host);
+    
+    const response_time = std.time.microTimestamp() - start_time;
+    var time_buffer: [32]u8 = undefined;
+    const time_str = std.fmt.bufPrint(&time_buffer, "{}", .{response_time}) catch "unknown";
+    try res.setHeader("X-Response-Time-Microseconds", time_str);
+    
+    // Read and forward response body
+    var response_body = std.ArrayList(u8).init(allocator);
+    defer response_body.deinit();
+    
+    const reader = backend_request.reader();
+    reader.readAllArrayList(&response_body, 1024 * 1024) catch |err| {
+        std.log.err("Failed to read backend response: {}", .{err});
+        res.setStatus(.bad_gateway);
+        try res.text("Failed to read backend response");
+        return;
+    };
+    
+    // Send response body
+    try res.body(response_body.items);
+    
+    std.log.info("Proxied {s} {s} -> {s} ({} bytes, {}μs)", .{
+        req.method.toString(), req.path, backend_host, response_body.items.len, response_time
     });
 }
 
 fn healthHandler(req: *Request, res: *Response) !void {
     _ = req;
-    try res.status(.ok);
+    res.setStatus(.ok);
     try res.json(.{
         .status = "healthy",
         .version = "1.0.0",
@@ -667,7 +844,7 @@ fn healthHandler(req: *Request, res: *Response) !void {
 fn statsHandler(req: *Request, res: *Response) !void {
     _ = req;
     // Would get actual stats from proxy instance
-    try res.status(.ok);
+    res.setStatus(.ok);
     try res.json(.{
         .total_requests = 1234567,
         .successful_requests = 1230000,
@@ -680,7 +857,7 @@ fn statsHandler(req: *Request, res: *Response) !void {
 
 fn backendsHandler(req: *Request, res: *Response) !void {
     _ = req;
-    try res.status(.ok);
+    res.setStatus(.ok);
     try res.json(.{
         .backends = .{
             .{ .id = "backend-1", .address = "10.0.1.100", .port = 8080, .health = "healthy", .load = 45 },
@@ -692,7 +869,7 @@ fn backendsHandler(req: *Request, res: *Response) !void {
 
 fn addBackendHandler(req: *Request, res: *Response) !void {
     _ = req;
-    try res.status(.created);
+    res.setStatus(.created);
     try res.json(.{
         .message = "Backend added successfully",
         .backend_id = "new-backend",
@@ -701,7 +878,7 @@ fn addBackendHandler(req: *Request, res: *Response) !void {
 
 fn removeBackendHandler(req: *Request, res: *Response) !void {
     _ = req;
-    try res.status(.ok);
+    res.setStatus(.ok);
     try res.json(.{
         .message = "Backend removed successfully",
     });

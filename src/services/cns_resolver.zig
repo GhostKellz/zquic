@@ -302,7 +302,6 @@ pub const BlockchainResolver = struct {
     }
     
     fn resolveEnsName(self: *BlockchainResolver, name: []const u8) !?[]const u8 {
-        _ = self;
         _ = name;
         
         // TODO: Implement ENS resolution via Ethereum RPC
@@ -317,7 +316,6 @@ pub const BlockchainResolver = struct {
     }
     
     fn resolveGhostName(self: *BlockchainResolver, name: []const u8) !?[]const u8 {
-        _ = self;
         _ = name;
         
         // TODO: Implement GhostChain domain resolution
@@ -327,7 +325,6 @@ pub const BlockchainResolver = struct {
     }
     
     fn resolveZnsName(self: *BlockchainResolver, name: []const u8) !?[]const u8 {
-        _ = self;
         _ = name;
         
         // TODO: Implement ZNS resolution
@@ -336,7 +333,6 @@ pub const BlockchainResolver = struct {
     }
     
     fn resolveUnstoppableName(self: *BlockchainResolver, name: []const u8) !?[]const u8 {
-        _ = self;
         _ = name;
         
         // TODO: Implement Unstoppable Domains resolution
@@ -531,7 +527,7 @@ pub const CnsResolver = struct {
     pub fn resolveQuery(self: *CnsResolver, question: *const DnsQuestion) !DnsMessage {
         const start_time = std.time.microTimestamp();
         defer {
-            const elapsed = @intCast(std.time.microTimestamp() - start_time);
+            const elapsed = @as(u64, @intCast(std.time.microTimestamp() - start_time));
             // Update average response time
             if (self.stats.avg_response_time_us == 0) {
                 self.stats.avg_response_time_us = elapsed;
@@ -592,7 +588,6 @@ pub const CnsResolver = struct {
         // TODO: Implement traditional DNS resolution
         // This would forward queries to upstream DNS servers
         
-        _ = self;
         _ = question;
         
         // For now, return empty answer (NXDOMAIN equivalent)

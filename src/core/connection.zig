@@ -117,6 +117,29 @@ pub const Connection = struct {
         return null;
     }
 
+    /// Get an existing stream or create a new one if it doesn't exist
+    pub fn getOrCreateStream(self: *Self, stream_id: u64) Error.ZquicError!*Stream.Stream {
+        // First try to get existing stream
+        if (self.getStream(stream_id)) |stream| {
+            return stream;
+        }
+        
+        // Stream doesn't exist, create a new one
+        // For HTTP/3, we typically use bidirectional streams
+        _ = if (stream_id % 4 < 2) 
+            Stream.StreamType.client_bidirectional 
+        else 
+            Stream.StreamType.server_bidirectional;
+            
+        var stream = Stream.Stream.init(self.allocator, stream_id);
+        stream.state = .open;
+        
+        try self.streams.append(stream);
+        
+        // Return pointer to the last added stream
+        return &self.streams.items[self.streams.items.len - 1];
+    }
+
     /// Close a stream
     pub fn closeStream(self: *Self, stream_id: u64) Error.ZquicError!void {
         for (self.streams.items) |*stream| {

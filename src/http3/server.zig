@@ -366,12 +366,55 @@ pub const Http3Server = struct {
     }
 
     fn sendFrameToConnection(self: *Self, connection: *Connection, stream_id: u64, frame: Frame.Frame) !void {
+        // Get or create the QUIC stream for this HTTP/3 stream
+        const stream = try connection.getOrCreateStream(stream_id);
+        
+        // Encode the frame with type and length
+        var frame_data = std.ArrayList(u8).init(self.allocator);
+        defer frame_data.deinit();
+        
+        // Write frame type (1 byte)
+        try frame_data.append(@as(u8, @intCast(@intFromEnum(frame.frame_type))));
+        
+        // Write payload length (variable-length integer)
+        try self.writeVarint(&frame_data, frame.payload.len);
+        
+        // Write payload
+        try frame_data.appendSlice(frame.payload);
+        
+        // Send the frame data to the QUIC stream
+        const bytes_written = try stream.write(frame_data.items, false);
+        self.stats.addBytesSent(bytes_written);
+        
+        std.log.debug("Sent HTTP/3 frame type {} ({} bytes) on stream {}", .{
+            frame.frame_type, bytes_written, stream_id
+        });
+    }
+    
+    /// Write a variable-length integer as defined in RFC 9000
+    fn writeVarint(self: *Self, writer: *std.ArrayList(u8), value: usize) !void {
         _ = self;
-        _ = connection;
-        _ = stream_id;
-        _ = frame;
-        // TODO: Integrate with QUIC stream sending
-        // This would send the frame over the QUIC connection's stream
+        
+        if (value < 64) {
+            try writer.append(@intCast(value));
+        } else if (value < 16384) {
+            try writer.append(@intCast(0x40 | (value >> 8)));
+            try writer.append(@intCast(value & 0xFF));
+        } else if (value < 1073741824) {
+            try writer.append(@intCast(0x80 | (value >> 24)));
+            try writer.append(@intCast((value >> 16) & 0xFF));
+            try writer.append(@intCast((value >> 8) & 0xFF));
+            try writer.append(@intCast(value & 0xFF));
+        } else {
+            try writer.append(@intCast(0xC0 | (value >> 56)));
+            try writer.append(@intCast((value >> 48) & 0xFF));
+            try writer.append(@intCast((value >> 40) & 0xFF));
+            try writer.append(@intCast((value >> 32) & 0xFF));
+            try writer.append(@intCast((value >> 24) & 0xFF));
+            try writer.append(@intCast((value >> 16) & 0xFF));
+            try writer.append(@intCast((value >> 8) & 0xFF));
+            try writer.append(@intCast(value & 0xFF));
+        }
     }
 
     /// Add middleware to the server

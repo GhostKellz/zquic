@@ -173,7 +173,7 @@ pub fn createQuantumSafeServer(allocator: std.mem.Allocator) !void {
     });
 }
 
-fn indexHandler(req: *zquic.Http3.Request, res: *zquic.Http3.Response) !void {
+fn indexHandler(_: *zquic.Http3.Request, res: *zquic.Http3.Response) !void {
     try res.status(.ok);
     try res.header("Content-Type", "text/html");
     try res.body(
@@ -189,7 +189,7 @@ fn indexHandler(req: *zquic.Http3.Request, res: *zquic.Http3.Response) !void {
     );
 }
 
-fn quantumStatusHandler(req: *zquic.Http3.Request, res: *zquic.Http3.Response) !void {
+fn quantumStatusHandler(_: *zquic.Http3.Request, res: *zquic.Http3.Response) !void {
     try res.json(.{
         .quantum_safe = true,
         .algorithms = .{

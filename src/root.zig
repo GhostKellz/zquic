@@ -122,7 +122,7 @@ pub const Allocator = @import("utils/allocator.zig");
 pub const Error = @import("utils/error.zig");
 
 // Version information
-pub const version = "1.0.0";
+pub const version = "0.4.0";
 pub const quic_version = 0x00000001; // QUIC version 1 (RFC 9000)
 
 /// Initialize the ZQUIC library with a given allocator

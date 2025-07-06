@@ -201,6 +201,7 @@ pub fn build(b: *std.Build) void {
             },
         }),
     });
+    ffi_test_exe.linkLibC();
     b.installArtifact(ffi_test_exe);
 
     // FFI Integration Test
