@@ -6,6 +6,13 @@ const std = @import("std");
 const zcrypto = @import("zcrypto");
 const Error = @import("../utils/error.zig");
 
+// Utility function for secure memory zeroing
+fn secureZero(data: []u8) void {
+    @memset(data, 0);
+    // Prevent compiler optimization
+    asm volatile ("" : : [data] "m" (data) : "memory");
+}
+
 // Import specific zcrypto modules
 const hash = zcrypto.hash;
 const symmetric = zcrypto.sym;
@@ -93,11 +100,11 @@ pub const EnhancedCryptoKeys = struct {
     }
 
     pub fn deinit(self: *Self) void {
-        // Zero out sensitive data using zcrypto
-        zcrypto.utils.secure_zero(self.secret);
-        zcrypto.utils.secure_zero(self.key);
-        zcrypto.utils.secure_zero(self.iv);
-        zcrypto.utils.secure_zero(self.header_protection_key);
+        // Zero out sensitive data securely
+        secureZero(self.secret);
+        secureZero(self.key);
+        secureZero(self.iv);
+        secureZero(self.header_protection_key);
 
         self.allocator.free(self.secret);
         self.allocator.free(self.key);
