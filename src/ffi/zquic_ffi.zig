@@ -14,15 +14,8 @@ const QuicPacket = zquic.Packet;
 const QuicFlowControl = zquic.FlowControl;
 const QuicError = zquic.Error;
 
-/// Local error types for FFI layer
-const ZQuicError = error{
-    OutOfMemory,
-    InvalidArgument,
-    ConnectionFailed,
-    NetworkError,
-    CryptoError,
-    InternalError,
-};
+/// Use standardized error types
+const ZQuicError = QuicError.ZquicError;
 
 /// Opaque pointer types for FFI safety
 pub const ZQuicContext = anyopaque;
@@ -265,14 +258,9 @@ pub export fn zquic_create_connection(ctx: ?*ZQuicContext, remote_addr: [*:0]con
         return null;
     };
 
-    // Generate local connection ID
-    var cid_bytes: [8]u8 = undefined;
-    std.crypto.random.bytes(&cid_bytes);
-    const local_cid = QuicPacket.ConnectionId.init(&cid_bytes) catch return null;
-
     // Create QUIC connection
     const quic_conn = context.allocator.create(QuicConnection) catch return null;
-    quic_conn.* = QuicConnection.init(context.allocator, .client, local_cid);
+    quic_conn.* = QuicConnection.init(context.allocator, .client, zquic.Connection.ConnectionParams{}) catch return null;
 
     // Create FFI connection wrapper
     const connection = Connection.init(context.allocator, quic_conn) catch {
@@ -476,7 +464,7 @@ pub export fn zquic_set_connection_callback(ctx: ?*ZQuicContext, callback: ?*con
 
 /// Get library version string
 pub export fn zquic_version() callconv(.C) [*:0]const u8 {
-    return "ZQUIC 0.2.0-alpha FFI+GhostChain";
+    return "ZQUIC 0.7.0 FFI+GhostChain";
 }
 
 /// Get last error message

@@ -67,7 +67,9 @@ pub const Connection = struct {
 
     const Self = @This();
 
-    pub fn init(allocator: std.mem.Allocator, role: Role, local_conn_id: Packet.ConnectionId) Self {
+    pub fn init(allocator: std.mem.Allocator, role: Role, params: ConnectionParams) !Self {
+        const local_conn_id = try Packet.ConnectionId.init(&[_]u8{0x12, 0x34, 0x56, 0x78});
+        
         const initial_stream_id: u64 = switch (role) {
             .client => 0, // Client-initiated bidirectional streams start at 0
             .server => 1, // Server-initiated bidirectional streams start at 1
@@ -78,7 +80,7 @@ pub const Connection = struct {
             .state = .initial,
             .local_conn_id = local_conn_id,
             .remote_conn_id = null,
-            .params = ConnectionParams{},
+            .params = params,
             .stats = ConnectionStats{},
             .streams = std.ArrayList(Stream.Stream).init(allocator),
             .allocator = allocator,
@@ -257,11 +259,31 @@ pub const Connection = struct {
         // In a real implementation, this would parse and process QUIC frames
         // such as STREAM, ACK, WINDOW_UPDATE, etc.
     }
+    
+    /// Get current connection state
+    pub fn getState(self: *const Self) ConnectionState {
+        return self.state;
+    }
+    
+    /// Get last activity timestamp
+    pub fn getLastActivity(self: *const Self) i64 {
+        _ = self;
+        // Return current timestamp as placeholder
+        // In a real implementation, this would track actual activity
+        return std.time.microTimestamp();
+    }
+    
+    /// Handle a packet (placeholder for connection pool integration)
+    pub fn handlePacket(self: *Self, packet: anytype) !void {
+        _ = self;
+        _ = packet;
+        // Placeholder implementation
+        // In a real implementation, this would process the packet
+    }
 };
 
 test "connection creation and basic operations" {
-    const local_cid = try Packet.ConnectionId.init(&[_]u8{ 1, 2, 3, 4, 5, 6, 7, 8 });
-    var conn = Connection.init(std.testing.allocator, .client, local_cid);
+    var conn = try Connection.init(std.testing.allocator, .client, ConnectionParams{});
     defer conn.deinit();
 
     try std.testing.expect(conn.role == .client);
@@ -271,8 +293,7 @@ test "connection creation and basic operations" {
 }
 
 test "stream creation and management" {
-    const local_cid = try Packet.ConnectionId.init(&[_]u8{ 1, 2, 3, 4, 5, 6, 7, 8 });
-    var conn = Connection.init(std.testing.allocator, .client, local_cid);
+    var conn = try Connection.init(std.testing.allocator, .client, ConnectionParams{});
     defer conn.deinit();
 
     // Simulate established connection

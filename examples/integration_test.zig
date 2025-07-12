@@ -75,16 +75,12 @@ pub fn main() !void {
     const ctx = zquic_init(&TEST_CONFIG);
     defer zquic_destroy(ctx);
 
-    if (ctx != null) {
+    if (ctx) |context| {
         print("✅ Context initialized successfully\n", .{});
-    } else {
-        print("❌ Context initialization failed\n", .{});
-        return;
-    }
-
-    // Test 2: Connection creation (to localhost for testing)
-    print("\n📋 Test 2: Connection Creation\n", .{});
-    const connection = zquic_create_connection(ctx, "127.0.0.1:8444");
+        
+        // Test 2: Connection creation (to localhost for testing)
+        print("\n📋 Test 2: Connection Creation\n", .{});
+        const connection = zquic_create_connection(context, "127.0.0.1:8444");
     if (connection) |conn| {
         defer zquic_close_connection(conn);
         print("✅ Connection created successfully\n", .{});
@@ -100,8 +96,8 @@ pub fn main() !void {
         }
 
         // Test receive (will likely fail without a real server, but tests the interface)
-        const receive_buffer: [1024]u8 = undefined;
-        const bytes_received = zquic_receive_data(conn, @constCast(receive_buffer.ptr), receive_buffer.len);
+        var receive_buffer: [1024]u8 = undefined;
+        const bytes_received = zquic_receive_data(conn, &receive_buffer, receive_buffer.len);
         if (bytes_received >= 0) {
             print("✅ Received {} bytes\n", .{bytes_received});
         } else {
@@ -133,12 +129,12 @@ pub fn main() !void {
 
         // Test 5: DNS over QUIC
         print("\n📋 Test 5: DNS over QUIC (CNS/ZNS)\n", .{});
-        const dns_buffer: [512]u8 = undefined;
+        var dns_buffer: [512]u8 = undefined;
         const dns_response_len = zquic_dns_query(
             conn,
             "test.ghost",
             1, // A record
-            @constCast(dns_buffer.ptr),
+            &dns_buffer,
             dns_buffer.len,
         );
 
@@ -147,53 +143,57 @@ pub fn main() !void {
         } else {
             print("⚠️  DNS query returned error code: {}\n", .{dns_response_len});
         }
-    } else {
-        print("⚠️  Connection creation failed (expected without server)\n", .{});
-    }
-
-    // Test 6: Cryptographic functions
-    print("\n📋 Test 6: ZCrypto Functions\n", .{});
-
-    // Test Ed25519 keypair generation
-    var public_key: [32]u8 = undefined;
-    const private_key: [32]u8 = undefined;
-    const keypair_result = zcrypto_ed25519_keypair(public_key.ptr, @constCast(private_key.ptr));
-
-    if (keypair_result == 0) {
-        print("✅ Ed25519 keypair generated successfully\n", .{});
-        print("   Public key: {x}\n", .{std.fmt.fmtSliceHexLower(public_key[0..8])});
-
-        // Test Ed25519 signing
-        const test_message_crypto = "Test message for signing";
-        var signature: [64]u8 = undefined;
-        const sign_result = zcrypto_ed25519_sign(
-            private_key.ptr,
-            test_message_crypto.ptr,
-            test_message_crypto.len,
-            signature.ptr,
-        );
-
-        if (sign_result == 0) {
-            print("✅ Ed25519 signature created successfully\n", .{});
-            print("   Signature: {x}\n", .{std.fmt.fmtSliceHexLower(signature[0..8])});
         } else {
-            print("❌ Ed25519 signing failed: {}\n", .{sign_result});
+            print("⚠️  Connection creation failed (expected without server)\n", .{});
         }
-    } else {
-        print("❌ Ed25519 keypair generation failed: {}\n", .{keypair_result});
-    }
 
-    print("\n🎉 FFI Integration Test Complete!\n", .{});
-    print("📊 Summary:\n", .{});
-    print("   - Context management: ✅ Working\n", .{});
-    print("   - Connection interface: ✅ Working\n", .{});
-    print("   - Data transmission: ⚠️  Interface working (needs server)\n", .{});
-    print("   - gRPC over QUIC: ✅ Working (mock responses)\n", .{});
-    print("   - DNS over QUIC: ✅ Working (mock responses)\n", .{});
-    print("   - ZCrypto functions: ✅ Working (placeholder implementation)\n", .{});
-    print("\n💡 Next steps:\n", .{});
-    print("   1. Replace crypto placeholders with real ZCrypto\n", .{});
-    print("   2. Test with real Rust services (ghostd/walletd)\n", .{});
-    print("   3. Add server-side testing\n", .{});
-    print("   4. Performance benchmarking\n", .{});
+        // Test 6: Cryptographic functions
+        print("\n📋 Test 6: ZCrypto Functions\n", .{});
+
+        // Test Ed25519 keypair generation
+        var public_key: [32]u8 = undefined;
+        var private_key: [64]u8 = undefined;
+        const keypair_result = zcrypto_ed25519_keypair(&public_key, &private_key);
+
+        if (keypair_result == 0) {
+            print("✅ Ed25519 keypair generated successfully\n", .{});
+            print("   Public key: {x}\n", .{std.fmt.fmtSliceHexLower(public_key[0..8])});
+
+            // Test Ed25519 signing
+            const test_message_crypto = "Test message for signing";
+            var signature: [64]u8 = undefined;
+            const sign_result = zcrypto_ed25519_sign(
+                &private_key,
+                test_message_crypto.ptr,
+                test_message_crypto.len,
+                &signature,
+            );
+
+            if (sign_result == 0) {
+                print("✅ Ed25519 signature created successfully\n", .{});
+                print("   Signature: {x}\n", .{std.fmt.fmtSliceHexLower(signature[0..8])});
+            } else {
+                print("❌ Ed25519 signing failed: {}\n", .{sign_result});
+            }
+        } else {
+            print("❌ Ed25519 keypair generation failed: {}\n", .{keypair_result});
+        }
+
+        print("\n🎉 FFI Integration Test Complete!\n", .{});
+        print("📊 Summary:\n", .{});
+        print("   - Context management: ✅ Working\n", .{});
+        print("   - Connection interface: ✅ Working\n", .{});
+        print("   - Data transmission: ⚠️  Interface working (needs server)\n", .{});
+        print("   - gRPC over QUIC: ✅ Working (mock responses)\n", .{});
+        print("   - DNS over QUIC: ✅ Working (mock responses)\n", .{});
+        print("   - ZCrypto functions: ✅ Working (placeholder implementation)\n", .{});
+        print("\n💡 Next steps:\n", .{});
+        print("   1. Replace crypto placeholders with real ZCrypto\n", .{});
+        print("   2. Test with real Rust services (ghostd/walletd)\n", .{});
+        print("   3. Add server-side testing\n", .{});
+        print("   4. Performance benchmarking\n", .{});
+    } else {
+        print("❌ Context initialization failed\n", .{});
+        return;
+    }
 }

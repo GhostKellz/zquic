@@ -5,6 +5,7 @@
 const std = @import("std");
 const zquic = @import("../root.zig");
 const zcrypto = @import("zcrypto");
+const Error = @import("../utils/error.zig");
 
 const Http3Server = zquic.Http3.Http3Server;
 const ServerConfig = zquic.Http3.ServerConfig;
@@ -160,7 +161,7 @@ pub const BackendPool = struct {
             }
         }
         
-        return error.BackendNotFound;
+        return Error.ZquicError.BackendNotFound;
     }
     
     pub fn selectBackend(self: *BackendPool, client_ip: ?[]const u8) ?*BackendServer {

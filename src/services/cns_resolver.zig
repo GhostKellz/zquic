@@ -5,6 +5,7 @@
 const std = @import("std");
 const zquic = @import("../root.zig");
 const zcrypto = @import("zcrypto");
+const Error = @import("../utils/error.zig");
 
 const Http3Server = zquic.Http3.Http3Server;
 const ServerConfig = zquic.Http3.ServerConfig;
@@ -135,7 +136,7 @@ pub const DnsQuestion = struct {
         _ = self;
         var labels = std.mem.split(u8, name, ".");
         while (labels.next()) |label| {
-            if (label.len > 63) return error.LabelTooLong;
+            if (label.len > 63) return Error.ZquicError.LabelTooLong;
             try writer.writeByte(@intCast(label.len));
             try writer.writeAll(label);
         }
@@ -179,7 +180,7 @@ pub const DnsResourceRecord = struct {
         _ = self;
         var labels = std.mem.split(u8, name, ".");
         while (labels.next()) |label| {
-            if (label.len > 63) return error.LabelTooLong;
+            if (label.len > 63) return Error.ZquicError.LabelTooLong;
             try writer.writeByte(@intCast(label.len));
             try writer.writeAll(label);
         }

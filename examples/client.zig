@@ -20,7 +20,7 @@ pub fn main() !void {
     const local_cid = try zquic.Packet.ConnectionId.init(&[_]u8{ 0x12, 0x34, 0x56, 0x78, 0x9a, 0xbc, 0xde, 0xf0 });
 
     // Create a client connection
-    var connection = zquic.Connection.Connection.init(allocator, .client, local_cid);
+    var connection = try zquic.Connection.Connection.init(allocator, .client, zquic.Connection.ConnectionParams{});
     defer connection.deinit();
 
     std.debug.print("Created client connection with ID: {any}\n", .{connection.local_conn_id});

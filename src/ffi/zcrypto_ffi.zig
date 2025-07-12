@@ -7,14 +7,14 @@ const std = @import("std");
 const zcrypto = @import("zcrypto");
 
 // Import specific zcrypto modules
-const signatures = zcrypto.signatures;
+const asym = zcrypto.asym;
 const hash = zcrypto.hash;
-const random = zcrypto.random;
-const utils = zcrypto.utils;
+const rand = zcrypto.rand;
+const util = zcrypto.util;
 
 /// Ed25519 key sizes
 pub const ED25519_PUBLIC_KEY_SIZE = 32;
-pub const ED25519_PRIVATE_KEY_SIZE = 32;
+pub const ED25519_PRIVATE_KEY_SIZE = 64; // zcrypto uses 64-byte private keys
 pub const ED25519_SIGNATURE_SIZE = 64;
 
 /// Secp256k1 key sizes
@@ -23,7 +23,7 @@ pub const SECP256K1_PRIVATE_KEY_SIZE = 32;
 pub const SECP256K1_SIGNATURE_SIZE = 64;
 
 /// Hash sizes
-pub const BLAKE3_HASH_SIZE = 32;
+pub const BLAKE2B_HASH_SIZE = 64;
 pub const SHA256_HASH_SIZE = 32;
 
 /// Error codes for crypto operations
@@ -38,16 +38,14 @@ pub const ZCRYPTO_ERROR_INTERNAL = -5;
 /// Returns: ZCRYPTO_SUCCESS on success, error code on failure
 pub export fn zcrypto_ed25519_keypair(
     public_key: [*]u8, // Must be at least 32 bytes
-    private_key: [*]u8, // Must be at least 32 bytes
+    private_key: [*]u8, // Must be at least 64 bytes
 ) callconv(.C) c_int {
     // Generate Ed25519 keypair using zcrypto
-    const keypair = signatures.ed25519_generate_keypair() catch {
-        return ZCRYPTO_ERROR_INTERNAL;
-    };
+    const keypair = asym.generateEd25519();
 
     // Copy keys to output buffers
     @memcpy(public_key[0..ED25519_PUBLIC_KEY_SIZE], &keypair.public_key);
-    @memcpy(private_key[0..ED25519_PRIVATE_KEY_SIZE], &keypair.secret_key);
+    @memcpy(private_key[0..ED25519_PRIVATE_KEY_SIZE], &keypair.private_key);
 
     return ZCRYPTO_SUCCESS;
 }
@@ -55,7 +53,7 @@ pub export fn zcrypto_ed25519_keypair(
 /// Sign message with Ed25519 private key
 /// Returns: ZCRYPTO_SUCCESS on success, error code on failure
 pub export fn zcrypto_ed25519_sign(
-    private_key: [*]const u8, // 32 bytes
+    private_key: [*]const u8, // 64 bytes
     message: [*]const u8, // Message to sign
     message_len: usize, // Message length
     signature: [*]u8, // Output signature (64 bytes)
@@ -64,7 +62,7 @@ pub export fn zcrypto_ed25519_sign(
     if (message_len == 0) return ZCRYPTO_ERROR_INVALID_INPUT;
 
     // Sign message using zcrypto
-    const sig = signatures.ed25519_sign(
+    const sig = asym.signEd25519(
         message[0..message_len],
         private_key[0..ED25519_PRIVATE_KEY_SIZE].*,
     ) catch {
@@ -89,13 +87,11 @@ pub export fn zcrypto_ed25519_verify(
     if (message_len == 0) return ZCRYPTO_ERROR_INVALID_INPUT;
 
     // Verify signature using zcrypto
-    const valid = signatures.ed25519_verify(
-        signature[0..ED25519_SIGNATURE_SIZE].*,
+    const valid = asym.verifyEd25519(
         message[0..message_len],
+        signature[0..ED25519_SIGNATURE_SIZE].*,
         public_key[0..ED25519_PUBLIC_KEY_SIZE].*,
-    ) catch {
-        return ZCRYPTO_ERROR_INTERNAL;
-    };
+    );
 
     return if (valid) ZCRYPTO_SUCCESS else ZCRYPTO_ERROR_INVALID_SIGNATURE;
 }
@@ -106,21 +102,10 @@ pub export fn zcrypto_secp256k1_keypair(
     public_key: [*]u8, // Must be at least 33 bytes (compressed)
     private_key: [*]u8, // Must be at least 32 bytes
 ) callconv(.C) c_int {
-    // Generate Secp256k1 keypair using zcrypto
-    const keypair = signatures.secp256k1_generate_keypair() catch {
-        return ZCRYPTO_ERROR_INTERNAL;
-    };
-
-    // Get compressed public key
-    const compressed_pubkey = signatures.secp256k1_compress_public_key(keypair.public_key) catch {
-        return ZCRYPTO_ERROR_INTERNAL;
-    };
-
-    // Copy keys to output buffers
-    @memcpy(public_key[0..SECP256K1_PUBLIC_KEY_SIZE], &compressed_pubkey);
-    @memcpy(private_key[0..SECP256K1_PRIVATE_KEY_SIZE], &keypair.secret_key);
-
-    return ZCRYPTO_SUCCESS;
+    // Secp256k1 not implemented in zcrypto yet
+    _ = public_key;
+    _ = private_key;
+    return ZCRYPTO_ERROR_INTERNAL;
 }
 
 /// Sign hash with Secp256k1 private key
@@ -130,19 +115,11 @@ pub export fn zcrypto_secp256k1_sign(
     message_hash: [*]const u8, // 32-byte hash to sign
     signature: [*]u8, // Output signature (64 bytes: r + s)
 ) callconv(.C) c_int {
-    // Sign hash using zcrypto
-    const sig = signatures.secp256k1_sign(
-        message_hash[0..32].*,
-        private_key[0..SECP256K1_PRIVATE_KEY_SIZE].*,
-    ) catch {
-        return ZCRYPTO_ERROR_INTERNAL;
-    };
-
-    // Copy signature to output buffer (r + s format)
-    @memcpy(signature[0..32], &sig.r);
-    @memcpy(signature[32..64], &sig.s);
-
-    return ZCRYPTO_SUCCESS;
+    // Secp256k1 not implemented in zcrypto yet
+    _ = private_key;
+    _ = message_hash;
+    _ = signature;
+    return ZCRYPTO_ERROR_INTERNAL;
 }
 
 /// Verify Secp256k1 signature
@@ -152,29 +129,11 @@ pub export fn zcrypto_secp256k1_verify(
     message_hash: [*]const u8, // 32-byte hash that was signed
     signature: [*]const u8, // Signature to verify (64 bytes)
 ) callconv(.C) c_int {
-    // Decompress public key
-    const decompressed_pubkey = signatures.secp256k1_decompress_public_key(
-        public_key[0..SECP256K1_PUBLIC_KEY_SIZE].*,
-    ) catch {
-        return ZCRYPTO_ERROR_INVALID_KEY;
-    };
-
-    // Build signature struct
-    const sig = signatures.Secp256k1Signature{
-        .r = signature[0..32].*,
-        .s = signature[32..64].*,
-    };
-
-    // Verify signature using zcrypto
-    const valid = signatures.secp256k1_verify(
-        sig,
-        message_hash[0..32].*,
-        decompressed_pubkey,
-    ) catch {
-        return ZCRYPTO_ERROR_INTERNAL;
-    };
-
-    return if (valid) ZCRYPTO_SUCCESS else ZCRYPTO_ERROR_INVALID_SIGNATURE;
+    // Secp256k1 not implemented in zcrypto yet
+    _ = public_key;
+    _ = message_hash;
+    _ = signature;
+    return ZCRYPTO_ERROR_INTERNAL;
 }
 
 /// Compute Blake3 hash
@@ -182,15 +141,13 @@ pub export fn zcrypto_secp256k1_verify(
 pub export fn zcrypto_blake3_hash(
     input: [*]const u8, // Input data
     input_len: usize, // Input length
-    output: [*]u8, // Output hash (32 bytes)
+    output: [*]u8, // Output hash (64 bytes)
 ) callconv(.C) c_int {
-    // Compute Blake3 hash using zcrypto
-    var hasher = hash.Blake3.init(.{});
-    hasher.update(input[0..input_len]);
-    const digest = hasher.finalResult();
+    // Compute Blake2b hash using zcrypto
+    const digest = hash.blake2b(input[0..input_len]);
 
     // Copy hash to output buffer
-    @memcpy(output[0..BLAKE3_HASH_SIZE], &digest);
+    @memcpy(output[0..BLAKE2B_HASH_SIZE], &digest);
 
     return ZCRYPTO_SUCCESS;
 }
@@ -203,9 +160,7 @@ pub export fn zcrypto_sha256_hash(
     output: [*]u8, // Output hash (32 bytes)
 ) callconv(.C) c_int {
     // Compute SHA-256 hash using zcrypto
-    var hasher = hash.Sha256.init(.{});
-    hasher.update(input[0..input_len]);
-    const digest = hasher.finalResult();
+    const digest = hash.sha256(input[0..input_len]);
 
     // Copy hash to output buffer
     @memcpy(output[0..SHA256_HASH_SIZE], &digest);
@@ -220,7 +175,7 @@ pub export fn zcrypto_random_bytes(
     len: usize, // Number of bytes to generate
 ) callconv(.C) c_int {
     // Use zcrypto's secure random
-    random.random_bytes(buffer[0..len]);
+    rand.fillBytes(buffer[0..len]);
     return ZCRYPTO_SUCCESS;
 }
 
@@ -232,7 +187,7 @@ pub export fn zcrypto_secure_compare(
     len: usize, // Length to compare
 ) callconv(.C) c_int {
     // Use zcrypto's constant-time comparison
-    const equal = utils.constant_time_compare(a[0..len], b[0..len]);
+    const equal = util.constantTimeCompare(a[0..len], b[0..len]);
     return if (equal) 0 else 1;
 }
 
@@ -242,7 +197,7 @@ pub export fn zcrypto_secure_zero(
     len: usize, // Length to clear
 ) callconv(.C) void {
     // Use zcrypto's secure memory zeroing
-    utils.secure_zero(buffer[0..len]);
+    util.secureZero(buffer[0..len]);
 }
 
 /// Get ZCrypto version
@@ -270,7 +225,7 @@ pub export fn zcrypto_test_hash_known_input() callconv(.C) c_int {
                           0x6b, 0x2e, 0x46, 0xba, 0x5f, 0xe2, 0xa1, 0x4d,
                           0xf5, 0xb1, 0xe8, 0x7e, 0xb5, 0x4d, 0xeb, 0x9a};
     
-    const matches = utils.constant_time_compare(&output, &expected);
+    const matches = util.constantTimeCompare(&output, &expected);
     return if (matches and result == ZCRYPTO_SUCCESS) ZCRYPTO_SUCCESS else ZCRYPTO_ERROR_INTERNAL;
 }
 

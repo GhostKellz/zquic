@@ -61,8 +61,7 @@ pub fn main() !void {
     defer server.stop();
 
     // Simulate HTTP/3 connection setup
-    const local_cid = try zquic.Packet.ConnectionId.init(&[_]u8{ 0xa1, 0xb2, 0xc3, 0xd4, 0xe5, 0xf6, 0x07, 0x08 });
-    var connection = zquic.Connection.Connection.init(allocator, .server, local_cid);
+    var connection = try zquic.Connection.Connection.init(allocator, .server, zquic.Connection.ConnectionParams{});
     defer connection.deinit();
 
     connection.state = .established;

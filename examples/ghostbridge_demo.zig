@@ -5,22 +5,48 @@
 const std = @import("std");
 const zquic = @import("zquic");
 
+// FFI-compatible bridge configuration
+const BridgeConfig = extern struct {
+    port: u16,
+    max_connections: u32,
+    request_timeout_ms: u32,
+    enable_discovery: u8,
+    reserved: [32]u8,
+};
+
+// FFI-compatible gRPC request/response
+const GrpcRequest = extern struct {
+    service: [64]u8,
+    method: [64]u8,
+    data: [*]const u8,
+    data_len: usize,
+    request_id: u64,
+};
+
+const GrpcResponse = extern struct {
+    data: [*]u8,
+    data_len: usize,
+    status: u32,
+    error_message: [256]u8,
+    response_id: u64,
+};
+
 // Import FFI functions
-extern fn ghostbridge_init(config: *const zquic.BridgeConfig) ?*anyopaque;
+extern fn ghostbridge_init(config: *const BridgeConfig) ?*anyopaque;
 extern fn ghostbridge_destroy(bridge: ?*anyopaque) void;
 extern fn ghostbridge_start(bridge: ?*anyopaque) c_int;
 extern fn ghostbridge_stop(bridge: ?*anyopaque) void;
 extern fn ghostbridge_register_service(bridge: ?*anyopaque, name: [*:0]const u8, endpoint: [*:0]const u8) c_int;
 extern fn ghostbridge_create_grpc_connection(bridge: ?*anyopaque, service_name: [*:0]const u8) ?*anyopaque;
-extern fn ghostbridge_send_grpc_request(conn: ?*anyopaque, request: *const zquic.GrpcRequest) ?*zquic.GrpcResponse;
-extern fn ghostbridge_free_grpc_response(response: ?*zquic.GrpcResponse) void;
+extern fn ghostbridge_send_grpc_request(conn: ?*anyopaque, request: *const GrpcRequest) ?*GrpcResponse;
+extern fn ghostbridge_free_grpc_response(response: ?*GrpcResponse) void;
 extern fn ghostbridge_get_stats(bridge: ?*anyopaque, total_connections: *u64, active_connections: *u32, requests_handled: *u64, errors: *u64) c_int;
 extern fn ghostbridge_test_echo(input: [*:0]const u8) [*:0]const u8;
 
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
-    const allocator = gpa.allocator();
+    _ = gpa.allocator(); // Use allocator to avoid unused variable warning
 
     std.debug.print("=== GhostBridge gRPC-over-QUIC Demo ===\n\n", .{});
 
@@ -29,7 +55,7 @@ pub fn main() !void {
     std.debug.print("✓ FFI Test: {s}\n\n", .{echo_result});
 
     // Initialize GhostBridge configuration
-    const config = zquic.BridgeConfig{
+    const config = BridgeConfig{
         .port = 50051,
         .max_connections = 1000,
         .request_timeout_ms = 30000,
@@ -89,7 +115,7 @@ pub fn main() !void {
         
         // Simulate gRPC request
         const request_data = "{ \"method\": \"get_balance\", \"account\": \"ghost1abc...\" }";
-        var grpc_request = zquic.GrpcRequest{
+        var grpc_request = GrpcRequest{
             .service = [_]u8{0} ** 64,
             .method = [_]u8{0} ** 64,
             .data = request_data.ptr,
@@ -128,7 +154,7 @@ pub fn main() !void {
         
         // Simulate wallet operation
         const wallet_request_data = "{ \"method\": \"send_transaction\", \"to\": \"ghost1def...\", \"amount\": \"100.0\" }";
-        var wallet_request = zquic.GrpcRequest{
+        var wallet_request = GrpcRequest{
             .service = [_]u8{0} ** 64,
             .method = [_]u8{0} ** 64,
             .data = wallet_request_data.ptr,
@@ -189,10 +215,11 @@ pub fn main() !void {
 
 // Example: Production deployment configuration
 pub fn createProductionBridge(allocator: std.mem.Allocator) !void {
+    _ = allocator;
     std.debug.print("\n=== Production GhostBridge Configuration ===\n", .{});
     
     // Production-grade configuration
-    const prod_config = zquic.BridgeConfig{
+    const prod_config = BridgeConfig{
         .port = 443, // Standard HTTPS port for production
         .max_connections = 10000, // Support 10K concurrent connections
         .request_timeout_ms = 60000, // 60 second timeout

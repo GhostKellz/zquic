@@ -1240,9 +1240,9 @@ pub const Router = struct {
 };
 
 /// Handler function type
-pub const HandlerFn = *const fn (request: *const Request, response: *Response) anyerror!void;
+pub const HandlerFn = *const fn (request: *const Request, response: *Response) Error.ZquicError!void;
 
 /// Middleware type
 pub const Middleware = struct {
-    process: *const fn (request: *const Request, response: *Response) anyerror!void,
+    process: *const fn (request: *const Request, response: *Response) Error.ZquicError!void,
 };

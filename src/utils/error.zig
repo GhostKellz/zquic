@@ -43,11 +43,26 @@ pub const ZquicError = error{
     OutOfMemory,
     BufferTooSmall,
     ResourceExhausted,
+    BatchFull,
+    PacketTooShort,
+    InvalidData,
 
     // HTTP/3 specific errors
     Http3Error,
     QpackError,
     HeaderError,
+
+    // Service-specific errors
+    BackendNotFound,
+    LabelTooLong,
+    ServiceUnavailable,
+    InvalidState,
+    Timeout,
+
+    // Migration and state errors
+    ConnectionMigrationDisabled,
+    ConnectionMigrationInProgress,
+    StatelessReset,
 
     // General errors
     InvalidArgument,
@@ -112,7 +127,200 @@ pub fn transportErrorToZquicError(transport_error: TransportError) ZquicError {
     };
 }
 
+/// Error context for debugging and logging
+pub const ErrorContext = struct {
+    file: []const u8,
+    function: []const u8,
+    line: u32,
+    message: ?[]const u8 = null,
+    cause: ?ZquicError = null,
+    
+    pub fn init(file: []const u8, function: []const u8, line: u32) ErrorContext {
+        return ErrorContext{
+            .file = file,
+            .function = function,
+            .line = line,
+        };
+    }
+    
+    pub fn withMessage(self: ErrorContext, message: []const u8) ErrorContext {
+        var result = self;
+        result.message = message;
+        return result;
+    }
+    
+    pub fn withCause(self: ErrorContext, cause: ZquicError) ErrorContext {
+        var result = self;
+        result.cause = cause;
+        return result;
+    }
+};
+
+/// Standardized error handling utilities
+pub const ErrorHandling = struct {
+    /// Map standard library errors to ZquicError
+    pub fn mapStdError(err: anyerror) ZquicError {
+        return switch (err) {
+            error.OutOfMemory => ZquicError.OutOfMemory,
+            error.InvalidArgument => ZquicError.InvalidArgument,
+            error.AddressInUse => ZquicError.AddressInUse,
+            error.AddressNotAvailable => ZquicError.AddressError,
+            error.NetworkUnreachable => ZquicError.NetworkUnreachable,
+            error.ConnectionRefused => ZquicError.ConnectionRefused,
+            error.ConnectionResetByPeer => ZquicError.ConnectionReset,
+            error.ConnectionTimedOut => ZquicError.ConnectionTimeout,
+            error.WouldBlock => ZquicError.WouldBlock,
+            error.BrokenPipe => ZquicError.ConnectionClosed,
+            error.NotFound => ZquicError.BackendNotFound,
+            error.InvalidData => ZquicError.InvalidData,
+            error.BufferTooSmall => ZquicError.BufferTooSmall,
+            else => ZquicError.InternalError,
+        };
+    }
+    
+    /// Map crypto-specific errors
+    pub fn mapCryptoError(err: anyerror) ZquicError {
+        return switch (err) {
+            error.AuthenticationFailed => ZquicError.CryptoError,
+            error.IdentityElement => ZquicError.CryptoError,
+            error.NonCanonical => ZquicError.CryptoError,
+            error.NotSquare => ZquicError.CryptoError,
+            error.WeakPublicKey => ZquicError.CryptoError,
+            error.InvalidLength => ZquicError.CryptoError,
+            else => mapStdError(err),
+        };
+    }
+    
+    /// Map network operation errors with context
+    pub fn mapNetworkError(err: anyerror, operation: []const u8) ZquicError {
+        std.log.warn("Network operation '{}' failed: {}", .{ operation, err });
+        return switch (err) {
+            error.SocketNotConnected => ZquicError.ConnectionClosed,
+            error.MessageTooBig => ZquicError.PacketTooLarge,
+            error.SystemResources => ZquicError.ResourceExhausted,
+            error.ProcessFdQuotaExceeded => ZquicError.ResourceExhausted,
+            error.SystemFdQuotaExceeded => ZquicError.ResourceExhausted,
+            else => mapStdError(err),
+        };
+    }
+    
+    /// Log error with context
+    pub fn logError(err: ZquicError, context: ErrorContext) void {
+        const message = context.message orelse "No message";
+        std.log.err("Error in {}:{s}:{d} - {}: {s}", .{ 
+            context.file, context.function, context.line, err, message 
+        });
+        if (context.cause) |cause| {
+            std.log.err("  Caused by: {}", .{cause});
+        }
+    }
+    
+    /// Convert error to user-friendly string
+    pub fn errorToString(err: ZquicError) []const u8 {
+        return switch (err) {
+            .ConnectionClosed => "Connection closed",
+            .ConnectionTimeout => "Connection timed out",
+            .ConnectionRefused => "Connection refused",
+            .InvalidConnectionId => "Invalid connection ID",
+            .ProtocolViolation => "Protocol violation",
+            .InvalidPacket => "Invalid packet format",
+            .InvalidFrame => "Invalid frame format",
+            .FlowControlError => "Flow control error",
+            .StreamLimitError => "Stream limit exceeded",
+            .StreamStateError => "Invalid stream state",
+            .CryptoError => "Cryptographic error",
+            .TlsError => "TLS handshake error",
+            .HandshakeTimeout => "Handshake timeout",
+            .CertificateError => "Certificate validation error",
+            .NetworkError => "Network error",
+            .SocketError => "Socket error",
+            .AddressError => "Address error",
+            .AddressInUse => "Address already in use",
+            .NetworkUnreachable => "Network unreachable",
+            .ConnectionReset => "Connection reset",
+            .PacketTooLarge => "Packet too large",
+            .WouldBlock => "Operation would block",
+            .UnknownConnection => "Unknown connection",
+            .ConnectionLimitReached => "Connection limit reached",
+            .SendQueueFull => "Send queue full",
+            .OutOfMemory => "Out of memory",
+            .BufferTooSmall => "Buffer too small",
+            .ResourceExhausted => "Resources exhausted",
+            .BatchFull => "Batch operation full",
+            .PacketTooShort => "Packet too short",
+            .InvalidData => "Invalid data",
+            .Http3Error => "HTTP/3 error",
+            .QpackError => "QPACK compression error",
+            .HeaderError => "Header processing error",
+            .BackendNotFound => "Backend service not found",
+            .LabelTooLong => "Label too long",
+            .ServiceUnavailable => "Service unavailable",
+            .InvalidState => "Invalid state",
+            .Timeout => "Operation timed out",
+            .ConnectionMigrationDisabled => "Connection migration disabled",
+            .ConnectionMigrationInProgress => "Connection migration in progress",
+            .StatelessReset => "Stateless reset received",
+            .InvalidArgument => "Invalid argument",
+            .NotSupported => "Operation not supported",
+            .InternalError => "Internal error",
+        };
+    }
+    
+    /// Check if error is recoverable
+    pub fn isRecoverable(err: ZquicError) bool {
+        return switch (err) {
+            .WouldBlock, .SendQueueFull, .ResourceExhausted, .Timeout => true,
+            .ConnectionClosed, .ConnectionRefused, .CertificateError, .InternalError => false,
+            else => true,
+        };
+    }
+    
+    /// Get error severity level
+    pub fn getSeverity(err: ZquicError) enum { low, medium, high, critical } {
+        return switch (err) {
+            .WouldBlock, .PacketTooShort => .low,
+            .InvalidArgument, .NotSupported, .BufferTooSmall => .medium,
+            .NetworkError, .ConnectionTimeout, .ResourceExhausted => .high,
+            .InternalError, .CryptoError, .ProtocolViolation => .critical,
+            else => .medium,
+        };
+    }
+};
+
+/// Convenience macros for error handling
+pub fn ZQUIC_TRY(operation: anytype) !@TypeOf(operation) {
+    return operation catch |err| {
+        return ErrorHandling.mapStdError(err);
+    };
+}
+
+pub fn ZQUIC_TRY_NET(operation: anytype, op_name: []const u8) !@TypeOf(operation) {
+    return operation catch |err| {
+        return ErrorHandling.mapNetworkError(err, op_name);
+    };
+}
+
+pub fn ZQUIC_TRY_CRYPTO(operation: anytype) !@TypeOf(operation) {
+    return operation catch |err| {
+        return ErrorHandling.mapCryptoError(err);
+    };
+}
+
 test "error code conversions" {
     const err = transportErrorToZquicError(.connection_refused);
     try std.testing.expect(err == ZquicError.ConnectionRefused);
+}
+
+test "error mapping utilities" {
+    const std_err = ErrorHandling.mapStdError(error.OutOfMemory);
+    try std.testing.expect(std_err == ZquicError.OutOfMemory);
+    
+    const net_err = ErrorHandling.mapNetworkError(error.ConnectionRefused, "connect");
+    try std.testing.expect(net_err == ZquicError.ConnectionRefused);
+    
+    try std.testing.expect(ErrorHandling.isRecoverable(ZquicError.WouldBlock));
+    try std.testing.expect(!ErrorHandling.isRecoverable(ZquicError.InternalError));
+    
+    try std.testing.expect(ErrorHandling.getSeverity(ZquicError.InternalError) == .critical);
+    try std.testing.expect(ErrorHandling.getSeverity(ZquicError.WouldBlock) == .low);
 }

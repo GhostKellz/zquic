@@ -121,8 +121,22 @@ pub const PacketMemoryPool = @import("core/packet_crypto.zig").PacketMemoryPool;
 pub const Allocator = @import("utils/allocator.zig");
 pub const Error = @import("utils/error.zig");
 
+// FFI exports for crypto operations
+pub const zcrypto_ed25519_keypair = @import("ffi/zcrypto_ffi.zig").zcrypto_ed25519_keypair;
+pub const zcrypto_ed25519_sign = @import("ffi/zcrypto_ffi.zig").zcrypto_ed25519_sign;
+pub const zcrypto_ed25519_verify = @import("ffi/zcrypto_ffi.zig").zcrypto_ed25519_verify;
+pub const zcrypto_secp256k1_keypair = @import("ffi/zcrypto_ffi.zig").zcrypto_secp256k1_keypair;
+pub const zcrypto_secp256k1_sign = @import("ffi/zcrypto_ffi.zig").zcrypto_secp256k1_sign;
+pub const zcrypto_secp256k1_verify = @import("ffi/zcrypto_ffi.zig").zcrypto_secp256k1_verify;
+pub const zcrypto_blake3_hash = @import("ffi/zcrypto_ffi.zig").zcrypto_blake3_hash;
+pub const zcrypto_sha256_hash = @import("ffi/zcrypto_ffi.zig").zcrypto_sha256_hash;
+pub const zcrypto_random_bytes = @import("ffi/zcrypto_ffi.zig").zcrypto_random_bytes;
+
+// GhostBridge types that were missing
+pub const BridgeConfig = Services.GhostBridgeConfig;
+
 // Version information
-pub const version = "0.4.0";
+pub const version = "0.7.0";
 pub const quic_version = 0x00000001; // QUIC version 1 (RFC 9000)
 
 /// Initialize the ZQUIC library with a given allocator

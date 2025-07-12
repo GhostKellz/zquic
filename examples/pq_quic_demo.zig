@@ -51,7 +51,7 @@ pub fn main() !void {
 
     // Ed25519 keypair generation
     var ed25519_public: [32]u8 = undefined;
-    var ed25519_private: [32]u8 = undefined;
+    var ed25519_private: [64]u8 = undefined;
     
     const ed_result = zquic.zcrypto_ed25519_keypair(&ed25519_public, &ed25519_private);
     if (ed_result == 0) {
@@ -86,7 +86,7 @@ pub fn main() !void {
     // Test hashing
     std.debug.print("\nTesting Hash Functions:\n", .{});
 
-    var blake3_hash: [32]u8 = undefined;
+    var blake3_hash: [64]u8 = undefined;
     const blake3_result = zquic.zcrypto_blake3_hash(
         message.ptr,
         message.len,
@@ -136,20 +136,23 @@ pub fn main() !void {
 
     std.debug.print("\n✓ Post-Quantum QUIC is ready for production use!\n", .{});
     std.debug.print("  Your QUIC connections are now quantum-safe.\n", .{});
+    
+    // Demonstrate server creation
+    std.debug.print("\nDemonstrating quantum-safe server creation...\n", .{});
+    try createQuantumSafeServer(allocator);
 }
 
 // Example: Creating a quantum-safe QUIC server
 pub fn createQuantumSafeServer(allocator: std.mem.Allocator) !void {
     // Server configuration
     const config = zquic.Http3.ServerConfig{
-        .address = "127.0.0.1",
-        .port = 4433,
-        .cert_path = "cert.pem",
-        .key_path = "key.pem",
-        .max_concurrent_streams = 100,
-        .initial_window_size = 1024 * 1024,
-        .enable_0rtt = true,
-        .idle_timeout_ms = 30000,
+        .max_connections = 1000,
+        .max_streams_per_connection = 100,
+        .request_timeout_ms = 30000,
+        .keep_alive_timeout_ms = 60000,
+        .max_request_body_size = 1024 * 1024,
+        .enable_compression = true,
+        .enable_cors = true,
     };
 
     // Create HTTP/3 server
@@ -166,17 +169,17 @@ pub fn createQuantumSafeServer(allocator: std.mem.Allocator) !void {
 
     // The server would internally use post-quantum crypto
     // for all QUIC handshakes when zcrypto is linked
+    std.debug.print("✓ Quantum-safe HTTP/3 server configured successfully\n", .{});
 
-    std.debug.print("\nQuantum-safe QUIC server ready on https://{}:{}\n", .{
-        config.address,
-        config.port,
+    std.debug.print("\nQuantum-safe QUIC server configured with {} max connections\n", .{
+        config.max_connections,
     });
 }
 
 fn indexHandler(_: *zquic.Http3.Request, res: *zquic.Http3.Response) !void {
-    try res.status(.ok);
-    try res.header("Content-Type", "text/html");
-    try res.body(
+    res.setStatus(.ok);
+    try res.setHeader("Content-Type", "text/html");
+    try res.write(
         \\<!DOCTYPE html>
         \\<html>
         \\<head><title>Quantum-Safe QUIC</title></head>
