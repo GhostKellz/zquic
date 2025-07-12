@@ -11,12 +11,19 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
 
+    // Get tokioZ dependency  
+    const tokioz_dep = b.dependency("tokioZ", .{
+        .target = target,
+        .optimize = optimize,
+    });
+
     // Create the ZQUIC library module
     const mod = b.addModule("zquic", .{
         .root_source_file = b.path("src/root.zig"),
         .target = target,
         .imports = &.{
             .{ .name = "zcrypto", .module = zcrypto_dep.module("zcrypto") },
+            .{ .name = "tokioZ", .module = tokioz_dep.module("TokioZ") },
         },
     });
 

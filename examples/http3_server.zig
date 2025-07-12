@@ -68,7 +68,7 @@ pub fn main() !void {
     const conn_id = try server.registerConnection(&connection);
     defer server.unregisterConnection(conn_id);
 
-    std.debug.print("Server initialized with connection ID: {s}\n", .{std.fmt.fmtSliceHexLower(conn_id)});
+    std.debug.print("Server initialized with connection ID: {any}\n", .{conn_id});
 
     // Simulate incoming HTTP/3 requests
     try simulateRequests(&server, conn_id, allocator);

@@ -157,7 +157,7 @@ pub fn main() !void {
 
         if (keypair_result == 0) {
             print("✅ Ed25519 keypair generated successfully\n", .{});
-            print("   Public key: {x}\n", .{std.fmt.fmtSliceHexLower(public_key[0..8])});
+            print("   Public key: {any}\n", .{public_key[0..8]});
 
             // Test Ed25519 signing
             const test_message_crypto = "Test message for signing";
@@ -171,7 +171,7 @@ pub fn main() !void {
 
             if (sign_result == 0) {
                 print("✅ Ed25519 signature created successfully\n", .{});
-                print("   Signature: {x}\n", .{std.fmt.fmtSliceHexLower(signature[0..8])});
+                print("   Signature: {any}\n", .{signature[0..8]});
             } else {
                 print("❌ Ed25519 signing failed: {}\n", .{sign_result});
             }

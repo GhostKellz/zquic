@@ -237,7 +237,7 @@ pub const Http3Server = struct {
         self.stats.connections_active += 1;
         self.stats.connections_total += 1;
 
-        std.log.info("Registered HTTP/3 connection: {s}", .{std.fmt.fmtSliceHexLower(conn_id)});
+        std.log.info("Registered HTTP/3 connection: {any}", .{conn_id});
         return conn_id;
     }
 
@@ -254,7 +254,7 @@ pub const Http3Server = struct {
     /// Process incoming HTTP/3 frames
     pub fn processFrame(self: *Self, connection_id: []const u8, stream_id: u64, frame: Frame.Frame) !void {
         const context = self.connections.get(connection_id) orelse {
-            std.log.warn("Frame received for unknown connection: {s}", .{std.fmt.fmtSliceHexLower(connection_id)});
+            std.log.warn("Frame received for unknown connection: {any}", .{connection_id});
             return Error.ZquicError.ConnectionClosed;
         };
 
@@ -468,7 +468,7 @@ pub const Http3Server = struct {
 
         for (to_remove.items) |conn_id| {
             self.unregisterConnection(conn_id);
-            std.log.info("Cleaned up expired connection: {s}", .{std.fmt.fmtSliceHexLower(conn_id)});
+            std.log.info("Cleaned up expired connection: {any}", .{conn_id});
         }
     }
 

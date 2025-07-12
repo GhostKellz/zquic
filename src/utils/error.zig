@@ -269,7 +269,7 @@ pub const ErrorHandling = struct {
     /// Check if error is recoverable
     pub fn isRecoverable(err: ZquicError) bool {
         return switch (err) {
-            .WouldBlock, .SendQueueFull, .ResourceExhausted, .Timeout => true,
+            ZquicError.WouldBlock, ZquicError.SendQueueFull, ZquicError.ResourceExhausted, ZquicError.Timeout => true,
             .ConnectionClosed, .ConnectionRefused, .CertificateError, .InternalError => false,
             else => true,
         };
@@ -278,7 +278,7 @@ pub const ErrorHandling = struct {
     /// Get error severity level
     pub fn getSeverity(err: ZquicError) enum { low, medium, high, critical } {
         return switch (err) {
-            .WouldBlock, .PacketTooShort => .low,
+            ZquicError.WouldBlock, ZquicError.PacketTooShort => .low,
             .InvalidArgument, .NotSupported, .BufferTooSmall => .medium,
             .NetworkError, .ConnectionTimeout, .ResourceExhausted => .high,
             .InternalError, .CryptoError, .ProtocolViolation => .critical,
