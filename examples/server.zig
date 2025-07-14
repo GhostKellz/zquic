@@ -23,7 +23,7 @@ pub fn main() !void {
     var connection = try zquic.Connection.Connection.init(allocator, .server, zquic.Connection.ConnectionParams{});
     defer connection.deinit();
 
-    std.debug.print("Created server connection with ID: {any}\n", .{connection.local_conn_id});
+    std.debug.print("Created server connection with ID: {any}\n", .{connection.super_connection.local_conn_id});
     for (local_cid.bytes()) |byte| {
         std.debug.print("{X:0>2}", .{byte});
     }
@@ -47,23 +47,23 @@ pub fn main() !void {
     }
 
     // Simulate handshake completion
-    connection.state = .established;
+    connection.super_connection.state = .established;
     std.debug.print("Handshake completed, connection established!\n", .{});
 
     // Create a server-initiated stream
     const stream = try connection.createStream(.server_bidirectional);
-    std.debug.print("Created server stream with ID: {}\n", .{stream.id.id});
+    std.debug.print("Created server stream with ID: {}\n", .{stream.id});
 
     // Simulate receiving client data
-    try stream.receiveData("Hello from client!", 0, false);
+    try stream.handleIncomingData("Hello from client!");
 
     var buffer: [100]u8 = undefined;
-    const read_len = connection.readStreamData(stream.id.id, &buffer);
+    const read_len = try stream.read(&buffer);
     std.debug.print("Received {} bytes from client: '{s}'\n", .{ read_len, buffer[0..read_len] });
 
     // Send response
     const response = "Hello from ZQUIC server!";
-    const written = try connection.sendStreamData(stream.id.id, response, true);
+    const written = try stream.write(response, true);
     std.debug.print("Sent {} bytes response: '{s}'\n", .{ written, response });
 
     // Demonstrate key management
@@ -82,12 +82,12 @@ pub fn main() !void {
 
     // Connection statistics
     std.debug.print("\nConnection Statistics:\n", .{});
-    std.debug.print("  Packets sent: {}\n", .{connection.stats.packets_sent});
-    std.debug.print("  Packets received: {}\n", .{connection.stats.packets_received});
-    std.debug.print("  Bytes sent: {}\n", .{connection.stats.bytes_sent});
-    std.debug.print("  Bytes received: {}\n", .{connection.stats.bytes_received});
-    std.debug.print("  RTT: {} μs\n", .{connection.stats.rtt});
-    std.debug.print("  Congestion window: {} bytes\n", .{connection.stats.congestion_window});
+    std.debug.print("  Packets sent: {}\n", .{connection.super_connection.stats.packets_sent});
+    std.debug.print("  Packets received: {}\n", .{connection.super_connection.stats.packets_received});
+    std.debug.print("  Bytes sent: {}\n", .{connection.super_connection.stats.bytes_sent});
+    std.debug.print("  Bytes received: {}\n", .{connection.super_connection.stats.bytes_received});
+    std.debug.print("  RTT: {} μs\n", .{connection.super_connection.stats.rtt});
+    std.debug.print("  Congestion window: {} bytes\n", .{connection.super_connection.stats.congestion_window});
 
     std.debug.print("✅ Server example completed successfully!\n", .{});
 }

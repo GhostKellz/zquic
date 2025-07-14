@@ -11,7 +11,7 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
 
-    // Get zsync dependency  
+    // Get zsync dependency
     const zsync_dep = b.dependency("zsync", .{
         .target = target,
         .optimize = optimize,

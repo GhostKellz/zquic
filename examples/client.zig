@@ -23,40 +23,40 @@ pub fn main() !void {
     var connection = try zquic.Connection.Connection.init(allocator, .client, zquic.Connection.ConnectionParams{});
     defer connection.deinit();
 
-    std.debug.print("Created client connection with ID: {any}\n", .{connection.local_conn_id});
+    std.debug.print("Created client connection with ID: {any}\n", .{connection.super_connection.local_conn_id});
     for (local_cid.bytes()) |byte| {
         std.debug.print("{X:0>2}", .{byte});
     }
     std.debug.print("\n", .{});
 
     // Simulate connection establishment
-    connection.state = .established;
+    connection.super_connection.state = .established;
     std.debug.print("Connection established!\n", .{});
 
     // Create a bidirectional stream
     const stream = try connection.createStream(.client_bidirectional);
-    std.debug.print("Created stream with ID: {}\n", .{stream.id.id});
+    std.debug.print("Created stream with ID: {}\n", .{stream.id});
 
     // Send some data
     const message = "Hello from ZQUIC client!";
-    const written = try connection.sendStreamData(stream.id.id, message, false);
+    const written = try stream.write(message, false);
     std.debug.print("Sent {} bytes: '{s}'\n", .{ written, message });
 
     // Simulate receiving a response
-    try stream.receiveData("Hello from ZQUIC server!", 0, true);
+    try stream.handleIncomingData("Hello from ZQUIC server!");
 
     var buffer: [100]u8 = undefined;
-    const read_len = connection.readStreamData(stream.id.id, &buffer);
+    const read_len = try stream.read(&buffer);
     std.debug.print("Received {} bytes: '{s}'\n", .{ read_len, buffer[0..read_len] });
 
     // Demonstrate flow control
     var fc = zquic.FlowControl.FlowController.init(allocator, 65536, 65536);
     defer fc.deinit();
 
-    try fc.addStream(stream.id.id, 32768, 32768);
+    try fc.addStream(stream.id, 32768, 32768);
 
-    if (fc.canSendStreamData(stream.id.id, 1000)) {
-        try fc.consumeSendCredit(stream.id.id, 1000);
+    if (fc.canSendStreamData(stream.id, 1000)) {
+        try fc.consumeSendCredit(stream.id, 1000);
         std.debug.print("Flow control: consumed 1000 bytes of send credit\n", .{});
     }
 

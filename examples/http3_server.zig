@@ -64,7 +64,7 @@ pub fn main() !void {
     var connection = try zquic.Connection.Connection.init(allocator, .server, zquic.Connection.ConnectionParams{});
     defer connection.deinit();
 
-    connection.state = .established;
+    connection.super_connection.state = .established;
     const conn_id = try server.registerConnection(&connection);
     defer server.unregisterConnection(conn_id);
 

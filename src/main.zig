@@ -38,19 +38,19 @@ fn demonstrateConnectionId() !void {
 fn demonstrateStreamOperations(allocator: std.mem.Allocator) !void {
     std.debug.print("\n🌊 Stream Operations Demo:\n", .{});
 
-    var stream = zquic.Stream.Stream.init(allocator, 0);
+    var stream = try zquic.Stream.Stream.init(allocator, 0, .client_bidirectional);
     defer stream.deinit();
 
-    stream.state = .open;
+    stream.state.store(.open, .monotonic);
 
     const written = try stream.write("Hello, QUIC!", false);
     std.debug.print("  Written {} bytes to stream\n", .{written});
 
-    try stream.receiveData("Received data", 0, true);
-    std.debug.print("  Stream state after FIN: {}\n", .{stream.state});
+    try stream.handleIncomingData("Received data");
+    std.debug.print("  Stream state after FIN: {}\n", .{stream.state.load(.monotonic)});
 
     var read_buffer: [100]u8 = undefined;
-    const read_len = stream.read(&read_buffer);
+    const read_len = try stream.read(&read_buffer);
     std.debug.print("  Read {} bytes: '{s}'\n", .{ read_len, read_buffer[0..read_len] });
 }
 

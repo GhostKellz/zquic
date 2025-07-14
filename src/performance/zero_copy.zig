@@ -748,9 +748,9 @@ pub const HardwareCRC32 = struct {
             const value = std.mem.readIntNative(u64, data[i..i + 8]);
             crc = @bitCast(asm volatile (
                 "crc32 %[value], %[crc]"
-                : [crc] "=r" (crc),
+                : [crc] "=r" (crc)
                 : [value] "r" (value),
-                  "[crc]" (crc),
+                  [crc] "0" (crc)
             ));
         }
         
@@ -758,9 +758,9 @@ pub const HardwareCRC32 = struct {
         while (i < data.len) : (i += 1) {
             crc = @bitCast(asm volatile (
                 "crc32b %[byte], %[crc]"
-                : [crc] "=r" (crc),
+                : [crc] "=r" (crc)
                 : [byte] "r" (data[i]),
-                  "[crc]" (crc),
+                  [crc] "0" (crc)
             ));
         }
         
@@ -942,14 +942,14 @@ pub const NumaAllocator = struct {
         return node_id;
     }
     
-    fn detectNumaNodes(allocator: std.mem.Allocator) ![]NumaNode {
+    fn detectNumaNodes(numa_allocator: std.mem.Allocator) ![]NumaNode {
         // Simplified NUMA detection - real implementation would query the system
-        const nodes = try allocator.alloc(NumaNode, 1);
+        const nodes = try numa_allocator.alloc(NumaNode, 1);
         nodes[0] = NumaNode{
             .id = 0,
             .memory_size = 1024 * 1024 * 1024, // 1GB
             .cpu_mask = 0xFF, // All CPUs
-            .allocator = allocator,
+            .allocator = numa_allocator,
         };
         return nodes;
     }
@@ -1206,6 +1206,9 @@ pub const ZeroCopyPacketPool = struct {
     }
 };
 
+/// Simple buffer pool type alias
+const BufferPool = ZeroCopyPool;
+
 /// Zero-Copy Packet Processor with hardware acceleration
 pub const ZeroCopyPacketProcessor = struct {
     buffer_pool: BufferPool,
@@ -1457,7 +1460,7 @@ pub const ZeroCopyStreamProcessor = struct {
             break :blk size;
         };
         
-        var result = StreamResult{
+        const result = StreamResult{
             .buffers = try self.allocator.alloc(*ZeroCopyBuffer, data_chunks.len),
             .total_bytes = total_size,
             .chunk_count = data_chunks.len,

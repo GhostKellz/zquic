@@ -136,19 +136,19 @@ const Connection = struct {
 
     pub fn updateInfo(self: *Self) void {
         // Update connection state
-        self.info.state = switch (self.connection.state) {
+        self.info.state = switch (self.connection.super_connection.state) {
             .initial, .handshake => 0, // connecting
             .established => 1, // connected
             .closing, .draining, .closed => 2, // closed
         };
 
         // Update stats
-        self.info.bytes_sent = self.connection.stats.bytes_sent;
-        self.info.bytes_received = self.connection.stats.bytes_received;
-        self.info.rtt_us = @intCast(self.connection.stats.rtt);
+        self.info.bytes_sent = self.connection.super_connection.stats.bytes_sent;
+        self.info.bytes_received = self.connection.super_connection.stats.bytes_received;
+        self.info.rtt_us = @intCast(self.connection.super_connection.stats.rtt);
 
         // Copy connection ID
-        const cid_bytes = self.connection.local_conn_id.bytes();
+        const cid_bytes = self.connection.super_connection.local_conn_id.bytes();
         const copy_len = @min(16, cid_bytes.len);
         @memcpy(self.info.connection_id[0..copy_len], cid_bytes[0..copy_len]);
     }
@@ -313,7 +313,7 @@ pub export fn zquic_send_data(conn: ?*ZQuicConnection, data: [*]const u8, len: u
             return -1;
         };
 
-        stream = Stream.init(connection.allocator, quic_stream, quic_stream.id.id) catch return -1;
+        stream = Stream.init(connection.allocator, quic_stream, quic_stream.id) catch return -1;
         connection.streams.append(stream) catch {
             stream.deinit();
             return -1;
@@ -324,7 +324,7 @@ pub export fn zquic_send_data(conn: ?*ZQuicConnection, data: [*]const u8, len: u
 
     // Convert C data to Zig slice and send
     const data_slice = data[0..len];
-    const bytes_written = connection.connection.sendStreamData(stream.stream_id, data_slice, false) catch |err| {
+    const bytes_written = stream.stream.write(data_slice, false) catch |err| {
         std.log.err("Failed to send stream data: {}", .{err});
         return -1;
     };
@@ -356,7 +356,7 @@ pub export fn zquic_receive_data(conn: ?*ZQuicConnection, buffer: [*]u8, max_len
     const buffer_slice = buffer[0..max_len];
 
     // Read data from the stream
-    const bytes_read = connection.connection.readStreamData(stream.stream_id, buffer_slice);
+    const bytes_read = stream.stream.read(buffer_slice) catch 0;
 
     // Update connection info
     connection.updateInfo();
@@ -378,8 +378,8 @@ pub export fn zquic_create_stream(conn: ?*ZQuicConnection, stream_type: u8) call
 
     // Determine stream type
     const quic_stream_type: zquic.Stream.StreamType = switch (stream_type) {
-        0 => if (connection.connection.role == .client) .client_bidirectional else .server_bidirectional,
-        1 => if (connection.connection.role == .client) .client_unidirectional else .server_unidirectional,
+        0 => if (connection.connection.super_connection.role == .client) .client_bidirectional else .server_bidirectional,
+        1 => if (connection.connection.super_connection.role == .client) .client_unidirectional else .server_unidirectional,
         else => {
             std.log.err("Invalid stream type: {}", .{stream_type});
             return null;
@@ -393,13 +393,13 @@ pub export fn zquic_create_stream(conn: ?*ZQuicConnection, stream_type: u8) call
     };
 
     // Create FFI stream wrapper
-    const stream = Stream.init(connection.allocator, quic_stream, quic_stream.id.id) catch return null;
+    const stream = Stream.init(connection.allocator, quic_stream, quic_stream.id) catch return null;
     connection.streams.append(stream) catch {
         stream.deinit();
         return null;
     };
 
-    std.log.info("Created QUIC stream with ID: {}", .{quic_stream.id.id});
+    std.log.info("Created QUIC stream with ID: {}", .{quic_stream.id});
     return @ptrCast(stream);
 }
 
@@ -441,7 +441,10 @@ pub export fn zquic_stream_receive(stream: ?*ZQuicStream, buffer: [*]u8, max_len
     const buffer_slice = buffer[0..max_len];
 
     // Read data from the stream
-    const bytes_read = s.stream.read(buffer_slice);
+    const bytes_read = s.stream.read(buffer_slice) catch |err| {
+        _ = err;
+        return -1;
+    };
 
     return @intCast(bytes_read);
 }
@@ -537,7 +540,7 @@ pub export fn zquic_grpc_call(conn: ?*ZQuicConnection, service_method: [*:0]cons
             return null;
         };
 
-        grpc_stream = Stream.init(connection.allocator, quic_stream, quic_stream.id.id) catch return null;
+        grpc_stream = Stream.init(connection.allocator, quic_stream, quic_stream.id) catch return null;
         connection.streams.append(grpc_stream) catch {
             grpc_stream.deinit();
             return null;
@@ -839,7 +842,7 @@ pub export fn zquic_dns_query(conn: ?*ZQuicConnection, domain: [*:0]const u8, qu
             return -1;
         };
 
-        dns_stream = Stream.init(connection.allocator, quic_stream, quic_stream.id.id) catch {
+        dns_stream = Stream.init(connection.allocator, quic_stream, quic_stream.id) catch {
             response.rcode = 2; // SERVFAIL
             return -1;
         };
