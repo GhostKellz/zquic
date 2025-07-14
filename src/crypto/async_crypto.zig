@@ -1,11 +1,11 @@
 //! Async Crypto Pipeline for QUIC
 //!
-//! Provides asynchronous packet processing with tokioZ integration for high-performance
-//! QUIC implementations using zcrypto v0.6.0
+//! Provides asynchronous packet processing with zsync integration for high-performance
+//! QUIC implementations using zcrypto v0.8.1
 
 const std = @import("std");
 const zcrypto = @import("zcrypto");
-const tokioZ = @import("tokioZ");
+const zsync = @import("zsync");
 const PacketCrypto = @import("../core/packet_crypto.zig").PacketCrypto;
 const Error = @import("../utils/error.zig");
 
@@ -58,16 +58,15 @@ const QuicCrypto = struct {
 /// Async QUIC crypto pipeline for high-throughput packet processing
 pub const AsyncQuicCrypto = struct {
     allocator: std.mem.Allocator,
-    tokio_runtime: *tokioZ.Runtime,
+    io: zsync.GreenThreadsIo,
     crypto_pipeline: AsyncCrypto.CryptoPipeline,
     packet_crypto: *PacketCrypto,
     
     const Self = @This();
     
     pub fn init(allocator: std.mem.Allocator, packet_crypto: *PacketCrypto) !Self {
-        // Initialize tokioZ runtime
-        const tokio_runtime = try allocator.create(tokioZ.Runtime);
-        tokio_runtime.* = try tokioZ.Runtime.init(allocator, .{});
+        // Initialize zsync green threads I/O for high-concurrency crypto operations
+        const io = zsync.GreenThreadsIo{};
         
         // Create async crypto pipeline
         const crypto_pipeline = try AsyncCrypto.CryptoPipeline.init(allocator, .{
@@ -78,7 +77,7 @@ pub const AsyncQuicCrypto = struct {
         
         return Self{
             .allocator = allocator,
-            .tokio_runtime = tokio_runtime,
+            .io = io,
             .crypto_pipeline = crypto_pipeline,
             .packet_crypto = packet_crypto,
         };
@@ -86,8 +85,6 @@ pub const AsyncQuicCrypto = struct {
     
     pub fn deinit(self: *Self) void {
         self.crypto_pipeline.deinit();
-        self.tokio_runtime.deinit();
-        self.allocator.destroy(self.tokio_runtime);
     }
     
     /// Process packet batch asynchronously
@@ -97,12 +94,15 @@ pub const AsyncQuicCrypto = struct {
         nonces: []u64,
         aads: [][]const u8,
     ) !void {
-        // Spawn async packet processing task using new v1.0.1 API
-        _ = try self.tokio_runtime.spawn(struct {
-            pub fn run(runtime_self: *Self, p: [][]const u8, n: []u64, a: [][]const u8) !void {
-                _ = try runtime_self.crypto_pipeline.processPacketBatch(p, n, a);
-            }
-        }.run, .{ self, packets, nonces, aads });
+        // Spawn async packet processing task using zsync
+        var future = self.io.async(processPacketWorker, .{ self, packets, nonces, aads });
+        defer future.cancel(self.io) catch {};
+        
+        try future.await(self.io);
+    }
+    
+    fn processPacketWorker(self: *Self, packets: [][]const u8, nonces: []u64, aads: [][]const u8) !void {
+        _ = try self.crypto_pipeline.processPacketBatch(packets, nonces, aads);
     }
     
     /// Encrypt packet batch asynchronously
@@ -111,25 +111,28 @@ pub const AsyncQuicCrypto = struct {
         packets: [][]u8,
         packet_numbers: []u64,
     ) !void {
-        // Spawn async encryption task using new v1.0.1 API
-        _ = try self.tokio_runtime.spawn(struct {
-            pub fn run(runtime_self: *Self, p: [][]u8, pn: []u64) !void {
-                // Prepare AADs for batch processing
-                const aads = try runtime_self.allocator.alloc([]const u8, p.len);
-                defer runtime_self.allocator.free(aads);
-                
-                for (p, pn, 0..) |packet, packet_num, i| {
-                    _ = packet;
-                    // Build AAD for each packet (simplified)
-                    const aad = try runtime_self.allocator.alloc(u8, 32);
-                    std.mem.writeInt(u64, aad[0..8], packet_num, .big);
-                    aads[i] = aad;
-                }
-                
-                // Process with hardware acceleration
-                _ = try runtime_self.packet_crypto.processBatchEncrypt(p, pn, aads);
-            }
-        }.run, .{ self, packets, packet_numbers });
+        // Spawn async encryption task using zsync
+        var future = self.io.async(encryptBatchWorker, .{ self, packets, packet_numbers });
+        defer future.cancel(self.io) catch {};
+        
+        try future.await(self.io);
+    }
+    
+    fn encryptBatchWorker(self: *Self, packets: [][]u8, packet_numbers: []u64) !void {
+        // Prepare AADs for batch processing
+        const aads = try self.allocator.alloc([]const u8, packets.len);
+        defer self.allocator.free(aads);
+        
+        for (packets, packet_numbers, 0..) |packet, packet_num, i| {
+            _ = packet;
+            // Build AAD for each packet (simplified)
+            const aad = try self.allocator.alloc(u8, 32);
+            std.mem.writeInt(u64, aad[0..8], packet_num, .big);
+            aads[i] = aad;
+        }
+        
+        // Process with hardware acceleration
+        _ = try self.packet_crypto.processBatchEncrypt(packets, packet_numbers, aads);
     }
     
     /// Decrypt packet batch asynchronously
@@ -138,26 +141,29 @@ pub const AsyncQuicCrypto = struct {
         ciphertexts: [][]const u8,
         packet_numbers: []u64,
     ) !void {
-        // Spawn async decryption task using new v1.0.1 API
-        _ = try self.tokio_runtime.spawn(struct {
-            pub fn run(runtime_self: *Self, ct: [][]const u8, pn: []u64) !void {
-                const plaintexts = try runtime_self.allocator.alloc([]u8, ct.len);
-                defer runtime_self.allocator.free(plaintexts);
-                
-                for (ct, pn, 0..) |ciphertext, packet_num, i| {
-                    // Decrypt each packet
-                    const header = try runtime_self.allocator.alloc(u8, 32); // Simplified header
-                    defer runtime_self.allocator.free(header);
-                    
-                    plaintexts[i] = try runtime_self.packet_crypto.decryptPacket(
-                        .application,
-                        packet_num,
-                        header,
-                        ciphertext
-                    );
-                }
-            }
-        }.run, .{ self, ciphertexts, packet_numbers });
+        // Spawn async decryption task using zsync
+        var future = self.io.async(decryptBatchWorker, .{ self, ciphertexts, packet_numbers });
+        defer future.cancel(self.io) catch {};
+        
+        try future.await(self.io);
+    }
+    
+    fn decryptBatchWorker(self: *Self, ciphertexts: [][]const u8, packet_numbers: []u64) !void {
+        const plaintexts = try self.allocator.alloc([]u8, ciphertexts.len);
+        defer self.allocator.free(plaintexts);
+        
+        for (ciphertexts, packet_numbers, 0..) |ciphertext, packet_num, i| {
+            // Decrypt each packet
+            const header = try self.allocator.alloc(u8, 32); // Simplified header
+            defer self.allocator.free(header);
+            
+            plaintexts[i] = try self.packet_crypto.decryptPacket(
+                .application,
+                packet_num,
+                header,
+                ciphertext
+            );
+        }
     }
     
     /// Process incoming packet stream asynchronously
@@ -165,19 +171,25 @@ pub const AsyncQuicCrypto = struct {
         self: *Self,
         stream: anytype, // Generic stream interface
     ) !void {
-        _ = try self.tokio_runtime.spawn(struct {
-            pub fn run(runtime_self: *Self, s: @TypeOf(stream)) !void {
-                // Process packets from stream
-                while (try s.readPacket()) |packet| {
-                    // Process packet asynchronously
-                    const processed = try runtime_self.packet_crypto.processIncomingPacket(packet);
-                    defer processed.deinit(runtime_self.allocator);
-                    
-                    // Handle processed packet
-                    try s.writeProcessedPacket(processed);
-                }
-            }
-        }.run, .{ self, stream });
+        var future = self.io.async(streamWorker, .{ self, stream });
+        defer future.cancel(self.io) catch {};
+        
+        try future.await(self.io);
+    }
+    
+    fn streamWorker(self: *Self, stream: anytype) !void {
+        // Process packets from stream
+        while (try stream.readPacket()) |packet| {
+            // Process packet asynchronously
+            const processed = try self.packet_crypto.processIncomingPacket(packet);
+            defer processed.deinit(self.allocator);
+            
+            // Handle processed packet
+            try stream.writeProcessedPacket(processed);
+            
+            // Yield cooperatively
+            zsync.yieldNow();
+        }
     }
 };
 

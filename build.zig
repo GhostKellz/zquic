@@ -11,8 +11,8 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
 
-    // Get tokioZ dependency  
-    const tokioz_dep = b.dependency("tokioZ", .{
+    // Get zsync dependency  
+    const zsync_dep = b.dependency("zsync", .{
         .target = target,
         .optimize = optimize,
     });
@@ -23,7 +23,7 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .imports = &.{
             .{ .name = "zcrypto", .module = zcrypto_dep.module("zcrypto") },
-            .{ .name = "tokioZ", .module = tokioz_dep.module("TokioZ") },
+            .{ .name = "zsync", .module = zsync_dep.module("zsync") },
         },
     });
 

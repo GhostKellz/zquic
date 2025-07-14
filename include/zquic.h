@@ -7,6 +7,7 @@ extern "C" {
 
 #include <stdint.h>
 #include <stddef.h>
+#include <sys/types.h>
 
 // Opaque pointer types
 typedef void* ZQuicContext;
