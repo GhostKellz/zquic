@@ -41,7 +41,7 @@
 
         .zsync = .{
             .url = "https://github.com/ghostkellz/zsync/archive/refs/heads/main.tar.gz",
-            .hash = "zsync-0.2.0-KAuheaGRDAD-QcOCIdlrjI8K13Ocd077SXaI85d4iC9E",
+            .hash = "zsync-0.3.1-KAuheW28FgCTHwRPJLB3DA6dySoNyhaSPp4SiWc6hRDK",
         },
     },
     // Specifies the set of files and directories that are included in this package.
