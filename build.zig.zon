@@ -35,13 +35,13 @@
         // ZCrypto v0.5.0 - Post-quantum cryptographic library (with lazy loading to avoid tokioZ conflict)
         .zcrypto = .{
             .url = "https://github.com/ghostkellz/zcrypto/archive/refs/heads/main.tar.gz",
-            .hash = "zcrypto-0.8.1-rgQAI5iqCwD8oWqIeGNbv85F8KrtR1c9ETkaQth6jqHF",
+            .hash = "zcrypto-0.8.3-rgQAI8wFDAD5qBCumYyC-gCZpzacQHbApwyvXj-ZCbiG",
             .lazy = false,
         },
 
         .zsync = .{
             .url = "https://github.com/ghostkellz/zsync/archive/refs/heads/main.tar.gz",
-            .hash = "zsync-0.3.1-KAuheW28FgCTHwRPJLB3DA6dySoNyhaSPp4SiWc6hRDK",
+            .hash = "zsync-0.3.2-KAuhed0XGADaOKjYNl34Ragvca2zBYqvoAsBV-AhkoLS",
         },
     },
     // Specifies the set of files and directories that are included in this package.
