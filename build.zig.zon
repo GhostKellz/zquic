@@ -34,8 +34,8 @@
     .dependencies = .{
         // ZCrypto v0.5.0 - Post-quantum cryptographic library (with lazy loading to avoid tokioZ conflict)
         .zcrypto = .{
-            .url = "https://github.com/ghostkellz/zcrypto/archive/refs/heads/main.tar.gz",
-            .hash = "zcrypto-0.8.3-rgQAI8wFDAD5qBCumYyC-gCZpzacQHbApwyvXj-ZCbiG",
+            .url = "https://github.com/ghostkellz/zcrypto/archive/main.tar.gz",
+            .hash = "zcrypto-0.8.4-rgQAI6I0DQD3T7Vk5_S-EaUxMAhoXp7YvJtnzInpG7U1",
             .lazy = false,
         },
 
