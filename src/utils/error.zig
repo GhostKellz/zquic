@@ -193,7 +193,7 @@ pub const ErrorHandling = struct {
     
     /// Map network operation errors with context
     pub fn mapNetworkError(err: anyerror, operation: []const u8) ZquicError {
-        std.log.warn("Network operation '{}' failed: {}", .{ operation, err });
+        std.log.warn("Network operation '{s}' failed: {}", .{ operation, err });
         return switch (err) {
             error.SocketNotConnected => ZquicError.ConnectionClosed,
             error.MessageTooBig => ZquicError.PacketTooLarge,
@@ -270,7 +270,7 @@ pub const ErrorHandling = struct {
     pub fn isRecoverable(err: ZquicError) bool {
         return switch (err) {
             ZquicError.WouldBlock, ZquicError.SendQueueFull, ZquicError.ResourceExhausted, ZquicError.Timeout => true,
-            .ConnectionClosed, .ConnectionRefused, .CertificateError, .InternalError => false,
+            ZquicError.ConnectionClosed, ZquicError.ConnectionRefused, ZquicError.CertificateError, ZquicError.InternalError => false,
             else => true,
         };
     }
@@ -279,9 +279,9 @@ pub const ErrorHandling = struct {
     pub fn getSeverity(err: ZquicError) enum { low, medium, high, critical } {
         return switch (err) {
             ZquicError.WouldBlock, ZquicError.PacketTooShort => .low,
-            .InvalidArgument, .NotSupported, .BufferTooSmall => .medium,
-            .NetworkError, .ConnectionTimeout, .ResourceExhausted => .high,
-            .InternalError, .CryptoError, .ProtocolViolation => .critical,
+            ZquicError.InvalidArgument, ZquicError.NotSupported, ZquicError.BufferTooSmall => .medium,
+            ZquicError.NetworkError, ZquicError.ConnectionTimeout, ZquicError.ResourceExhausted => .high,
+            ZquicError.InternalError, ZquicError.CryptoError, ZquicError.ProtocolViolation => .critical,
             else => .medium,
         };
     }

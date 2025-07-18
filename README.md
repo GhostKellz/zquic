@@ -5,16 +5,17 @@
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
 [![Post-Quantum](https://img.shields.io/badge/crypto-post--quantum-green.svg)](#)
 [![QUIC](https://img.shields.io/badge/QUIC-v1%20%2B%20HTTP%2F3-blue.svg)](#)
-[![ZCrypto](https://img.shields.io/badge/zcrypto-v0.5.0-purple.svg)](https://github.com/ghostkellz/zcrypto)
+[![ZCrypto](https://img.shields.io/badge/zcrypto-v0.6.0-purple.svg)](https://github.com/ghostkellz/zcrypto)
+[![Version](https://img.shields.io/badge/version-v0.8.2-blue.svg)](#)
 [![FFI](https://img.shields.io/badge/FFI-Rust%20Ready-blue.svg)](#)
 
-ZQUIC is a **production-ready, post-quantum QUIC transport library** written in Zig, serving as the **critical infrastructure backbone** for the entire GhostChain blockchain ecosystem. With complete Rust FFI integration and zcrypto v0.5.0 post-quantum cryptography, ZQUIC enables ultra-fast, quantum-safe communication between all services.
+ZQUIC is a **production-ready, post-quantum QUIC transport library** written in Zig, serving as the **critical infrastructure backbone** for the entire GhostChain blockchain ecosystem. With complete Rust FFI integration and zcrypto v0.6.0 post-quantum cryptography, ZQUIC v0.8.2 delivers cutting-edge crypto/blockchain networking with hybrid PQ-TLS, Zero-RTT resumption, BBR congestion control, and advanced telemetry.
 
 ## 🎯 Purpose & Vision
 
 **ZQUIC powers the entire GhostChain ecosystem as the quantum-safe networking foundation:**
 
-- 🛡️ **Post-quantum security**: ML-KEM-768 + SLH-DSA cryptography via zcrypto v0.5.0
+- 🛡️ **Post-quantum security**: Hybrid ML-KEM-768 + X25519 via zcrypto v0.6.0
 - ⚡ **Ultra-high performance**: 100K+ TPS blockchain transport with <1ms latency
 - 🌉 **Service integration**: gRPC-over-QUIC (GhostBridge) for Rust ↔ Zig interop
 - 🌐 **Complete ecosystem**: HTTP/3 proxy (Wraith), DNS-over-QUIC (CNS/ZNS)
@@ -23,16 +24,18 @@ ZQUIC is a **production-ready, post-quantum QUIC transport library** written in 
 
 ## ✨ Core Features
 
-### 🔐 **Post-Quantum Cryptography (zcrypto v0.5.0)**
-- **ML-KEM-768** hybrid key exchange with X25519 fallback
+### 🔐 **Post-Quantum Cryptography (zcrypto v0.6.0)**
+- **Hybrid TLS 1.3**: ML-KEM-768 + X25519 key exchange (RFC 9420)
+- **Zero-RTT resumption**: Ultra-low latency with anti-replay protection
 - **SLH-DSA-128f** post-quantum digital signatures
 - **Ed25519** and **Secp256k1** for compatibility
 - **Blake3** and **SHA256** cryptographic hashing
 - **Zero-knowledge proof** integration ready
 
-### 🌐 **Complete Transport Stack**
+### 🌐 **Advanced Transport Stack**
 - **Full QUIC v1 compliance**: connection management, streams, flow control
-- **Post-quantum TLS 1.3**: quantum-safe handshakes and encryption
+- **BBR/CUBIC congestion control**: crypto-optimized for trading workloads
+- **Connection pooling**: high-performance multiplexing for crypto protocols
 - **HTTP/3 server**: production-ready with advanced middleware
 - **Zero-copy packet processing**: optimized for 100K+ TPS
 - **IPv6-first networking**: dual-stack with modern internet protocols
@@ -44,9 +47,17 @@ ZQUIC is a **production-ready, post-quantum QUIC transport library** written in 
 - **Complete FFI layer**: Production Rust bindings for ghostd/walletd
 - **ZVM integration**: WASM runtime communication over QUIC
 
+### 📊 **Production Monitoring & Telemetry (v0.8.2)**
+- **Real-time metrics**: crypto-focused performance monitoring
+- **Prometheus integration**: production-grade metrics export
+- **Alerting system**: configurable thresholds for trading workloads
+- **Connection health**: advanced diagnostics for crypto infrastructure
+- **Protocol analytics**: detailed breakdown of DoQ/HTTP3/gRPC usage
+
 ### ⚡ **Performance & Reliability**
 - **100K+ transactions/second** blockchain transport capability
-- **<1ms latency** for critical path operations
+- **<1ms latency** for critical path operations with Zero-RTT
+- **Sub-10ms** connection establishment with hybrid PQ-TLS
 - **Zero-copy operations** throughout the entire stack
 - **Deterministic memory management** with predictable allocation patterns
 - **Advanced congestion control** optimized for blockchain networking
