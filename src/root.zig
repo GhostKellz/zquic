@@ -111,6 +111,39 @@ pub const Services = struct {
     pub const WasmValidator = @import("services/zvm_integration.zig").WasmValidator;
 };
 
+// DNS-over-QUIC (DoQ) implementation (RFC 9250)
+pub const DoQ = struct {
+    // Core DoQ components
+    pub const DnsMessage = @import("doq/message.zig").DnsMessage;
+    pub const DnsHeader = @import("doq/message.zig").DnsHeader;
+    pub const DnsQuestion = @import("doq/message.zig").DnsQuestion;
+    pub const DnsResourceRecord = @import("doq/message.zig").DnsResourceRecord;
+    pub const DnsRecordType = @import("doq/message.zig").DnsRecordType;
+    pub const DnsResponseCode = @import("doq/message.zig").DnsResponseCode;
+
+    // DoQ Server
+    pub const Server = @import("doq/server.zig").DoQServer;
+    pub const ServerConfig = @import("doq/server.zig").DoQServerConfig;
+    pub const ServerStats = @import("doq/server.zig").DoQServerStats;
+    pub const DnsHandlerFn = @import("doq/server.zig").DnsHandlerFn;
+    
+    // DoQ Client
+    pub const Client = @import("doq/client.zig").DoQClient;
+    pub const ClientConfig = @import("doq/client.zig").DoQClientConfig;
+    pub const ClientStats = @import("doq/client.zig").DoQClientStats;
+    pub const QueryOptions = @import("doq/client.zig").DoQQueryOptions;
+    pub const QueryResult = @import("doq/client.zig").DoQQueryResult;
+
+    // Pre-configured clients
+    pub const createCloudflareClient = @import("doq/client.zig").createCloudflareClient;
+    pub const createQuad9Client = @import("doq/client.zig").createQuad9Client;
+    pub const createGoogleClient = @import("doq/client.zig").createGoogleClient;
+    
+    // Utility functions
+    pub const createGhostDnsServer = @import("doq/server.zig").createGhostDnsServer;
+    pub const resolveMultiple = @import("doq/client.zig").resolveMultiple;
+};
+
 // Core QUIC enhancements
 pub const PacketCrypto = @import("core/packet_crypto.zig").PacketCrypto;
 pub const ProcessedPacket = @import("core/packet_crypto.zig").ProcessedPacket;

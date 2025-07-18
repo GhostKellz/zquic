@@ -95,6 +95,20 @@ pub fn build(b: *std.Build) void {
     });
     b.installArtifact(http3_server_exe);
 
+    // DoQ (DNS-over-QUIC) echo server example
+    const doq_server_exe = b.addExecutable(.{
+        .name = "zquic-doq-server",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("examples/doq_echo_server.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{
+                .{ .name = "zquic", .module = mod },
+            },
+        }),
+    });
+    b.installArtifact(doq_server_exe);
+
     // FFI Library for Rust Integration
     const ffi_lib = b.addSharedLibrary(.{
         .name = "zquic",
@@ -154,6 +168,11 @@ pub fn build(b: *std.Build) void {
     const run_http3_server_cmd = b.addRunArtifact(http3_server_exe);
     run_http3_server_step.dependOn(&run_http3_server_cmd.step);
     run_http3_server_cmd.step.dependOn(b.getInstallStep());
+
+    const run_doq_server_step = b.step("run-doq-server", "Run the DoQ (DNS-over-QUIC) echo server");
+    const run_doq_server_cmd = b.addRunArtifact(doq_server_exe);
+    run_doq_server_step.dependOn(&run_doq_server_cmd.step);
+    run_doq_server_cmd.step.dependOn(b.getInstallStep());
 
     // FFI build step for Rust integration
     const ffi_step = b.step("ffi", "Build FFI library for Rust integration");
