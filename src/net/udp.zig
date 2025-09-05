@@ -15,14 +15,14 @@ pub const PacketBatch = struct {
     count: u8,
     batch_id: u64,
     timestamp: u64,
-
+    
     pub const RawPacket = struct {
         data: []u8,
         addr: std.net.Address,
         size: usize,
         timestamp: u64,
     };
-
+    
     pub fn init(batch_id: u64) PacketBatch {
         return PacketBatch{
             .packets = undefined,
@@ -33,7 +33,7 @@ pub const PacketBatch = struct {
     }
 };
 
-/// Supercharged UDP performance statistics
+/// Supercharged UDP performance statistics  
 pub const SuperStats = struct {
     packets_processed: u64 = 0,
     batches_processed: u64 = 0,
@@ -41,7 +41,7 @@ pub const SuperStats = struct {
     avg_batch_size: f64 = 0.0,
     peak_throughput: u64 = 0,
     last_update: i64 = 0,
-
+    
     pub fn updateThroughput(self: *SuperStats, bytes: u64) void {
         self.bytes_throughput += bytes;
         if (bytes > self.peak_throughput) {
@@ -57,28 +57,35 @@ pub const SuperUdpSocket = struct {
     packet_batches: zsync.bounded(PacketBatch, 64),
     send_queue: zsync.bounded([]const u8, 1024),
     recv_queue: zsync.bounded(PacketBatch, 128),
+    blocking_io_instance: zsync.BlockingIo,
     io: zsync.Io,
     stats: SuperStats,
     allocator: std.mem.Allocator,
     local_address: std.net.Address,
     batch_counter: std.atomic.Value(u64),
-
+    
     const Self = @This();
 
     pub fn init(allocator: std.mem.Allocator, local_address: std.net.Address) !Self {
         const socket = try zsync.UdpSocket.bind(local_address);
-
-        return Self{
+        
+        var result = Self{
             .socket = socket,
-            .packet_batches = zsync.bounded(PacketBatch, 64),
-            .send_queue = zsync.bounded([]const u8, 1024),
-            .recv_queue = zsync.bounded(PacketBatch, 128),
-            .io = zsync.createBlockingIo(allocator).io(),
+            .packet_batches = try zsync.bounded(PacketBatch, allocator, 64),
+            .send_queue = try zsync.bounded([]const u8, allocator, 1024),
+            .recv_queue = try zsync.bounded(PacketBatch, allocator, 128),
+            .blocking_io_instance = zsync.BlockingIo.init(allocator, 65536),
+            .io = undefined,
             .stats = SuperStats{},
             .allocator = allocator,
             .local_address = local_address,
             .batch_counter = std.atomic.Value(u64).init(0),
         };
+        
+        // Initialize the Io interface after struct creation
+        result.io = result.blocking_io_instance.io();
+        
+        return result;
     }
 
     pub fn deinit(self: *Self) void {
@@ -90,22 +97,22 @@ pub const SuperUdpSocket = struct {
         while (true) {
             // Receive batch of up to 32 packets
             const batch = try self.receiveBatch();
-
+            
             // Spawn async processor for each batch
             _ = try self.io.spawn(processBatchAsync, .{ self, batch });
-
+            
             // Cooperative yield for other tasks
             try zsync.yieldNow();
         }
     }
-
+    
     /// Process 32 packets without blocking - zero-copy
     fn processBatchAsync(self: *Self, batch: PacketBatch) !void {
         for (batch.packets[0..batch.count]) |packet| {
             // Zero-copy packet processing
             try self.routePacket(packet);
         }
-
+        
         // Update performance stats
         self.stats.packets_processed += batch.count;
         self.stats.batches_processed += 1;
@@ -116,15 +123,15 @@ pub const SuperUdpSocket = struct {
     fn receiveBatch(self: *Self) !PacketBatch {
         const batch_id = self.batch_counter.fetchAdd(1, .monotonic);
         var batch = PacketBatch.init(batch_id);
-
+        
         // Try to fill batch with up to 32 packets
         while (batch.count < 32) {
             const packet_data = try self.allocator.alloc(u8, 1472); // Max UDP payload
             defer self.allocator.free(packet_data);
-
+            
             // Non-blocking receive
             const result = self.socket.tryRecv(packet_data) catch break;
-
+            
             if (result) |recv_result| {
                 batch.packets[batch.count] = PacketBatch.RawPacket{
                     .data = packet_data[0..recv_result.len],
@@ -135,7 +142,7 @@ pub const SuperUdpSocket = struct {
                 batch.count += 1;
             } else break;
         }
-
+        
         return batch;
     }
 
@@ -155,7 +162,7 @@ pub const SuperUdpSocket = struct {
         _ = addr; // TODO: Use addr for routing
         // Add to send queue for batching
         try self.send_queue.send(data);
-
+        
         // Process send queue asynchronously
         _ = try self.io.spawn(processSendQueue, .{self});
     }
@@ -206,3 +213,5 @@ pub const UdpSocket = struct {
 
     // ... rest of legacy methods for compatibility
 };
+
+
