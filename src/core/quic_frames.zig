@@ -977,11 +977,11 @@ pub const FrameParser = struct {
     }
     
     pub fn deinit(self: *FrameParser) void {
-        self.buffer.deinit();
+        self.buffer.deinit(allocator);
     }
     
     pub fn parseFrames(self: *FrameParser, data: []const u8) ![]Frame {
-        var frames = std.ArrayList(Frame).init(self.allocator);
+        var frames = std.ArrayList(Frame).init(allocator);
         var reader = std.io.fixedBufferStream(data);
         
         while (reader.pos < data.len) {
@@ -991,7 +991,7 @@ pub const FrameParser = struct {
                     else => return err,
                 }
             };
-            try frames.append(frame);
+            try frames.append(allocator, frame);
         }
         
         return frames.toOwnedSlice();

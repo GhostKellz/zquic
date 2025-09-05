@@ -59,8 +59,8 @@ pub const DoQQueryResult = struct {
     /// Response size in bytes
     response_size: usize,
 
-    pub fn deinit(self: *DoQQueryResult) void {
-        self.response.deinit();
+    pub fn deinit(self: *DoQQueryResult, allocator: std.mem.Allocator) void {
+        self.response.deinit(allocator);
     }
 };
 
@@ -169,7 +169,7 @@ pub const DoQClient = struct {
 
         // Create DNS query message
         var query_msg = try self.createQuery(domain, record_type, query_id, options);
-        defer query_msg.deinit();
+        defer query_msg.deinit(self.allocator);
 
         const max_retries = options.max_retries orelse self.config.max_retries;
         const timeout_ms = options.timeout_ms orelse self.config.timeout_ms;
@@ -354,7 +354,7 @@ pub fn createGoogleClient(allocator: std.mem.Allocator) DoQClient {
 /// Example: Resolve multiple domains concurrently
 pub fn resolveMultiple(allocator: std.mem.Allocator, domains: []const []const u8, record_type: DnsRecordType) ![]DoQQueryResult {
     var client = createCloudflareClient(allocator);
-    defer client.deinit();
+    defer client.deinit(allocator);
 
     var results = try allocator.alloc(DoQQueryResult, domains.len);
     
@@ -391,7 +391,7 @@ test "DoQ client initialization" {
     };
     
     var client = DoQClient.init(allocator, config);
-    defer client.deinit();
+    defer client.deinit(allocator);
     
     try std.testing.expect(client.config.server_port == 853);
     try std.testing.expect(client.stats.queries_sent == 0);
@@ -401,7 +401,7 @@ test "DoQ query creation" {
     const allocator = std.testing.allocator;
     
     var client = DoQClient.init(allocator, DoQClientConfig{});
-    defer client.deinit();
+    defer client.deinit(allocator);
     
     const options = DoQQueryOptions{
         .id = 0x1234,
@@ -409,7 +409,7 @@ test "DoQ query creation" {
     };
     
     var query = try client.createQuery("example.com", DnsRecordType.A, 0x1234, options);
-    defer query.deinit();
+    defer query.deinit(allocator);
     
     try std.testing.expect(query.header.id == 0x1234);
     try std.testing.expect(query.questions.len == 1);

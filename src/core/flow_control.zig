@@ -175,19 +175,19 @@ pub const FlowController = struct {
     pub fn init(allocator: std.mem.Allocator, initial_max_data: u64, peer_max_data: u64) Self {
         return Self{
             .connection_fc = ConnectionFlowControl.init(initial_max_data, peer_max_data),
-            .stream_fc_map = std.ArrayList(StreamEntry).init(allocator),
+            .stream_fc_map = std.ArrayList(StreamEntry){},
             .allocator = allocator,
         };
     }
 
     pub fn deinit(self: *Self) void {
-        self.stream_fc_map.deinit();
+        self.stream_fc_map.deinit(self.allocator);
     }
 
     /// Add flow control for a new stream
     pub fn addStream(self: *Self, stream_id: u64, initial_max_stream_data: u64, peer_max_stream_data: u64) Error.ZquicError!void {
         const stream_fc = StreamFlowControl.init(stream_id, initial_max_stream_data, peer_max_stream_data);
-        try self.stream_fc_map.append(.{ .id = stream_id, .fc = stream_fc });
+        try self.stream_fc_map.append(self.allocator, .{ .id = stream_id, .fc = stream_fc });
     }
 
     /// Check if we can send data (both connection and stream level)
@@ -243,15 +243,15 @@ pub const FlowController = struct {
 
     /// Get streams that need MAX_STREAM_DATA updates
     pub fn getStreamsNeedingUpdates(self: *Self, allocator: std.mem.Allocator) ![]u64 {
-        var streams_needing_updates = std.ArrayList(u64).init(allocator);
+        var streams_needing_updates = std.ArrayList(u64){};
 
         for (self.stream_fc_map.items) |*entry| {
             if (entry.fc.shouldSendMaxStreamData()) {
-                try streams_needing_updates.append(entry.id);
+                try streams_needing_updates.append(allocator, entry.id);
             }
         }
 
-        return streams_needing_updates.toOwnedSlice();
+        return streams_needing_updates.toOwnedSlice(allocator);
     }
 };
 

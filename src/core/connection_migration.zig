@@ -132,7 +132,7 @@ pub const ConnectionIdManager = struct {
         for (self.active_connection_ids.items) |*entry| {
             entry.deinit(self.allocator);
         }
-        self.active_connection_ids.deinit();
+        self.active_connection_ids.deinit(allocator);
     }
     
     pub fn generateConnectionId(self: *ConnectionIdManager) ![]u8 {
@@ -150,7 +150,7 @@ pub const ConnectionIdManager = struct {
     
     pub fn addConnectionId(self: *ConnectionIdManager, connection_id: []const u8, stateless_reset_token: [16]u8) !NewConnectionIdFrame {
         const entry = try ConnectionIdEntry.init(self.allocator, connection_id, self.next_sequence_number, stateless_reset_token);
-        try self.active_connection_ids.append(entry);
+        try self.active_connection_ids.append(allocator, entry);
         
         const frame = NewConnectionIdFrame.init(
             self.next_sequence_number,
@@ -174,12 +174,12 @@ pub const ConnectionIdManager = struct {
     }
     
     pub fn getActiveConnectionIds(self: *const ConnectionIdManager) []const ConnectionIdEntry {
-        var active_ids = std.ArrayList(ConnectionIdEntry).init(self.allocator);
-        defer active_ids.deinit();
+        var active_ids = std.ArrayList(ConnectionIdEntry).init(allocator);
+        defer active_ids.deinit(allocator);
         
         for (self.active_connection_ids.items) |entry| {
             if (entry.active) {
-                active_ids.append(entry) catch continue;
+                active_ids.append(allocator, entry) catch continue;
             }
         }
         
@@ -248,7 +248,7 @@ pub const PathValidator = struct {
     }
     
     pub fn deinit(self: *PathValidator) void {
-        self.active_validations.deinit();
+        self.active_validations.deinit(allocator);
     }
     
     pub fn startValidation(self: *PathValidator, path_id: u64) ![8]u8 {
@@ -275,13 +275,13 @@ pub const PathValidator = struct {
     }
     
     pub fn cleanupExpiredValidations(self: *PathValidator) void {
-        var expired_keys = std.ArrayList(u64).init(self.allocator);
-        defer expired_keys.deinit();
+        var expired_keys = std.ArrayList(u64).init(allocator);
+        defer expired_keys.deinit(allocator);
         
         var iterator = self.active_validations.iterator();
         while (iterator.next()) |entry| {
             if (entry.value_ptr.isExpired()) {
-                expired_keys.append(entry.key_ptr.*) catch continue;
+                expired_keys.append(allocator, entry.key_ptr.*) catch continue;
             }
         }
         
@@ -291,14 +291,14 @@ pub const PathValidator = struct {
     }
     
     pub fn retryValidations(self: *PathValidator) ![]PathChallengeFrame {
-        var challenges = std.ArrayList(PathChallengeFrame).init(self.allocator);
-        defer challenges.deinit();
+        var challenges = std.ArrayList(PathChallengeFrame).init(allocator);
+        defer challenges.deinit(allocator);
         
         var iterator = self.active_validations.iterator();
         while (iterator.next()) |entry| {
             if (entry.value_ptr.shouldRetry()) {
                 entry.value_ptr.retry();
-                try challenges.append(PathChallengeFrame.init(entry.value_ptr.challenge_data));
+                try challenges.append(allocator, PathChallengeFrame.init(entry.value_ptr.challenge_data));
             }
         }
         
@@ -323,8 +323,8 @@ pub const ConnectionMigrator = struct {
             .current_path = PathInfo.init(local_address, remote_address, 0),
             .candidate_paths = std.ArrayList(PathInfo).init(allocator),
             .migration_state = .stable,
-            .path_validator = PathValidator.init(allocator),
-            .connection_id_manager = ConnectionIdManager.init(allocator),
+            .path_validator = PathValidatorsrc/core/connection_migration.zig,
+            .connection_id_manager = ConnectionIdManagersrc/core/connection_migration.zig,
             .migration_timeout_ms = 15000, // 15 seconds
             .migration_start_time = 0,
             .enable_migration = true,
@@ -333,15 +333,15 @@ pub const ConnectionMigrator = struct {
     }
     
     pub fn deinit(self: *ConnectionMigrator) void {
-        self.candidate_paths.deinit();
-        self.path_validator.deinit();
-        self.connection_id_manager.deinit();
+        self.candidate_paths.deinit(allocator);
+        self.path_validator.deinit(allocator);
+        self.connection_id_manager.deinit(allocator);
     }
     
     pub fn addCandidatePath(self: *ConnectionMigrator, local_address: std.net.Address, remote_address: std.net.Address) !void {
         const path_id = self.candidate_paths.items.len + 1;
         const path_info = PathInfo.init(local_address, remote_address, path_id);
-        try self.candidate_paths.append(path_info);
+        try self.candidate_paths.append(allocator, path_info);
     }
     
     pub fn startPathProbing(self: *ConnectionMigrator) ![]PathChallengeFrame {
@@ -349,8 +349,8 @@ pub const ConnectionMigrator = struct {
             return &[_]PathChallengeFrame{};
         }
         
-        var challenges = std.ArrayList(PathChallengeFrame).init(self.allocator);
-        defer challenges.deinit();
+        var challenges = std.ArrayList(PathChallengeFrame).init(allocator);
+        defer challenges.deinit(allocator);
         
         for (self.candidate_paths.items) |*path| {
             if (path.validation_state == .idle) {
@@ -358,7 +358,7 @@ pub const ConnectionMigrator = struct {
                 path.challenge_data = challenge_data;
                 path.validation_state = .validating;
                 
-                try challenges.append(PathChallengeFrame.init(challenge_data));
+                try challenges.append(allocator, PathChallengeFrame.init(challenge_data));
             }
         }
         
@@ -502,12 +502,12 @@ pub const ConnectionMigrator = struct {
     }
     
     pub fn getValidatedPaths(self: *const ConnectionMigrator) []const PathInfo {
-        var validated_paths = std.ArrayList(PathInfo).init(self.allocator);
-        defer validated_paths.deinit();
+        var validated_paths = std.ArrayList(PathInfo).init(allocator);
+        defer validated_paths.deinit(allocator);
         
         for (self.candidate_paths.items) |path| {
             if (path.validation_state == .validated) {
-                validated_paths.append(path) catch continue;
+                validated_paths.append(allocator, path) catch continue;
             }
         }
         
@@ -545,14 +545,14 @@ pub const ZeroRTTManager = struct {
     
     pub fn deinit(self: *ZeroRTTManager) void {
         for (self.session_tickets.items) |*ticket| {
-            ticket.deinit();
+            ticket.deinit(allocator);
         }
-        self.session_tickets.deinit();
-        self.early_data_buffer.deinit();
+        self.session_tickets.deinit(allocator);
+        self.early_data_buffer.deinit(allocator);
     }
     
     pub fn addSessionTicket(self: *ZeroRTTManager, ticket: SessionTicket) !void {
-        try self.session_tickets.append(ticket);
+        try self.session_tickets.append(allocator, ticket);
         if (ticket.max_early_data_size > 0) {
             self.early_data_state = .ready;
         }
@@ -580,7 +580,7 @@ pub const ZeroRTTManager = struct {
             return false;
         }
         
-        try self.early_data_buffer.appendSlice(data);
+        try self.early_data_buffer.appendSlice(allocator, data);
         self.early_data_state = .sending;
         return true;
     }
@@ -613,7 +613,7 @@ pub const ZeroRTTManager = struct {
         while (i < self.session_tickets.items.len) {
             if (!self.session_tickets.items[i].isValid()) {
                 var ticket = self.session_tickets.swapRemove(i);
-                ticket.deinit();
+                ticket.deinit(allocator);
             } else {
                 i += 1;
             }
@@ -658,14 +658,14 @@ pub const MigrationAndZeroRTTManager = struct {
     pub fn init(allocator: std.mem.Allocator, local_address: std.net.Address, remote_address: std.net.Address) MigrationAndZeroRTTManager {
         return MigrationAndZeroRTTManager{
             .migrator = ConnectionMigrator.init(allocator, local_address, remote_address),
-            .zero_rtt_manager = ZeroRTTManager.init(allocator),
+            .zero_rtt_manager = ZeroRTTManagersrc/core/connection_migration.zig,
             .tls_context = null,
         };
     }
     
     pub fn deinit(self: *MigrationAndZeroRTTManager) void {
-        self.migrator.deinit();
-        self.zero_rtt_manager.deinit();
+        self.migrator.deinit(allocator);
+        self.zero_rtt_manager.deinit(allocator);
     }
     
     pub fn setTlsContext(self: *MigrationAndZeroRTTManager, tls_context: *ComprehensiveTlsContext) void {
@@ -702,13 +702,13 @@ pub const MigrationAndZeroRTTManager = struct {
     }
     
     pub fn generateMigrationFrames(self: *MigrationAndZeroRTTManager) ![]Frame {
-        var frames = std.ArrayList(Frame).init(self.migrator.allocator);
-        defer frames.deinit();
+        var frames = std.ArrayList(Frame).init(allocator);
+        defer frames.deinit(allocator);
         
         // Generate path challenge frames
         const challenges = try self.migrator.startPathProbing();
         for (challenges) |challenge| {
-            try frames.append(Frame{ .path_challenge = challenge });
+            try frames.append(allocator, Frame{ .path_challenge = challenge });
         }
         
         // Generate new connection ID frames if needed

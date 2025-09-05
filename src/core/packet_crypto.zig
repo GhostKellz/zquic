@@ -245,10 +245,10 @@ pub const PacketCrypto = struct {
     }
     
     pub fn deinit(self: *PacketCrypto) void {
-        self.quic_crypto.deinit();
-        self.hw_accelerator.deinit();
+        self.quic_crypto.deinit(self.allocator);
+        self.hw_accelerator.deinit(self.allocator);
         if (self.batch_processor) |*processor| {
-            processor.deinit();
+            processor.deinit(self.allocator);
         }
     }
     
@@ -705,9 +705,9 @@ pub const PacketMemoryPool = struct {
             self.allocator.free(buffer);
         }
         
-        self.small_buffers.deinit();
-        self.medium_buffers.deinit();
-        self.large_buffers.deinit();
+        self.small_buffers.deinit(self.allocator);
+        self.medium_buffers.deinit(self.allocator);
+        self.large_buffers.deinit(self.allocator);
     }
     
     pub fn getBuffer(self: *PacketMemoryPool, size: usize) ![]u8 {
@@ -734,11 +734,11 @@ pub const PacketMemoryPool = struct {
     
     pub fn returnBuffer(self: *PacketMemoryPool, buffer: []u8) !void {
         if (buffer.len == SMALL_SIZE) {
-            try self.small_buffers.append(buffer);
+            try self.small_buffers.append(self.allocator, buffer);
         } else if (buffer.len == MEDIUM_SIZE) {
-            try self.medium_buffers.append(buffer);
+            try self.medium_buffers.append(self.allocator, buffer);
         } else if (buffer.len == LARGE_SIZE) {
-            try self.large_buffers.append(buffer);
+            try self.large_buffers.append(self.allocator, buffer);
         } else {
             // Non-pooled buffer, free directly
             self.allocator.free(buffer);
@@ -754,7 +754,7 @@ test "packet crypto initialization" {
         false,
         .aes_256_gcm_sha384,
     );
-    defer tls_context.deinit();
+    defer tls_context.deinit(allocator);
     
     const packet_crypto = PacketCrypto.init(allocator, &tls_context, null);
     
@@ -770,7 +770,7 @@ test "encryption level mapping" {
         false,
         .aes_256_gcm_sha384,
     );
-    defer tls_context.deinit();
+    defer tls_context.deinit(allocator);
     
     var packet_crypto = PacketCrypto.init(allocator, &tls_context, null);
     

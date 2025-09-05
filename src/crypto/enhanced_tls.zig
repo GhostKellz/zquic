@@ -10,7 +10,11 @@ const Error = @import("../utils/error.zig");
 fn secureZero(data: []u8) void {
     @memset(data, 0);
     // Prevent compiler optimization
-    asm volatile ("" : : [data] "m" (data) : "memory");
+    asm volatile (""
+        :
+        : [data] "m" (data),
+        : .{ .memory = true }
+    );
 }
 
 // Import specific zcrypto modules
@@ -366,9 +370,9 @@ pub const EnhancedTlsContext = struct {
     }
 
     pub fn deinit(self: *Self) void {
-        if (self.initial_keys) |*keys| keys.deinit();
-        if (self.handshake_keys) |*keys| keys.deinit();
-        if (self.application_keys) |*keys| keys.deinit();
+        if (self.initial_keys) |*keys| keys.deinit(self.allocator);
+        if (self.handshake_keys) |*keys| keys.deinit(self.allocator);
+        if (self.application_keys) |*keys| keys.deinit(self.allocator);
     }
 
     /// Initialize initial keys for QUIC

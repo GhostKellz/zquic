@@ -64,7 +64,7 @@ pub const Headers = struct {
 
     pub fn init(allocator: std.mem.Allocator) Self {
         return Self{
-            .fields = std.ArrayList(HeaderField).init(allocator),
+            .fields = std.ArrayList(HeaderField){},
             .allocator = allocator,
         };
     }
@@ -73,12 +73,12 @@ pub const Headers = struct {
         for (self.fields.items) |*field| {
             field.deinit();
         }
-        self.fields.deinit();
+        self.fields.deinit(self.allocator);
     }
 
     pub fn add(self: *Self, name: []const u8, value: []const u8) !void {
         const field = try HeaderField.init(self.allocator, name, value);
-        try self.fields.append(field);
+        try self.fields.append(self.allocator, field);
     }
 
     pub fn get(self: *const Self, name: []const u8) ?[]const u8 {
@@ -187,7 +187,7 @@ pub const Request = struct {
             .version = .HTTP3,
             .headers = Headers.init(allocator),
             .query_params = QueryParams.init(allocator),
-            .body = std.ArrayList(u8).init(allocator),
+            .body = std.ArrayList(u8){},
             .context = RequestContext.init(stream_id, connection_id),
             .allocator = allocator,
         };
@@ -196,7 +196,7 @@ pub const Request = struct {
     pub fn deinit(self: *Self) void {
         self.headers.deinit();
         self.query_params.deinit();
-        self.body.deinit();
+        self.body.deinit(self.allocator);
         if (self.uri.len > 0) self.allocator.free(self.uri);
         if (self.path.len > 0) self.allocator.free(self.path);
         if (self.query_string) |qs| self.allocator.free(qs);

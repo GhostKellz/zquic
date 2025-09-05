@@ -108,7 +108,7 @@ pub const ResponseHeaders = struct {
 
     pub fn init(allocator: std.mem.Allocator) Self {
         return Self{
-            .fields = std.ArrayList(HeaderField).init(allocator),
+            .fields = std.ArrayList(HeaderField){},
             .allocator = allocator,
         };
     }
@@ -122,7 +122,7 @@ pub const ResponseHeaders = struct {
 
     pub fn add(self: *Self, name: []const u8, value: []const u8) !void {
         const field = try HeaderField.init(self.allocator, name, value);
-        try self.fields.append(field);
+        try self.fields.append(self.allocator, field);
     }
 
     pub fn set(self: *Self, name: []const u8, value: []const u8) !void {
@@ -234,7 +234,7 @@ pub const Response = struct {
         return Self{
             .status = .ok,
             .headers = ResponseHeaders.init(allocator),
-            .body = std.ArrayList(u8).init(allocator),
+            .body = std.ArrayList(u8){},
             .allocator = allocator,
             .stream_id = stream_id,
         };
@@ -262,18 +262,22 @@ pub const Response = struct {
 
     /// Write data to response body
     pub fn write(self: *Self, data: []const u8) !void {
-        try self.body.appendSlice(data);
+        try self.body.appendSlice(self.allocator, data);
     }
 
     /// Write formatted data to response body
     pub fn writeFormat(self: *Self, comptime fmt: []const u8, args: anytype) !void {
-        try self.body.writer().print(fmt, args);
+        const formatted = try std.fmt.allocPrint(self.allocator, fmt, args);
+        defer self.allocator.free(formatted);
+        try self.body.appendSlice(self.allocator, formatted);
     }
 
     /// Set JSON content type and write JSON data
     pub fn json(self: *Self, data: anytype) !void {
         try self.headers.setContentType("application/json");
-        try std.json.stringify(data, .{}, self.body.writer());
+        const json_str = try std.json.stringifyAlloc(self.allocator, data, .{});
+        defer self.allocator.free(json_str);
+        try self.body.appendSlice(self.allocator, json_str);
     }
 
     /// Set HTML content type and write HTML
@@ -312,7 +316,7 @@ pub const Response = struct {
 
         // Read and write file content
         const file_size = try file.getEndPos();
-        try self.body.ensureTotalCapacity(file_size);
+        try self.body.ensureTotalCapacity(self.allocator, file_size);
         _ = try file.readAll(self.body.items[0..file_size]);
         self.body.items.len = file_size;
     }
@@ -329,7 +333,7 @@ pub const Response = struct {
 
     /// Generate HTTP/3 frames for this response
     pub fn generateFrames(self: *Self, allocator: std.mem.Allocator) ![]Frame.Frame {
-        var frames = std.ArrayList(Frame.Frame).init(allocator);
+        var frames = std.ArrayList(Frame.Frame){};
 
         // Set content-length if not already set
         if (self.headers.get("content-length") == null) {
@@ -337,7 +341,7 @@ pub const Response = struct {
         }
 
         // Add pseudo-headers for HTTP/3
-        var all_headers = std.ArrayList(HeaderField).init(allocator);
+        var all_headers = std.ArrayList(HeaderField){};
         defer {
             for (all_headers.items) |*field| {
                 field.deinit();
@@ -348,11 +352,11 @@ pub const Response = struct {
         // Add :status pseudo-header
         var status_buffer: [8]u8 = undefined;
         const status_str = try std.fmt.bufPrint(&status_buffer, "{d}", .{self.status.getCode()});
-        try all_headers.append(try HeaderField.init(allocator, ":status", status_str));
+        try all_headers.append(allocator, try HeaderField.init(allocator, ":status", status_str));
 
         // Add regular headers
         for (self.headers.fields.items) |field| {
-            try all_headers.append(try HeaderField.init(allocator, field.name, field.value));
+            try all_headers.append(allocator, try HeaderField.init(allocator, field.name, field.value));
         }
 
         // Create HEADERS frame (simplified - would need QPACK encoding)
@@ -364,7 +368,7 @@ pub const Response = struct {
             .frame_type = .headers,
             .payload = try allocator.dupe(u8, headers_payload[0..0]), // Empty for now
         };
-        try frames.append(headers_frame);
+        try frames.append(allocator, headers_frame);
 
         // Create DATA frame if body exists
         if (self.body.items.len > 0) {
@@ -372,10 +376,10 @@ pub const Response = struct {
                 .frame_type = .data,
                 .payload = try allocator.dupe(u8, self.body.items),
             };
-            try frames.append(data_frame);
+            try frames.append(allocator, data_frame);
         }
 
-        return frames.toOwnedSlice();
+        return frames.toOwnedSlice(allocator);
     }
 
     /// Mark response as sent

@@ -75,7 +75,7 @@ pub const UdpMultiplexer = struct {
     }
 
     pub fn deinit(self: *Self) void {
-        self.socket.deinit();
+        self.socket.deinit(self.allocator);
         self.connections.deinit();
         self.allocator.free(self.receive_buffer);
         self.send_queue.deinit();

@@ -363,7 +363,7 @@ pub const CacheEntry = struct {
         for (self.answers.items) |*answer| {
             answer.deinit(allocator);
         }
-        self.answers.deinit();
+        self.answers.deinit(allocator);
     }
     
     pub fn isExpired(self: *const CacheEntry) bool {

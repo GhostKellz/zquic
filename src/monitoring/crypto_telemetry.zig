@@ -329,9 +329,9 @@ pub const CryptoTelemetrySystem = struct {
     }
     
     pub fn deinit(self: *Self) void {
-        self.metrics_history.deinit();
-        self.active_alerts.deinit();
-        self.alert_history.deinit();
+        self.metrics_history.deinit(allocator);
+        self.active_alerts.deinit(allocator);
+        self.alert_history.deinit(allocator);
     }
     
     /// Record a request with protocol and priority tracking
@@ -451,7 +451,7 @@ pub const CryptoTelemetrySystem = struct {
         }
         
         // Add to history
-        try self.metrics_history.append(self.current_metrics);
+        try self.metrics_history.append(allocator, self.current_metrics);
         
         // Trim history if needed
         if (self.metrics_history.items.len > self.config.max_metric_history) {
@@ -519,12 +519,12 @@ pub const CryptoTelemetrySystem = struct {
             .suggested_action = suggested_action,
         };
         
-        self.active_alerts.append(alert) catch |err| {
+        self.active_alerts.append(allocator, alert) catch |err| {
             std.log.err("Failed to add alert: {}", .{err});
             return;
         };
         
-        self.alert_history.append(alert) catch |err| {
+        self.alert_history.append(allocator, alert) catch |err| {
             std.log.err("Failed to add alert to history: {}", .{err});
         };
         

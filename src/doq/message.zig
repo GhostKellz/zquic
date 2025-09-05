@@ -192,7 +192,7 @@ pub const DnsMessage = struct {
     /// Serialize DoQ message for QUIC stream 0 (RFC 9250)
     pub fn serializeToStream(self: *const DnsMessage, allocator: std.mem.Allocator) ![]u8 {
         var buffer = std.ArrayList(u8).init(allocator);
-        defer buffer.deinit();
+        defer buffer.deinit(allocator);
         
         const writer = buffer.writer();
 
@@ -242,7 +242,7 @@ fn encodeDomainName(name: []const u8, _: std.mem.Allocator, writer: anytype) !vo
 /// Decode domain name from DNS wire format
 fn decodeDomainName(allocator: std.mem.Allocator, reader: anytype) ![]u8 {
     var parts = std.ArrayList([]const u8).init(allocator);
-    defer parts.deinit();
+    defer parts.deinit(allocator);
     
     while (true) {
         const length = try reader.readByte();
@@ -252,7 +252,7 @@ fn decodeDomainName(allocator: std.mem.Allocator, reader: anytype) ![]u8 {
         
         const part = try allocator.alloc(u8, length);
         _ = try reader.readAll(part);
-        try parts.append(part);
+        try parts.append(allocator, part);
     }
     
     if (parts.items.len == 0) {
@@ -348,7 +348,7 @@ test "DNS message parsing" {
     
     // Create a simple DNS query
     var message = DnsMessage.init(allocator);
-    defer message.deinit();
+    defer message.deinit(allocator);
     
     message.header = DnsHeader{
         .id = 0x1234,
@@ -372,7 +372,7 @@ test "DNS message parsing" {
     defer allocator.free(serialized);
     
     var parsed = try DnsMessage.parseFromStream(allocator, serialized);
-    defer parsed.deinit();
+    defer parsed.deinit(allocator);
     
     try std.testing.expect(parsed.header.id == 0x1234);
     try std.testing.expect(parsed.questions.len == 1);

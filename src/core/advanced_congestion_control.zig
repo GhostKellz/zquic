@@ -741,7 +741,7 @@ pub const AdaptiveCongestionControl = struct {
     }
     
     pub fn deinit(self: *Self) void {
-        self.performance_history.deinit();
+        self.performance_history.deinit(allocator);
     }
     
     const vtable = CongestionControl.VTable{
@@ -826,7 +826,7 @@ pub const AdaptiveCongestionControl = struct {
             .algorithm = self.current_algorithm,
         };
         
-        try self.performance_history.append(current_metric);
+        try self.performance_history.append(allocator, current_metric);
         
         // Keep only recent history
         if (self.performance_history.items.len > 100) {
@@ -958,7 +958,7 @@ pub const CongestionControlFactory = struct {
             },
             .adaptive => {
                 const cc = try allocator.create(AdaptiveCongestionControl);
-                cc.* = AdaptiveCongestionControl.init(allocator);
+                cc.* = CongestionController.init(cc_type);
                 return &cc.base;
             },
             else => return Error.ZquicError.UnsupportedAlgorithm,
@@ -981,7 +981,7 @@ pub const CongestionControlFactory = struct {
             },
             .adaptive => {
                 const adaptive = @fieldParentPtr(AdaptiveCongestionControl, "base", cc);
-                adaptive.deinit();
+                adaptive.deinit(allocator);
                 allocator.destroy(adaptive);
             },
             else => {},

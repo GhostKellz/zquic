@@ -1,15 +1,15 @@
 # ZQUIC — Post-Quantum QUIC Transport for GhostChain Ecosystem
 
-[![Zig](https://img.shields.io/badge/Zig-0.15.0+-orange.svg)](https://ziglang.org/)
+[![Zig](https://img.shields.io/badge/Zig-0.16.0+-orange.svg)](https://ziglang.org/)
 [![Rust](https://img.shields.io/badge/Rust-2024-red.svg)](https://www.rust-lang.org/)
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
 [![Post-Quantum](https://img.shields.io/badge/crypto-post--quantum-green.svg)](#)
 [![QUIC](https://img.shields.io/badge/QUIC-v1%20%2B%20HTTP%2F3-blue.svg)](#)
 [![ZCrypto](https://img.shields.io/badge/zcrypto-v0.6.0-purple.svg)](https://github.com/ghostkellz/zcrypto)
-[![Version](https://img.shields.io/badge/version-v0.8.2-blue.svg)](#)
+[![Version](https://img.shields.io/badge/version-v0.8.3-blue.svg)](#)
 [![FFI](https://img.shields.io/badge/FFI-Rust%20Ready-blue.svg)](#)
 
-ZQUIC is a **production-ready, post-quantum QUIC transport library** written in Zig, serving as the **critical infrastructure backbone** for the entire GhostChain blockchain ecosystem. With complete Rust FFI integration and zcrypto v0.6.0 post-quantum cryptography, ZQUIC v0.8.2 delivers cutting-edge crypto/blockchain networking with hybrid PQ-TLS, Zero-RTT resumption, BBR congestion control, and advanced telemetry.
+ZQUIC is a **production-ready, post-quantum QUIC transport library** written in Zig, serving as the **critical infrastructure backbone** for the entire GhostChain blockchain ecosystem. With complete Rust FFI integration and zcrypto v0.6.0 post-quantum cryptography, ZQUIC v0.8.3 delivers cutting-edge crypto/blockchain networking with hybrid PQ-TLS, Zero-RTT resumption, BBR congestion control, and advanced telemetry.
 
 ## 🎯 Purpose & Vision
 

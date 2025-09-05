@@ -55,20 +55,20 @@ pub const Backend = struct {
         return Self{
             .id = id_copy,
             .address = address,
-            .connection_pool = std.ArrayList(*Connection.Connection).init(allocator),
-            .available_connections = std.ArrayList(*Connection.Connection).init(allocator),
+            .connection_pool = std.ArrayList(*Connection.Connection){},
+            .available_connections = std.ArrayList(*Connection.Connection){},
         };
     }
     
     pub fn deinit(self: *Self, allocator: std.mem.Allocator) void {
         // Clean up all connections
         for (self.connection_pool.items) |conn| {
-            conn.deinit();
+            conn.deinit(allocator);
             allocator.destroy(conn);
         }
         
-        self.connection_pool.deinit();
-        self.available_connections.deinit();
+        self.connection_pool.deinit(allocator);
+        self.available_connections.deinit(allocator);
         allocator.free(self.id);
     }
     
@@ -102,7 +102,7 @@ pub const Backend = struct {
             const connection = try allocator.create(Connection.Connection);
             connection.* = Connection.Connection.init(allocator, .client, conn_id);
             
-            try self.connection_pool.append(connection);
+            try self.connection_pool.append(allocator, connection);
             self.current_connections += 1;
             
             return connection;
@@ -112,14 +112,14 @@ pub const Backend = struct {
     }
     
     /// Release a connection back to the pool
-    pub fn releaseConnection(self: *Self, connection: *Connection.Connection) void {
+    pub fn releaseConnection(self: *Self, allocator: std.mem.Allocator, connection: *Connection.Connection) void {
         if (self.current_connections > 0) {
             self.current_connections -= 1;
         }
         
         // Check if connection is still usable
         if (connection.isEstablished() and !connection.isClosed()) {
-            self.available_connections.append(connection) catch {
+            self.available_connections.append(allocator, connection) catch {
                 // Pool is full or error occurred, let the connection be cleaned up
             };
         }
@@ -236,8 +236,8 @@ pub const ConnectionLoadBalancer = struct {
         for (self.backends.items) |*backend| {
             backend.deinit(self.allocator);
         }
-        self.backends.deinit();
-        self.circuit_breakers.deinit();
+        self.backends.deinit(self.allocator);
+        self.circuit_breakers.deinit(self.allocator);
     }
     
     /// Add a backend server
@@ -246,7 +246,7 @@ pub const ConnectionLoadBalancer = struct {
         backend.weight = weight;
         backend.max_connections = max_connections;
         
-        self.backends.append(backend) catch return Error.ZquicError.OutOfMemory;
+        self.backends.append(self.allocator, backend) catch return Error.ZquicError.OutOfMemory;
         
         // Initialize circuit breaker for this backend
         if (self.config.enable_circuit_breaker) {
@@ -328,7 +328,7 @@ pub const ConnectionLoadBalancer = struct {
     
     /// Release a connection back to its backend
     pub fn releaseConnection(self: *Self, backend: *Backend, connection: *Connection.Connection, success: bool) void {
-        backend.releaseConnection(connection);
+        backend.releaseConnection(self.allocator, connection);
         
         // Update circuit breaker
         if (self.config.enable_circuit_breaker) {

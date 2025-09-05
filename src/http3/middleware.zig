@@ -23,9 +23,9 @@ pub const CorsMiddleware = struct {
 
     pub fn init(allocator: std.mem.Allocator) Self {
         var cors_middleware = Self{
-            .allowed_origins = std.ArrayList([]const u8).init(allocator),
-            .allowed_methods = std.ArrayList([]const u8).init(allocator),
-            .allowed_headers = std.ArrayList([]const u8).init(allocator),
+            .allowed_origins = std.ArrayList([]const u8){},
+            .allowed_methods = std.ArrayList([]const u8){},
+            .allowed_headers = std.ArrayList([]const u8){},
             .allow_credentials = false,
             .max_age = null,
             .allocator = allocator,
@@ -54,21 +54,21 @@ pub const CorsMiddleware = struct {
         for (self.allowed_headers.items) |header| {
             self.allocator.free(header);
         }
-        self.allowed_origins.deinit();
-        self.allowed_methods.deinit();
-        self.allowed_headers.deinit();
+        self.allowed_origins.deinit(self.allocator);
+        self.allowed_methods.deinit(self.allocator);
+        self.allowed_headers.deinit(self.allocator);
     }
 
     pub fn addOrigin(self: *Self, origin: []const u8) !void {
-        try self.allowed_origins.append(try self.allocator.dupe(u8, origin));
+        try self.allowed_origins.append(self.allocator, try self.allocator.dupe(u8, origin));
     }
 
     pub fn addMethod(self: *Self, method: []const u8) !void {
-        try self.allowed_methods.append(try self.allocator.dupe(u8, method));
+        try self.allowed_methods.append(self.allocator, try self.allocator.dupe(u8, method));
     }
 
     pub fn addHeader(self: *Self, header: []const u8) !void {
-        try self.allowed_headers.append(try self.allocator.dupe(u8, header));
+        try self.allowed_headers.append(self.allocator, try self.allocator.dupe(u8, header));
     }
 
     pub fn middleware(self: *const Self) MiddlewareFn {

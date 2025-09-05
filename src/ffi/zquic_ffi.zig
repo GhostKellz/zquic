@@ -78,7 +78,7 @@ const Context = struct {
             .allocator = allocator,
             .config = config,
             .server = null,
-            .connections = std.ArrayList(*Connection).init(allocator),
+            .connections = std.ArrayList(*Connection){},
             .flow_controller = flow_controller,
         };
         return ctx;
@@ -96,7 +96,7 @@ const Context = struct {
         for (self.connections.items) |conn| {
             conn.deinit();
         }
-        self.connections.deinit();
+        self.connections.deinit(self.allocator);
         self.allocator.destroy(self);
     }
 };
@@ -115,7 +115,7 @@ const Connection = struct {
         conn.* = Self{
             .allocator = allocator,
             .connection = quic_connection,
-            .streams = std.ArrayList(*Stream).init(allocator),
+            .streams = std.ArrayList(*Stream){},
             .info = std.mem.zeroes(ZQuicConnectionInfo),
         };
 
@@ -129,7 +129,7 @@ const Connection = struct {
         for (self.streams.items) |stream| {
             stream.deinit();
         }
-        self.streams.deinit();
+        self.streams.deinit(self.allocator);
         self.connection.deinit();
         self.allocator.destroy(self);
     }
@@ -184,7 +184,7 @@ var allocator_initialized: bool = false;
 
 /// Initialize ZQUIC context with configuration
 /// Returns: Opaque context pointer or null on failure
-pub export fn zquic_init(config: *const ZQuicConfig) callconv(.C) ?*ZQuicContext {
+pub export fn zquic_init(config: *const ZQuicConfig) callconv(.c) ?*ZQuicContext {
     if (!allocator_initialized) {
         global_allocator = std.heap.c_allocator;
         allocator_initialized = true;
@@ -195,7 +195,7 @@ pub export fn zquic_init(config: *const ZQuicConfig) callconv(.C) ?*ZQuicContext
 }
 
 /// Destroy ZQUIC context and free all resources
-pub export fn zquic_destroy(ctx: ?*ZQuicContext) callconv(.C) void {
+pub export fn zquic_destroy(ctx: ?*ZQuicContext) callconv(.c) void {
     if (ctx) |context| {
         const internal_ctx: *Context = @ptrCast(@alignCast(context));
         internal_ctx.deinit();
@@ -204,7 +204,7 @@ pub export fn zquic_destroy(ctx: ?*ZQuicContext) callconv(.C) void {
 
 /// Create QUIC server for incoming connections
 /// Returns: 0 on success, -1 on failure
-pub export fn zquic_create_server(ctx: ?*ZQuicContext) callconv(.C) c_int {
+pub export fn zquic_create_server(ctx: ?*ZQuicContext) callconv(.c) c_int {
     const context: *Context = @ptrCast(@alignCast(ctx orelse return -1));
 
     if (context.server != null) return -1; // Server already exists
@@ -226,7 +226,7 @@ pub export fn zquic_create_server(ctx: ?*ZQuicContext) callconv(.C) c_int {
 
 /// Start server listening on configured port
 /// Returns: 0 on success, -1 on failure
-pub export fn zquic_start_server(ctx: ?*ZQuicContext) callconv(.C) c_int {
+pub export fn zquic_start_server(ctx: ?*ZQuicContext) callconv(.c) c_int {
     const context: *Context = @ptrCast(@alignCast(ctx orelse return -1));
     const server = context.server orelse return -1;
 
@@ -238,7 +238,7 @@ pub export fn zquic_start_server(ctx: ?*ZQuicContext) callconv(.C) c_int {
 }
 
 /// Stop server and close all connections
-pub export fn zquic_stop_server(ctx: ?*ZQuicContext) callconv(.C) void {
+pub export fn zquic_stop_server(ctx: ?*ZQuicContext) callconv(.c) void {
     const context: *Context = @ptrCast(@alignCast(ctx orelse return));
     if (context.server) |server| {
         server.stop();
@@ -247,7 +247,7 @@ pub export fn zquic_stop_server(ctx: ?*ZQuicContext) callconv(.C) void {
 
 /// Create outbound QUIC connection to remote address
 /// Returns: Opaque connection pointer or null on failure
-pub export fn zquic_create_connection(ctx: ?*ZQuicContext, remote_addr: [*:0]const u8) callconv(.C) ?*ZQuicConnection {
+pub export fn zquic_create_connection(ctx: ?*ZQuicContext, remote_addr: [*:0]const u8) callconv(.c) ?*ZQuicConnection {
     const context: *Context = @ptrCast(@alignCast(ctx orelse return null));
 
     const addr_str = std.mem.span(remote_addr);
@@ -274,7 +274,7 @@ pub export fn zquic_create_connection(ctx: ?*ZQuicContext, remote_addr: [*:0]con
     @memcpy(connection.info.remote_addr[0..addr_str_len], addr_str[0..addr_str_len]);
     connection.info.remote_addr[addr_str_len] = 0; // null terminate
 
-    context.connections.append(connection) catch {
+    context.connections.append(context.allocator, connection) catch {
         connection.deinit();
         return null;
     };
@@ -284,7 +284,7 @@ pub export fn zquic_create_connection(ctx: ?*ZQuicContext, remote_addr: [*:0]con
 }
 
 /// Close QUIC connection and free resources
-pub export fn zquic_close_connection(conn: ?*ZQuicConnection) callconv(.C) void {
+pub export fn zquic_close_connection(conn: ?*ZQuicConnection) callconv(.c) void {
     if (conn) |connection| {
         const internal_conn: *Connection = @ptrCast(@alignCast(connection));
         internal_conn.deinit();
@@ -293,7 +293,7 @@ pub export fn zquic_close_connection(conn: ?*ZQuicConnection) callconv(.C) void 
 
 /// Send data over QUIC connection
 /// Returns: Number of bytes sent, or -1 on error
-pub export fn zquic_send_data(conn: ?*ZQuicConnection, data: [*]const u8, len: usize) callconv(.C) isize {
+pub export fn zquic_send_data(conn: ?*ZQuicConnection, data: [*]const u8, len: usize) callconv(.c) isize {
     const connection: *Connection = @ptrCast(@alignCast(conn orelse return -1));
 
     if (len == 0) return 0;
@@ -314,7 +314,7 @@ pub export fn zquic_send_data(conn: ?*ZQuicConnection, data: [*]const u8, len: u
         };
 
         stream = Stream.init(connection.allocator, quic_stream, quic_stream.id) catch return -1;
-        connection.streams.append(stream) catch {
+        connection.streams.append(connection.allocator, stream) catch {
             stream.deinit();
             return -1;
         };
@@ -337,7 +337,7 @@ pub export fn zquic_send_data(conn: ?*ZQuicConnection, data: [*]const u8, len: u
 
 /// Receive data from QUIC connection
 /// Returns: Number of bytes received, 0 for no data, -1 on error
-pub export fn zquic_receive_data(conn: ?*ZQuicConnection, buffer: [*]u8, max_len: usize) callconv(.C) isize {
+pub export fn zquic_receive_data(conn: ?*ZQuicConnection, buffer: [*]u8, max_len: usize) callconv(.c) isize {
     const connection: *Connection = @ptrCast(@alignCast(conn orelse return -1));
 
     if (max_len == 0) return 0;
@@ -367,7 +367,7 @@ pub export fn zquic_receive_data(conn: ?*ZQuicConnection, buffer: [*]u8, max_len
 /// Create new QUIC stream on connection
 /// stream_type: 0 = bidirectional, 1 = unidirectional
 /// Returns: Opaque stream pointer or null on failure
-pub export fn zquic_create_stream(conn: ?*ZQuicConnection, stream_type: u8) callconv(.C) ?*ZQuicStream {
+pub export fn zquic_create_stream(conn: ?*ZQuicConnection, stream_type: u8) callconv(.c) ?*ZQuicStream {
     const connection: *Connection = @ptrCast(@alignCast(conn orelse return null));
 
     // Check if connection is established
@@ -394,7 +394,7 @@ pub export fn zquic_create_stream(conn: ?*ZQuicConnection, stream_type: u8) call
 
     // Create FFI stream wrapper
     const stream = Stream.init(connection.allocator, quic_stream, quic_stream.id) catch return null;
-    connection.streams.append(stream) catch {
+    connection.streams.append(connection.allocator, stream) catch {
         stream.deinit();
         return null;
     };
@@ -404,7 +404,7 @@ pub export fn zquic_create_stream(conn: ?*ZQuicConnection, stream_type: u8) call
 }
 
 /// Close QUIC stream
-pub export fn zquic_close_stream(stream: ?*ZQuicStream) callconv(.C) void {
+pub export fn zquic_close_stream(stream: ?*ZQuicStream) callconv(.c) void {
     if (stream) |s| {
         const internal_stream: *Stream = @ptrCast(@alignCast(s));
         internal_stream.deinit();
@@ -413,7 +413,7 @@ pub export fn zquic_close_stream(stream: ?*ZQuicStream) callconv(.C) void {
 
 /// Send data on specific stream
 /// Returns: Number of bytes sent, or -1 on error
-pub export fn zquic_stream_send(stream: ?*ZQuicStream, data: [*]const u8, len: usize) callconv(.C) isize {
+pub export fn zquic_stream_send(stream: ?*ZQuicStream, data: [*]const u8, len: usize) callconv(.c) isize {
     const s: *Stream = @ptrCast(@alignCast(stream orelse return -1));
 
     if (len == 0) return 0;
@@ -432,7 +432,7 @@ pub export fn zquic_stream_send(stream: ?*ZQuicStream, data: [*]const u8, len: u
 
 /// Receive data from specific stream
 /// Returns: Number of bytes received, 0 for no data, -1 on error
-pub export fn zquic_stream_receive(stream: ?*ZQuicStream, buffer: [*]u8, max_len: usize) callconv(.C) isize {
+pub export fn zquic_stream_receive(stream: ?*ZQuicStream, buffer: [*]u8, max_len: usize) callconv(.c) isize {
     const s: *Stream = @ptrCast(@alignCast(stream orelse return -1));
 
     if (max_len == 0) return 0;
@@ -451,7 +451,7 @@ pub export fn zquic_stream_receive(stream: ?*ZQuicStream, buffer: [*]u8, max_len
 
 /// Get connection information
 /// Returns: 0 on success, -1 on failure
-pub export fn zquic_get_connection_info(conn: ?*ZQuicConnection, info: *ZQuicConnectionInfo) callconv(.C) c_int {
+pub export fn zquic_get_connection_info(conn: ?*ZQuicConnection, info: *ZQuicConnectionInfo) callconv(.c) c_int {
     const connection: *Connection = @ptrCast(@alignCast(conn orelse return -1));
     info.* = connection.info;
     return 0;
@@ -459,30 +459,30 @@ pub export fn zquic_get_connection_info(conn: ?*ZQuicConnection, info: *ZQuicCon
 
 /// Set connection callback for events
 /// callback: Function pointer for connection events
-pub export fn zquic_set_connection_callback(ctx: ?*ZQuicContext, callback: ?*const fn (conn: ?*ZQuicConnection, event_type: u8, data: ?*anyopaque) callconv(.C) void) callconv(.C) void {
+pub export fn zquic_set_connection_callback(ctx: ?*ZQuicContext, callback: ?*const fn (conn: ?*ZQuicConnection, event_type: u8, data: ?*anyopaque) callconv(.c) void) callconv(.c) void {
     const context: *Context = @ptrCast(@alignCast(ctx orelse return));
     _ = context; // TODO: Store callback
     _ = callback; // TODO: Implement callback system
 }
 
 /// Get library version string
-pub export fn zquic_version() callconv(.C) [*:0]const u8 {
+pub export fn zquic_version() callconv(.c) [*:0]const u8 {
     return "ZQUIC 0.7.0 FFI+GhostChain";
 }
 
 /// Get last error message
-pub export fn zquic_last_error() callconv(.C) [*:0]const u8 {
+pub export fn zquic_last_error() callconv(.c) [*:0]const u8 {
     // TODO: Implement proper error tracking
     return "No error";
 }
 
 // Testing exports for validation
-pub export fn zquic_test_echo(input: [*:0]const u8) callconv(.C) [*:0]const u8 {
+pub export fn zquic_test_echo(input: [*:0]const u8) callconv(.c) [*:0]const u8 {
     _ = input;
     return "ZQUIC FFI Test OK";
 }
 
-pub export fn zquic_test_add(a: c_int, b: c_int) callconv(.C) c_int {
+pub export fn zquic_test_add(a: c_int, b: c_int) callconv(.c) c_int {
     return a + b;
 }
 
@@ -505,7 +505,7 @@ pub const ZQuicGrpcResponse = extern struct {
 
 /// Make gRPC call over QUIC connection
 /// Returns: gRPC response pointer or null on failure (caller must free)
-pub export fn zquic_grpc_call(conn: ?*ZQuicConnection, service_method: [*:0]const u8, request_data: [*]const u8, request_len: usize) callconv(.C) ?*ZQuicGrpcResponse {
+pub export fn zquic_grpc_call(conn: ?*ZQuicConnection, service_method: [*:0]const u8, request_data: [*]const u8, request_len: usize) callconv(.c) ?*ZQuicGrpcResponse {
     const connection: *Connection = @ptrCast(@alignCast(conn orelse return null));
 
     // Validate inputs
@@ -541,7 +541,7 @@ pub export fn zquic_grpc_call(conn: ?*ZQuicConnection, service_method: [*:0]cons
         };
 
         grpc_stream = Stream.init(connection.allocator, quic_stream, quic_stream.id) catch return null;
-        connection.streams.append(grpc_stream) catch {
+        connection.streams.append(connection.allocator, grpc_stream) catch {
             grpc_stream.deinit();
             return null;
         };
@@ -553,8 +553,8 @@ pub export fn zquic_grpc_call(conn: ?*ZQuicConnection, service_method: [*:0]cons
 
     // Format gRPC message according to HTTP/2 gRPC protocol over QUIC
     // gRPC format: [compressed flag][message length][message data]
-    var grpc_message = std.ArrayList(u8).init(connection.allocator);
-    defer grpc_message.deinit();
+    var grpc_message = std.ArrayList(u8){};
+    defer grpc_message.deinit(connection.allocator);
 
     // Build gRPC HTTP/2-like headers
     const grpc_headers = std.fmt.allocPrint(connection.allocator, ":method: POST\r\n" ++
@@ -570,26 +570,26 @@ pub export fn zquic_grpc_call(conn: ?*ZQuicConnection, service_method: [*:0]cons
     defer connection.allocator.free(grpc_headers);
 
     // Append headers and payload
-    grpc_message.appendSlice(grpc_headers) catch {
+    grpc_message.appendSlice(connection.allocator, grpc_headers) catch {
         connection.allocator.destroy(response);
         return null;
     };
 
     // gRPC message framing: [compressed flag (1 byte)][length (4 bytes)][data]
-    grpc_message.append(0) catch { // Not compressed
+    grpc_message.append(connection.allocator, 0) catch { // Not compressed
         connection.allocator.destroy(response);
         return null;
     };
 
     // Message length in big endian
     const msg_len_bytes = std.mem.toBytes(@as(u32, @intCast(request_len)));
-    grpc_message.appendSlice(&msg_len_bytes) catch {
+    grpc_message.appendSlice(connection.allocator, &msg_len_bytes) catch {
         connection.allocator.destroy(response);
         return null;
     };
 
     // Actual message data
-    grpc_message.appendSlice(request_slice) catch {
+    grpc_message.appendSlice(connection.allocator, request_slice) catch {
         connection.allocator.destroy(response);
         return null;
     };
@@ -624,7 +624,7 @@ pub export fn zquic_grpc_call(conn: ?*ZQuicConnection, service_method: [*:0]cons
 }
 
 /// Free gRPC response allocated by zquic_grpc_call
-pub export fn zquic_grpc_response_free(response: ?*ZQuicGrpcResponse) callconv(.C) void {
+pub export fn zquic_grpc_response_free(response: ?*ZQuicGrpcResponse) callconv(.c) void {
     if (response) |resp| {
         if (resp.len > 0) {
             // Free the response data using global allocator
@@ -637,7 +637,7 @@ pub export fn zquic_grpc_response_free(response: ?*ZQuicGrpcResponse) callconv(.
 
 /// Start gRPC server on QUIC connection for incoming calls
 /// Returns: 0 on success, -1 on failure
-pub export fn zquic_grpc_serve(ctx: ?*ZQuicContext, handler: ?*const fn (method: [*:0]const u8, request: [*]const u8, request_len: usize, response: *ZQuicGrpcResponse) callconv(.C) c_int) callconv(.C) c_int {
+pub export fn zquic_grpc_serve(ctx: ?*ZQuicContext, handler: ?*const fn (method: [*:0]const u8, request: [*]const u8, request_len: usize, response: *ZQuicGrpcResponse) callconv(.c) c_int) callconv(.c) c_int {
     const context: *Context = @ptrCast(@alignCast(ctx orelse return -1));
     _ = context; // TODO: Store handler
     _ = handler; // TODO: Implement gRPC serving
@@ -679,7 +679,7 @@ const ProxyState = struct {
         proxy.* = Self{
             .allocator = allocator,
             .config = config,
-            .backend_connections = std.ArrayList(*Connection).init(allocator),
+            .backend_connections = std.ArrayList(*Connection){},
             .current_backend = 0,
         };
         return proxy;
@@ -689,7 +689,7 @@ const ProxyState = struct {
         for (self.backend_connections.items) |conn| {
             conn.deinit();
         }
-        self.backend_connections.deinit();
+        self.backend_connections.deinit(self.allocator);
         self.allocator.destroy(self);
     }
 
@@ -712,7 +712,7 @@ const ProxyState = struct {
 
 /// Create reverse proxy instance
 /// Returns: Opaque proxy pointer or null on failure
-pub export fn zquic_proxy_create(ctx: ?*ZQuicContext, config: *const ZQuicProxyConfig) callconv(.C) ?*anyopaque {
+pub export fn zquic_proxy_create(ctx: ?*ZQuicContext, config: *const ZQuicProxyConfig) callconv(.c) ?*anyopaque {
     const context: *Context = @ptrCast(@alignCast(ctx orelse return null));
 
     // Create proxy state
@@ -740,7 +740,7 @@ pub export fn zquic_proxy_create(ctx: ?*ZQuicContext, config: *const ZQuicProxyC
 
 /// Route incoming connection through proxy
 /// Returns: 0 on success, -1 on failure
-pub export fn zquic_proxy_route(proxy: ?*anyopaque, conn: ?*ZQuicConnection) callconv(.C) c_int {
+pub export fn zquic_proxy_route(proxy: ?*anyopaque, conn: ?*ZQuicConnection) callconv(.c) c_int {
     const proxy_state: *ProxyState = @ptrCast(@alignCast(proxy orelse return -1));
     const connection: *Connection = @ptrCast(@alignCast(conn orelse return -1));
 
@@ -805,7 +805,7 @@ pub const ZQuicDnsResponse = extern struct {
 
 /// Perform DNS query over QUIC
 /// Returns: 0 on success, -1 on failure
-pub export fn zquic_dns_query(conn: ?*ZQuicConnection, domain: [*:0]const u8, query_type: u16, response: *ZQuicDnsResponse) callconv(.C) c_int {
+pub export fn zquic_dns_query(conn: ?*ZQuicConnection, domain: [*:0]const u8, query_type: u16, response: *ZQuicDnsResponse) callconv(.c) c_int {
     const connection: *Connection = @ptrCast(@alignCast(conn orelse return -1));
 
     const domain_str = std.mem.span(domain);
@@ -847,7 +847,7 @@ pub export fn zquic_dns_query(conn: ?*ZQuicConnection, domain: [*:0]const u8, qu
             return -1;
         };
 
-        connection.streams.append(dns_stream) catch {
+        connection.streams.append(connection.allocator, dns_stream) catch {
             dns_stream.deinit();
             response.rcode = 2; // SERVFAIL
             return -1;
@@ -855,8 +855,8 @@ pub export fn zquic_dns_query(conn: ?*ZQuicConnection, domain: [*:0]const u8, qu
     }
 
     // Build DNS query message
-    var dns_query = std.ArrayList(u8).init(connection.allocator);
-    defer dns_query.deinit();
+    var dns_query = std.ArrayList(u8){};
+    defer dns_query.deinit(connection.allocator);
 
     // Simple DNS query format for demonstration
     const query_msg = std.fmt.allocPrint(connection.allocator, "DNS_QUERY: {s} TYPE: {}", .{ domain_str, query_type }) catch {
@@ -928,7 +928,7 @@ pub export fn zquic_dns_query(conn: ?*ZQuicConnection, domain: [*:0]const u8, qu
 
 /// Start DNS-over-QUIC server
 /// Returns: 0 on success, -1 on failure
-pub export fn zquic_dns_serve(ctx: ?*ZQuicContext, resolver: ?*const fn (domain: [*:0]const u8, query_type: u16, response: *ZQuicDnsResponse) callconv(.C) c_int) callconv(.C) c_int {
+pub export fn zquic_dns_serve(ctx: ?*ZQuicContext, resolver: ?*const fn (domain: [*:0]const u8, query_type: u16, response: *ZQuicDnsResponse) callconv(.c) c_int) callconv(.c) c_int {
     const context: *Context = @ptrCast(@alignCast(ctx orelse return -1));
     _ = context; // TODO: Store resolver
     _ = resolver; // TODO: Implement DNS serving
@@ -961,7 +961,7 @@ pub const ZQuicCryptoResult = extern struct {
 
 /// Initialize crypto subsystem with ZCrypto
 /// Returns: 0 on success, -1 on failure
-pub export fn zquic_crypto_init() callconv(.C) c_int {
+pub export fn zquic_crypto_init() callconv(.c) c_int {
     // TODO: Initialize ZCrypto library when available
     // This will integrate with the ZCrypto library for:
     // - Ed25519 digital signatures
@@ -975,7 +975,7 @@ pub export fn zquic_crypto_init() callconv(.C) c_int {
 
 /// Generate key pair
 /// Returns: 0 on success, -1 on failure
-pub export fn zquic_crypto_keygen(key_type: u8, public_key: [*]u8, private_key: [*]u8, result: *ZQuicCryptoResult) callconv(.C) c_int {
+pub export fn zquic_crypto_keygen(key_type: u8, public_key: [*]u8, private_key: [*]u8, result: *ZQuicCryptoResult) callconv(.c) c_int {
     result.* = std.mem.zeroes(ZQuicCryptoResult);
 
     switch (key_type) {
@@ -1058,7 +1058,7 @@ pub export fn zquic_crypto_keygen(key_type: u8, public_key: [*]u8, private_key: 
 
 /// Sign data with private key
 /// Returns: 0 on success, -1 on failure
-pub export fn zquic_crypto_sign(key_type: u8, private_key: [*]const u8, data: [*]const u8, data_len: usize, signature: [*]u8, result: *ZQuicCryptoResult) callconv(.C) c_int {
+pub export fn zquic_crypto_sign(key_type: u8, private_key: [*]const u8, data: [*]const u8, data_len: usize, signature: [*]u8, result: *ZQuicCryptoResult) callconv(.c) c_int {
     result.* = std.mem.zeroes(ZQuicCryptoResult);
 
     const data_slice = data[0..data_len];
@@ -1117,7 +1117,7 @@ pub export fn zquic_crypto_sign(key_type: u8, private_key: [*]const u8, data: [*
 
 /// Verify signature
 /// Returns: 0 on success, -1 on failure
-pub export fn zquic_crypto_verify(key_type: u8, public_key: [*]const u8, data: [*]const u8, data_len: usize, signature: [*]const u8, result: *ZQuicCryptoResult) callconv(.C) c_int {
+pub export fn zquic_crypto_verify(key_type: u8, public_key: [*]const u8, data: [*]const u8, data_len: usize, signature: [*]const u8, result: *ZQuicCryptoResult) callconv(.c) c_int {
     result.* = std.mem.zeroes(ZQuicCryptoResult);
 
     const data_slice = data[0..data_len];
@@ -1148,7 +1148,7 @@ pub export fn zquic_crypto_verify(key_type: u8, public_key: [*]const u8, data: [
 
 /// Hash data using specified algorithm
 /// Returns: 0 on success, -1 on failure
-pub export fn zquic_crypto_hash(hash_type: u8, data: [*]const u8, data_len: usize, hash_output: [*]u8, result: *ZQuicCryptoResult) callconv(.C) c_int {
+pub export fn zquic_crypto_hash(hash_type: u8, data: [*]const u8, data_len: usize, hash_output: [*]u8, result: *ZQuicCryptoResult) callconv(.c) c_int {
     result.* = std.mem.zeroes(ZQuicCryptoResult);
 
     const data_slice = data[0..data_len];
@@ -1211,7 +1211,7 @@ pub export fn zquic_crypto_hash(hash_type: u8, data: [*]const u8, data_len: usiz
 
 /// Set custom crypto provider for QUIC TLS
 /// Returns: 0 on success, -1 on failure
-pub export fn zquic_set_crypto_provider(ctx: ?*ZQuicContext, provider: ?*const fn (operation: u8, input: [*]const u8, input_len: usize, output: [*]u8, output_len: *usize) callconv(.C) c_int) callconv(.C) c_int {
+pub export fn zquic_set_crypto_provider(ctx: ?*ZQuicContext, provider: ?*const fn (operation: u8, input: [*]const u8, input_len: usize, output: [*]u8, output_len: *usize) callconv(.c) c_int) callconv(.c) c_int {
     const context: *Context = @ptrCast(@alignCast(ctx orelse return -1));
     _ = context; // TODO: Store crypto provider
     _ = provider; // TODO: Integrate with QUIC TLS

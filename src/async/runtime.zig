@@ -130,8 +130,8 @@ pub const ConnectionPool = struct {
             self.allocator.destroy(conn);
         }
 
-        self.connections.deinit();
-        self.available_connections.deinit();
+        self.connections.deinit(self.allocator);
+        self.available_connections.deinit(self.allocator);
     }
 
     /// Get an available connection from the pool
@@ -154,7 +154,7 @@ pub const ConnectionPool = struct {
         defer self.mutex.unlock();
 
         conn.is_active = false;
-        self.available_connections.append(conn) catch {
+        self.available_connections.append(self.allocator, conn) catch {
             // Pool is full, destroy the connection
             self.allocator.destroy(conn);
         };
@@ -245,10 +245,10 @@ pub const QuicRuntime = struct {
             pool.deinit();
         }
 
-        self.multiplexer.deinit();
+        self.multiplexer.deinit(self.allocator);
         self.allocator.free(self.worker_threads);
-        self.active_tasks.deinit();
-        self.task_queue.deinit();
+        self.active_tasks.deinit(self.allocator);
+        self.task_queue.deinit(self.allocator);
     }
 
     /// Start the async runtime
@@ -368,7 +368,7 @@ pub const QuicRuntime = struct {
 
                 // Add to active tasks or clean up
                 if (async_conn.is_active) {
-                    self.active_tasks.append(async_conn) catch {
+                    self.active_tasks.append(self.allocator, async_conn) catch {
                         // Task list full, drop the connection
                         async_conn.is_active = false;
                         self.allocator.destroy(async_conn);

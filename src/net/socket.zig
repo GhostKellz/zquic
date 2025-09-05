@@ -12,9 +12,9 @@ pub const Socket = struct {
 
     const Self = @This();
 
-    pub fn init(address: std.net.Address) Error.ZquicError!Self {
+    pub fn init(allocator: std.mem.Allocator, address: std.net.Address) Error.ZquicError!Self {
         return Self{
-            .udp_socket = try UdpSocket.init(address),
+            .udp_socket = try UdpSocket.init(allocator, address),
         };
     }
 
@@ -33,7 +33,7 @@ pub const Socket = struct {
 
 test "socket abstraction" {
     const address = std.net.Address.initIp4([4]u8{ 127, 0, 0, 1 }, 8080);
-    var socket = try Socket.init(address);
+    var socket = try Socket.init(std.testing.allocator, address);
     defer socket.deinit();
 
     const data = "test data";

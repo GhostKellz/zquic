@@ -303,7 +303,7 @@ pub const BenchmarkRunner = struct {
     pub fn init(allocator: std.mem.Allocator) BenchmarkRunner {
         return BenchmarkRunner{
             .allocator = allocator,
-            .results = ArrayList(ComparisonResult).init(allocator),
+            .results = ArrayList(ComparisonResult)./benchmarks/quinn_comparison.zig,
         };
     }
     
@@ -602,7 +602,7 @@ pub fn main() !void {
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
     
-    var runner = BenchmarkRunner.init(allocator);
+    var runner = BenchmarkRunner./benchmarks/quinn_comparison.zig;
     defer runner.deinit();
     
     const config = BenchmarkConfig{
@@ -625,7 +625,7 @@ pub const QuinnComparison = struct {
     pub const BenchmarkRunner = BenchmarkRunner;
     
     pub fn runQuickBenchmark(allocator: std.mem.Allocator) !ComparisonResult {
-        var runner = BenchmarkRunner.init(allocator);
+        var runner = BenchmarkRunner./benchmarks/quinn_comparison.zig;
         defer runner.deinit();
         
         const quick_config = BenchmarkConfig{

@@ -17,24 +17,24 @@ const Stream = @import("../core/stream.zig");
 
 /// Supercharged server configuration for high performance
 pub const SuperServerConfig = struct {
-    max_connections: u32 = 100_000,         // 100k concurrent connections
-    max_streams_per_connection: u32 = 1000,  // 1k streams per connection
-    request_timeout_ms: u32 = 5000,         // 5s timeout for fast responses
-    keep_alive_timeout_ms: u32 = 30000,     // 30s keep-alive
+    max_connections: u32 = 100_000, // 100k concurrent connections
+    max_streams_per_connection: u32 = 1000, // 1k streams per connection
+    request_timeout_ms: u32 = 5000, // 5s timeout for fast responses
+    keep_alive_timeout_ms: u32 = 30000, // 30s keep-alive
     max_request_body_size: usize = 10 * 1024 * 1024, // 10MB for large uploads
-    enable_push: bool = true,                // HTTP/3 server push
+    enable_push: bool = true, // HTTP/3 server push
     enable_compression: bool = true,
     compression_level: u8 = 6,
     static_files_root: ?[]const u8 = null,
     enable_cors: bool = true,
     cors_origins: []const []const u8 = &[_][]const u8{"*"}, // Allow all origins
     enable_security_headers: bool = true,
-    
+
     // Advanced zsync performance settings
-    request_batch_size: u32 = 64,           // Process 64 requests in batch
-    response_batch_size: u32 = 64,          // Send 64 responses in batch
-    worker_threads: u32 = 0,                // Auto-detect CPU cores
-    enable_zero_copy: bool = true,           // Zero-copy optimizations
+    request_batch_size: u32 = 64, // Process 64 requests in batch
+    response_batch_size: u32 = 64, // Send 64 responses in batch
+    worker_threads: u32 = 0, // Auto-detect CPU cores
+    enable_zero_copy: bool = true, // Zero-copy optimizations
 };
 
 /// Legacy alias for compatibility
@@ -50,7 +50,7 @@ pub const SuperServerStats = struct {
     bytes_received: std.atomic.Value(u64),
     errors_count: std.atomic.Value(u64),
     start_time: i64,
-    peak_rps: std.atomic.Value(u64),         // Peak requests per second
+    peak_rps: std.atomic.Value(u64), // Peak requests per second
     avg_response_time_us: std.atomic.Value(u64), // Average response time in microseconds
 
     const Self = @This();
@@ -101,20 +101,20 @@ pub const SuperHttp3Server = struct {
     config: SuperServerConfig,
     stats: SuperServerStats,
     allocator: std.mem.Allocator,
-    
+
     // High-performance async processing pipeline
     request_queue: zsync.bounded(Request, 1000),
     response_queue: zsync.bounded(Response, 1000),
-    
+
     // Multi-stage async processing pools (placeholder types)
-    parser_pool: zsync.bounded(*void, 100),  // TODO: Define RequestParser
+    parser_pool: zsync.bounded(*void, 100), // TODO: Define RequestParser
     handler_pool: zsync.bounded(*void, 100), // TODO: Define RequestHandler
-    
+
     // Different I/O contexts for optimal performance
-    network_io: zsync.GreenThreadsIo,    // For network operations
-    compute_io: zsync.ThreadPoolIo,      // For CPU-intensive tasks
-    file_io: zsync.BlockingIo,           // For static file serving
-    
+    network_io: zsync.Io, // For network operations
+    compute_io: zsync.ThreadPoolIo, // For CPU-intensive tasks
+    file_io: zsync.BlockingIo, // For static file serving
+
     const Self = @This();
 
     pub fn init(allocator: std.mem.Allocator, config: SuperServerConfig) !Self {
@@ -126,7 +126,7 @@ pub const SuperHttp3Server = struct {
             .response_queue = zsync.bounded(Response, 1000),
             .parser_pool = zsync.bounded(*void, 100),
             .handler_pool = zsync.bounded(*void, 100),
-            .network_io = zsync.GreenThreadsIo{},
+            .network_io = zsync.createBlockingIo(allocator).io(),
             .compute_io = zsync.ThreadPoolIo{},
             .file_io = zsync.BlockingIo{},
         };
@@ -139,14 +139,14 @@ pub const SuperHttp3Server = struct {
         _ = try self.network_io.spawn(requestParser, .{self});
         // _ = try self.network_io.spawn(requestRouter, .{self}); // TODO: Implement
         // _ = try self.network_io.spawn(responseWriter, .{self}); // TODO: Implement
-        
+
         // Main server loop
         while (true) {
             try self.manageConnections();
             try zsync.yieldNow();
         }
     }
-    
+
     /// Async request processing pipeline
     fn requestReceiver(self: *Self) !void {
         while (true) {
@@ -155,14 +155,14 @@ pub const SuperHttp3Server = struct {
             try self.request_queue.send(request);
         }
     }
-    
+
     fn requestParser(self: *Self) !void {
         while (true) {
             const request = try self.request_queue.recv();
-            
+
             // Parse on compute pool for CPU-intensive work
             const parsed = try self.compute_io.run(parseRequest, .{request});
-            
+
             try self.parsed_queue.send(parsed);
         }
     }
@@ -239,7 +239,7 @@ pub const ActiveRequest = struct {
 
     pub fn deinit(self: *Self) void {
         self.request.deinit();
-        self.response.deinit();
+        self.response.deinit(self.allocator);
     }
 
     pub fn duration(self: *const Self) i64 {
@@ -270,7 +270,7 @@ pub const Http3Server = struct {
             .config = config,
             .stats = SuperServerStats.init(),
             .connections = std.HashMap([]const u8, *ConnectionContext, std.hash_map.StringContext, std.hash_map.default_max_load_percentage).init(allocator),
-            .middleware_stack = std.ArrayList(Middleware.MiddlewareFn).init(allocator),
+            .middleware_stack = std.ArrayList(Middleware.MiddlewareFn){},
         };
 
         // Setup default middleware
@@ -280,7 +280,7 @@ pub const Http3Server = struct {
     }
 
     pub fn deinit(self: *Self) void {
-        self.qpack_decoder.deinit();
+        self.qpack_decoder.deinit(self.allocator);
         self.qpack_encoder.deinit();
         self.router.deinit();
 
@@ -292,39 +292,39 @@ pub const Http3Server = struct {
             self.allocator.free(entry.key_ptr.*);
         }
         self.connections.deinit();
-        self.middleware_stack.deinit();
+        self.middleware_stack.deinit(self.allocator);
     }
 
     fn setupDefaultMiddleware(self: *Self) !void {
         // Security headers (if enabled)
         if (self.config.enable_security_headers) {
             var security = Middleware.SecurityMiddleware.init(self.allocator);
-            try self.middleware_stack.append(security.middleware());
+            try self.middleware_stack.append(self.allocator, security.middleware());
         }
 
         // CORS (if enabled)
         if (self.config.enable_cors) {
             var cors = Middleware.CorsMiddleware.init(self.allocator);
             defer cors.deinit();
-            try self.middleware_stack.append(cors.middleware());
+            try self.middleware_stack.append(self.allocator, cors.middleware());
         }
 
         // Compression (if enabled)
         if (self.config.enable_compression) {
             const compression = Middleware.CompressionMiddleware.init(self.allocator, self.config.compression_level, 256 // min size
             );
-            try self.middleware_stack.append(compression.middleware());
+            try self.middleware_stack.append(self.allocator, compression.middleware());
         }
 
         // Static files (if configured)
         if (self.config.static_files_root) |static_root| {
             const static_middleware = Middleware.StaticMiddleware.init(self.allocator, static_root);
-            try self.middleware_stack.append(static_middleware.middleware());
+            try self.middleware_stack.append(self.allocator, static_middleware.middleware());
         }
 
         // Logging
         const logging = Middleware.LoggingMiddleware.init(self.allocator, .info);
-        try self.middleware_stack.append(logging.middleware());
+        try self.middleware_stack.append(self.allocator, logging.middleware());
     }
 
     /// Start the server
@@ -480,58 +480,54 @@ pub const Http3Server = struct {
     fn sendFrameToConnection(self: *Self, connection: *Connection, stream_id: u64, frame: Frame.Frame) !void {
         // Create a new QUIC stream for this HTTP/3 stream
         const stream = try connection.createStream(.server_bidirectional);
-        
+
         // Encode the frame with type and length
-        var frame_data = std.ArrayList(u8).init(self.allocator);
+        var frame_data = std.ArrayList(u8){};
         defer frame_data.deinit();
-        
+
         // Write frame type (1 byte)
-        try frame_data.append(@as(u8, @intCast(@intFromEnum(frame.frame_type))));
-        
+        try frame_data.append(self.allocator, @as(u8, @intCast(@intFromEnum(frame.frame_type))));
+
         // Write payload length (variable-length integer)
         try self.writeVarint(&frame_data, frame.payload.len);
-        
+
         // Write payload
         try frame_data.appendSlice(frame.payload);
-        
+
         // Send the frame data to the QUIC stream
         const bytes_written = try stream.write(frame_data.items, false);
         self.stats.addBytesSent(bytes_written);
-        
-        std.log.debug("Sent HTTP/3 frame type {} ({} bytes) on stream {}", .{
-            frame.frame_type, bytes_written, stream_id
-        });
+
+        std.log.debug("Sent HTTP/3 frame type {} ({} bytes) on stream {}", .{ frame.frame_type, bytes_written, stream_id });
     }
-    
+
     /// Write a variable-length integer as defined in RFC 9000
     fn writeVarint(self: *Self, writer: *std.ArrayList(u8), value: usize) !void {
-        _ = self;
-        
         if (value < 64) {
-            try writer.append(@intCast(value));
+            try writer.append(self.allocator, @intCast(value));
         } else if (value < 16384) {
-            try writer.append(@intCast(0x40 | (value >> 8)));
-            try writer.append(@intCast(value & 0xFF));
+            try writer.append(self.allocator, @intCast(0x40 | (value >> 8)));
+            try writer.append(self.allocator, @intCast(value & 0xFF));
         } else if (value < 1073741824) {
-            try writer.append(@intCast(0x80 | (value >> 24)));
-            try writer.append(@intCast((value >> 16) & 0xFF));
-            try writer.append(@intCast((value >> 8) & 0xFF));
-            try writer.append(@intCast(value & 0xFF));
+            try writer.append(self.allocator, @intCast(0x80 | (value >> 24)));
+            try writer.append(self.allocator, @intCast((value >> 16) & 0xFF));
+            try writer.append(self.allocator, @intCast((value >> 8) & 0xFF));
+            try writer.append(self.allocator, @intCast(value & 0xFF));
         } else {
-            try writer.append(@intCast(0xC0 | (value >> 56)));
-            try writer.append(@intCast((value >> 48) & 0xFF));
-            try writer.append(@intCast((value >> 40) & 0xFF));
-            try writer.append(@intCast((value >> 32) & 0xFF));
-            try writer.append(@intCast((value >> 24) & 0xFF));
-            try writer.append(@intCast((value >> 16) & 0xFF));
-            try writer.append(@intCast((value >> 8) & 0xFF));
-            try writer.append(@intCast(value & 0xFF));
+            try writer.append(self.allocator, @intCast(0xC0 | (value >> 56)));
+            try writer.append(self.allocator, @intCast((value >> 48) & 0xFF));
+            try writer.append(self.allocator, @intCast((value >> 40) & 0xFF));
+            try writer.append(self.allocator, @intCast((value >> 32) & 0xFF));
+            try writer.append(self.allocator, @intCast((value >> 24) & 0xFF));
+            try writer.append(self.allocator, @intCast((value >> 16) & 0xFF));
+            try writer.append(self.allocator, @intCast((value >> 8) & 0xFF));
+            try writer.append(self.allocator, @intCast(value & 0xFF));
         }
     }
 
     /// Add middleware to the server
     pub fn use(self: *Self, middleware: Middleware.MiddlewareFn) !void {
-        try self.middleware_stack.append(middleware);
+        try self.middleware_stack.append(self.allocator, middleware);
     }
 
     /// Add route handlers
@@ -568,13 +564,13 @@ pub const Http3Server = struct {
 
     /// Cleanup expired connections
     pub fn cleanupExpiredConnections(self: *Self) void {
-        var to_remove = std.ArrayList([]const u8).init(self.allocator);
+        var to_remove = std.ArrayList([]const u8){};
         defer to_remove.deinit();
 
         var iterator = self.connections.iterator();
         while (iterator.next()) |entry| {
             if (entry.value_ptr.*.isExpired(self.config.keep_alive_timeout_ms)) {
-                to_remove.append(entry.key_ptr.*) catch continue;
+                to_remove.append(self.allocator, entry.key_ptr.*) catch continue;
             }
         }
 
@@ -600,7 +596,7 @@ pub const QpackEncoder = struct {
 
     pub fn init(allocator: std.mem.Allocator) Self {
         return Self{
-            .dynamic_table = std.ArrayList(HeaderField).init(allocator),
+            .dynamic_table = std.ArrayList(HeaderField){},
             .allocator = allocator,
         };
     }
@@ -609,7 +605,7 @@ pub const QpackEncoder = struct {
         for (self.dynamic_table.items) |*field| {
             field.deinit();
         }
-        self.dynamic_table.deinit();
+        self.dynamic_table.deinit(self.allocator);
     }
 
     pub fn encode(self: *Self, headers: []const HeaderField, allocator: std.mem.Allocator) ![]u8 {

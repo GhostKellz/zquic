@@ -414,8 +414,8 @@ test "Telemetry: Metrics collection and monitoring" {
     try expect(summary.zero_rtt_success_rate >= 0.0 and summary.zero_rtt_success_rate <= 1.0);
     
     // Test JSON export
-    var json_buffer = std.ArrayList(u8).init(tracker.allocator);
-    defer json_buffer.deinit();
+    var json_buffer = std.ArrayList(u8){};
+    defer json_buffer.deinit(tracker.allocator);
     
     try telemetry.exportJson(json_buffer.writer());
     try expect(json_buffer.items.len > 0);
@@ -553,8 +553,8 @@ test "Memory Safety: Extensive allocation/deallocation" {
     var cycle: u32 = 0;
     while (cycle < 10) : (cycle += 1) {
         // Create multiple contexts
-        var contexts = std.ArrayList(*HybridPQTlsContext).init(tracker.allocator);
-        defer contexts.deinit();
+        var contexts = std.ArrayList(*HybridPQTlsContext){};
+        defer contexts.deinit(tracker.allocator);
         
         const config = HybridConfig{
             .enable_ml_kem = true,
@@ -567,7 +567,7 @@ test "Memory Safety: Extensive allocation/deallocation" {
         while (i < 5) : (i += 1) {
             const ctx = try tracker.allocator.create(HybridPQTlsContext);
             ctx.* = try HybridPQTlsContext.init(tracker.allocator, i % 2 == 0, config);
-            try contexts.append(ctx);
+            try contexts.append(tracker.allocator, ctx);
         }
         
         // Use contexts

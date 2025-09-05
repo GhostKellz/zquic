@@ -94,7 +94,7 @@ const DoQConnection = struct {
             self.server.stats.queries_failed += 1;
             return;
         };
-        defer query.deinit();
+        defer query.deinit(self.allocator);
 
         // Process query through handler
         var response = if (self.server.config.handler) |handler|
@@ -106,7 +106,7 @@ const DoQConnection = struct {
         else
             try self.createEchoResponse(&query);
         
-        defer response.deinit();
+        defer response.deinit(self.allocator);
 
         // Serialize response
         const response_data = try response.serializeToStream(self.allocator);
@@ -126,7 +126,7 @@ const DoQConnection = struct {
     }
 
     fn createErrorResponse(self: *DoQConnection, query: *const DnsMessage, rcode: message.DnsResponseCode) !DnsMessage {
-        var response = DnsMessage.init(self.allocator);
+        var response = DnsMessage{};
         
         response.header = message.DnsHeader{
             .id = query.header.id,
@@ -153,7 +153,7 @@ const DoQConnection = struct {
     }
 
     fn createEchoResponse(self: *DoQConnection, query: *const DnsMessage) !DnsMessage {
-        var response = DnsMessage.init(self.allocator);
+        var response = DnsMessage{};
         
         response.header = message.DnsHeader{
             .id = query.header.id,
@@ -197,9 +197,9 @@ pub const DoQServer = struct {
     config: DoQServerConfig,
     stats: DoQServerStats,
     allocator: std.mem.Allocator,
-    io: zsync.GreenThreadsIo,
-    query_channel: @TypeOf(zsync.bounded(DnsQueryRequest, std.heap.page_allocator, 256) catch unreachable),
-    response_channel: @TypeOf(zsync.bounded(DnsQueryResponse, std.heap.page_allocator, 256) catch unreachable),
+    io: zsync.Io,
+    query_channel: std.ArrayList(DnsQueryRequest),
+    response_channel: std.ArrayList(DnsQueryResponse),
     is_running: bool = false,
     start_time: i64,
 
@@ -224,9 +224,12 @@ pub const DoQServer = struct {
             .config = config,
             .stats = DoQServerStats{},
             .allocator = allocator,
-            .io = try zsync.GreenThreadsIo.init(allocator, .{}),
-            .query_channel = try zsync.bounded(DnsQueryRequest, allocator, 256),
-            .response_channel = try zsync.bounded(DnsQueryResponse, allocator, 256),
+            .io = blk: {
+                var blocking_io = zsync.createBlockingIo(allocator);
+                break :blk blocking_io.io();
+            },
+            .query_channel = std.ArrayList(DnsQueryRequest){},
+            .response_channel = std.ArrayList(DnsQueryResponse){},
             .start_time = std.time.timestamp(),
         };
     }
@@ -284,7 +287,7 @@ pub const DoQServer = struct {
 
     fn loadCertificates(self: *DoQServer) !void {
         // Load TLS certificates for post-quantum crypto
-        const cert_data = std.fs.cwd().readFileAlloc(self.allocator, self.config.cert_path, 1024 * 1024) catch |err| {
+        const cert_data = std.fs.cwd().readFileAlloc(self.config.cert_path, self.allocator, 1024 * 1024) catch |err| {
             std.log.err("DoQ: Failed to load certificate {s}: {}", .{ self.config.cert_path, err });
             return err;
         };
@@ -363,14 +366,14 @@ pub const DoQServer = struct {
             
             // Clean up response
             var mutable_response = response_msg.response;
-            mutable_response.deinit();
+            mutable_response.deinit(self.allocator);
 
             zsync.yieldNow();
         }
     }
 
     fn createErrorResponse(self: *DoQServer, query: *const DnsMessage) !DnsMessage {
-        var response = DnsMessage.init(self.allocator);
+        var response = DnsMessage{};
         
         response.header = message.DnsHeader{
             .id = query.header.id,
@@ -397,7 +400,7 @@ pub const DoQServer = struct {
     }
 
     fn createEchoResponse(self: *DoQServer, query: *const DnsMessage) !DnsMessage {
-        var response = DnsMessage.init(self.allocator);
+        var response = DnsMessage{};
         
         response.header = message.DnsHeader{
             .id = query.header.id,
@@ -474,7 +477,7 @@ fn ghostDnsHandler(query: *DnsMessage, allocator: std.mem.Allocator) !DnsMessage
     
     // For now, return echo response
     // TODO: Implement real ghostdns integration
-    var response = DnsMessage.init(allocator);
+    var response = DnsMessage{};
     
     response.header = message.DnsHeader{
         .id = query.header.id,
@@ -508,8 +511,8 @@ fn ghostDnsHandler(query: *DnsMessage, allocator: std.mem.Allocator) !DnsMessage
     return response;
 }
 
-fn createEmptyResponse(query: *const DnsMessage, allocator: std.mem.Allocator) !DnsMessage {
-    var response = DnsMessage.init(allocator);
+fn createEmptyResponse(query: *const DnsMessage, _: std.mem.Allocator) !DnsMessage {
+    var response = DnsMessage{};
     response.header = message.DnsHeader{
         .id = query.header.id,
         .flags = 0x8180, // QR=1, RD=1, RA=1

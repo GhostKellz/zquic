@@ -12,18 +12,18 @@ pub const QpackDecoder = struct {
 
     const Self = @This();
 
-    pub fn init(allocator: std.mem.Allocator, max_capacity: u32) Self {
+    pub fn init(_: std.mem.Allocator, max_capacity: u32) Self {
         return Self{
-            .dynamic_table = std.ArrayList(HeaderField).init(allocator),
+            .dynamic_table = std.ArrayList(HeaderField){},
             .max_table_capacity = max_capacity,
         };
     }
 
-    pub fn deinit(self: *Self) void {
+    pub fn deinit(self: *Self, allocator: std.mem.Allocator) void {
         for (self.dynamic_table.items) |*field| {
             field.deinit();
         }
-        self.dynamic_table.deinit();
+        self.dynamic_table.deinit(allocator);
     }
 
     /// Decode QPACK-encoded headers (simplified implementation)
@@ -60,7 +60,7 @@ pub const HeaderField = struct {
 
 test "qpack decoder initialization" {
     var decoder = QpackDecoder.init(std.testing.allocator, 4096);
-    defer decoder.deinit();
+    defer decoder.deinit(std.testing.allocator);
 
     try std.testing.expect(decoder.max_table_capacity == 4096);
 }

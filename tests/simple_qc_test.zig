@@ -181,15 +181,15 @@ test "Connection Pool Simulation: Basic operations" {
     const allocator = gpa.allocator();
     
     // Simulate connection pool
-    var connections = std.ArrayList(u64).init(allocator);
-    defer connections.deinit();
+    var connections = std.ArrayList(u64){};
+    defer connections.deinit(allocator);
     
     const max_connections = 10;
     
     // Create initial pool
     var i: u64 = 0;
     while (i < max_connections) : (i += 1) {
-        try connections.append(i);
+        try connections.append(allocator, i);
     }
     
     try testing.expect(connections.items.len == max_connections);
@@ -198,7 +198,7 @@ test "Connection Pool Simulation: Basic operations" {
     const acquired = connections.pop();
     try testing.expect(connections.items.len == max_connections - 1);
     
-    try connections.append(acquired);
+    try connections.append(allocator, acquired);
     try testing.expect(connections.items.len == max_connections);
     
     std.log.info("✅ Connection pool simulation test passed");
@@ -217,18 +217,18 @@ test "Telemetry Simulation: Metrics collection" {
         protocol: enum { doq, http3, grpc, custom },
     };
     
-    var metrics = std.ArrayList(MetricSample).init(allocator);
-    defer metrics.deinit();
+    var metrics = std.ArrayList(MetricSample){};
+    defer metrics.deinit(allocator);
     
     // Collect sample metrics
-    try metrics.append(.{
+    try metrics.append(allocator, .{
         .timestamp = std.time.microTimestamp(),
         .latency_us = 500,
         .bytes = 1024,
         .protocol = .doq,
     });
     
-    try metrics.append(.{
+    try metrics.append(allocator, .{
         .timestamp = std.time.microTimestamp(),
         .latency_us = 2000,
         .bytes = 512,

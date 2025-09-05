@@ -576,7 +576,7 @@ pub const WraithProxy = struct {
         proxy.* = WraithProxy{
             .config = config,
             .server = null,
-            .router = try Router.init(allocator),
+            .router = Router.init(allocator),
             .backend_pool = BackendPool.init(allocator, .least_connections),
             .health_checker = undefined,
             .response_cache = ResponseCache.init(allocator, config.cache_size_mb),
@@ -814,7 +814,7 @@ fn proxyHandler(req: *Request, res: *Response) !void {
     
     // Read and forward response body
     var response_body = std.ArrayList(u8).init(allocator);
-    defer response_body.deinit();
+    defer response_body.deinit(allocator);
     
     const reader = backend_request.reader();
     reader.readAllArrayList(&response_body, 1024 * 1024) catch |err| {

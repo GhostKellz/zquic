@@ -32,19 +32,19 @@ test "Memory Safety: No leaks in basic operations" {
     @memset(large_data, 0xBB);
     
     // 4. Many small allocations (session tickets)
-    var tickets = std.ArrayList([]u8).init(allocator);
+    var tickets = std.ArrayList([]u8){};
     defer {
         for (tickets.items) |ticket| {
             allocator.free(ticket);
         }
-        tickets.deinit();
+        tickets.deinit(allocator);
     }
     
     var i: u32 = 0;
     while (i < 100) : (i += 1) {
         const ticket = try allocator.alloc(u8, 16);
         std.crypto.random.bytes(ticket);
-        try tickets.append(ticket);
+        try tickets.append(allocator, ticket);
     }
     
     try testing.expect(small_data.len == 32);
@@ -62,18 +62,18 @@ test "Performance: Allocation speed is reasonable" {
     
     // Test allocation speed for crypto operations
     const iterations = 1000;
-    var allocations = std.ArrayList([]u8).init(allocator);
+    var allocations = std.ArrayList([]u8){};
     defer {
         for (allocations.items) |allocation| {
             allocator.free(allocation);
         }
-        allocations.deinit();
+        allocations.deinit(allocator);
     }
     
     var i: u32 = 0;
     while (i < iterations) : (i += 1) {
         const data = try allocator.alloc(u8, 256); // Typical crypto operation size
-        try allocations.append(data);
+        try allocations.append(allocator, data);
         
         // Simulate work
         @memset(data, @as(u8, @intCast(i % 256)));
@@ -172,19 +172,19 @@ test "Zero-RTT Simulation: Session management" {
     };
     
     // Create multiple sessions
-    var sessions = std.ArrayList(SessionData).init(allocator);
+    var sessions = std.ArrayList(SessionData){};
     defer {
         for (sessions.items) |*session| {
             session.deinit(allocator);
         }
-        sessions.deinit();
+        sessions.deinit(allocator);
     }
     
     // Generate sessions
     var i: u32 = 0;
     while (i < 50) : (i += 1) {
         const session = try SessionData.init(allocator);
-        try sessions.append(session);
+        try sessions.append(allocator, session);
     }
     
     try testing.expect(sessions.items.len == 50);
@@ -274,8 +274,8 @@ test "Connection Pool: Basic management" {
         created_at: i64,
     };
     
-    var pool = std.ArrayList(Connection).init(allocator);
-    defer pool.deinit();
+    var pool = std.ArrayList(Connection){};
+    defer pool.deinit(allocator);
     
     // Create connections for different protocols
     const protocols = [_]u8{ 0, 1, 2, 3 };
@@ -292,7 +292,7 @@ test "Connection Pool: Basic management" {
                 .bytes_received = conn_id * 512,
                 .created_at = std.time.timestamp(),
             };
-            try pool.append(conn);
+            try pool.append(allocator, conn);
             conn_id += 1;
         }
     }
@@ -336,8 +336,8 @@ test "Telemetry: Metrics collection" {
         success: bool,
     };
     
-    var metrics = std.ArrayList(Metric).init(allocator);
-    defer metrics.deinit();
+    var metrics = std.ArrayList(Metric){};
+    defer metrics.deinit(allocator);
     
     // Collect metrics for high-frequency operations
     var sample: u32 = 0;
@@ -349,7 +349,7 @@ test "Telemetry: Metrics collection" {
             .protocol = @as(u8, @intCast(sample % 4)), // 4 protocols
             .success = (sample % 100) != 0, // 99% success rate
         };
-        try metrics.append(metric);
+        try metrics.append(allocator, metric);
     }
     
     // Analyze metrics

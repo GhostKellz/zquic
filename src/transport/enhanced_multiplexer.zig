@@ -137,7 +137,7 @@ pub const EnhancedUdpMultiplexer = struct {
             const addr_index = i % local_addresses.len;
             socket.* = UdpSocket.init(local_addresses[addr_index]) catch |err| {
                 // Clean up already initialized sockets
-                for (sockets[0..i]) |*s| s.deinit();
+                for (sockets[0..i]) |*s| s.deinit(allocator);
                 return switch (err) {
                     error.AddressInUse => Error.ZquicError.AddressInUse,
                     error.AddressNotAvailable => Error.ZquicError.InvalidArgument,
@@ -196,7 +196,7 @@ pub const EnhancedUdpMultiplexer = struct {
             .coalesced_packets = coalesced_packets,
             .coalescing_enabled = config.enable_packet_coalescing,
             .connection_id_generator = ConnectionIdGenerator.init(config.connection_id_length),
-            .migration_tracker = MigrationTracker.init(allocator),
+            .migration_tracker = MigrationTrackersrc/transport/enhanced_multiplexer.zig,
             .stats = MultiplexerStats.init(),
         };
     }
@@ -204,7 +204,7 @@ pub const EnhancedUdpMultiplexer = struct {
     pub fn deinit(self: *Self) void {
         // Clean up sockets
         for (self.sockets) |*socket| {
-            socket.deinit();
+            socket.deinit(allocator);
         }
         self.allocator.free(self.sockets);
         
@@ -223,8 +223,8 @@ pub const EnhancedUdpMultiplexer = struct {
         // Clean up other resources
         self.allocator.free(self.batch_packets);
         self.allocator.free(self.socket_load);
-        self.connections.deinit();
-        self.migration_tracker.deinit();
+        self.connections.deinit(allocator);
+        self.migration_tracker.deinit(allocator);
     }
     
     /// Select optimal socket for new connection using load balancing
@@ -453,13 +453,13 @@ pub const EnhancedUdpMultiplexer = struct {
         const current_time = std.time.microTimestamp();
         const timeout_us = @as(i64, self.config.connection_timeout_ms) * 1000;
         
-        var expired_connections = std.ArrayList(u64).init(self.allocator);
-        defer expired_connections.deinit();
+        var expired_connections = std.ArrayList(u64).init(allocator);
+        defer expired_connections.deinit(allocator);
         
         var iterator = self.connections.iterator();
         while (iterator.next()) |entry| {
             if (entry.value_ptr.isExpired(current_time, timeout_us)) {
-                expired_connections.append(entry.key_ptr.*) catch continue;
+                expired_connections.append(allocator, entry.key_ptr.*) catch continue;
             }
         }
         
@@ -531,7 +531,7 @@ pub const MigrationTracker = struct {
     }
     
     pub fn deinit(self: *MigrationTracker) void {
-        self.active_migrations.deinit();
+        self.active_migrations.deinit(allocator);
     }
     
     pub fn startMigration(self: *MigrationTracker, connection_id: Packet.ConnectionId, old_address: std.net.Address, new_address: std.net.Address) Error.ZquicError!void {

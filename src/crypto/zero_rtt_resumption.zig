@@ -48,7 +48,7 @@ pub const AntiReplayWindow = struct {
     }
     
     pub fn deinit(self: *Self) void {
-        self.received_packets.deinit();
+        self.received_packets.deinit(allocator);
     }
     
     /// Check if packet number is duplicate and update window
@@ -133,8 +133,8 @@ pub const ZeroRttSessionManager = struct {
     }
     
     pub fn deinit(self: *Self) void {
-        self.sessions.deinit();
-        self.anti_replay.deinit();
+        self.sessions.deinit(allocator);
+        self.anti_replay.deinit(allocator);
     }
     
     /// Create new session ticket for resumption
@@ -187,12 +187,12 @@ pub const ZeroRttSessionManager = struct {
     /// Cleanup expired sessions
     pub fn cleanupExpiredSessions(self: *Self) !void {
         var expired_tickets = std.ArrayList([16]u8).init(self.allocator);
-        defer expired_tickets.deinit();
+        defer expired_tickets.deinit(allocator);
         
         var iterator = self.sessions.iterator();
         while (iterator.next()) |entry| {
             if (entry.value_ptr.isExpired()) {
-                try expired_tickets.append(entry.key_ptr.*);
+                try expired_tickets.append(allocator, entry.key_ptr.*);
             }
         }
         
@@ -239,7 +239,7 @@ pub const ZeroRttContext = struct {
     }
     
     pub fn deinit(self: *Self) void {
-        self.early_data_buffer.deinit();
+        self.early_data_buffer.deinit(allocator);
         if (self.session_ticket) |*ticket| {
             secureZero(std.mem.asBytes(&ticket.resumption_secret));
         }
@@ -264,7 +264,7 @@ pub const ZeroRttContext = struct {
             return false; // Would exceed limit
         }
         
-        try self.early_data_buffer.appendSlice(data);
+        try self.early_data_buffer.appendSlice(allocator, data);
         self.early_data_sent += @as(u32, @intCast(data.len));
         
         return true;
@@ -305,12 +305,12 @@ fn secureZero(data: []u8) void {
 /// Test 0-RTT functionality
 pub fn testZeroRtt() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    defer _ = gpa.deinit();
+    defer _ = gpa.deinit(allocator);
     const allocator = gpa.allocator();
     
     // Create session manager
     var session_mgr = try ZeroRttSessionManager.init(allocator);
-    defer session_mgr.deinit();
+    defer session_mgr.deinit(allocator);
     
     // Create resumption secret
     var resumption_secret: [32]u8 = undefined;
@@ -320,8 +320,8 @@ pub fn testZeroRtt() !void {
     const ticket = try session_mgr.createSessionTicket(resumption_secret);
     
     // Create 0-RTT context
-    var zero_rtt = ZeroRttContext.init(allocator);
-    defer zero_rtt.deinit();
+    var zero_rtt = try ZeroRttContext.init(allocator);
+    defer zero_rtt.deinit(allocator);
     
     // Start early data
     try zero_rtt.startEarlyData(ticket);

@@ -80,7 +80,7 @@ pub const ServiceInfo = extern struct {
 
 /// Initialize GhostBridge with configuration
 /// Returns: Opaque bridge pointer or null on failure
-pub export fn ghostbridge_init(config: *const BridgeConfig) callconv(.C) ?*GhostBridgeOpaque {
+pub export fn ghostbridge_init(config: *const BridgeConfig) callconv(.c) ?*GhostBridgeOpaque {
     // Convert FFI config to internal config
     const bridge_config = GhostBridgeConfig{
         .port = config.port,
@@ -101,17 +101,17 @@ pub export fn ghostbridge_init(config: *const BridgeConfig) callconv(.C) ?*Ghost
 }
 
 /// Destroy GhostBridge and free resources
-pub export fn ghostbridge_destroy(bridge: ?*GhostBridgeOpaque) callconv(.C) void {
+pub export fn ghostbridge_destroy(bridge: ?*GhostBridgeOpaque) callconv(.c) void {
     if (bridge) |b| {
         const real_bridge: *GhostBridge = @ptrCast(@alignCast(b));
-        real_bridge.deinit();
+        real_bridge.deinit(allocator);
         std.log.info("GhostBridge destroyed", .{});
     }
 }
 
 /// Start GhostBridge server
 /// Returns: 0 on success, -1 on failure
-pub export fn ghostbridge_start(bridge: ?*GhostBridgeOpaque) callconv(.C) c_int {
+pub export fn ghostbridge_start(bridge: ?*GhostBridgeOpaque) callconv(.c) c_int {
     if (bridge) |b| {
         const real_bridge: *GhostBridge = @ptrCast(@alignCast(b));
         real_bridge.start() catch |err| {
@@ -124,7 +124,7 @@ pub export fn ghostbridge_start(bridge: ?*GhostBridgeOpaque) callconv(.C) c_int 
 }
 
 /// Stop GhostBridge server
-pub export fn ghostbridge_stop(bridge: ?*GhostBridgeOpaque) callconv(.C) void {
+pub export fn ghostbridge_stop(bridge: ?*GhostBridgeOpaque) callconv(.c) void {
     if (bridge) |b| {
         const real_bridge: *GhostBridge = @ptrCast(@alignCast(b));
         real_bridge.stop();
@@ -133,7 +133,7 @@ pub export fn ghostbridge_stop(bridge: ?*GhostBridgeOpaque) callconv(.C) void {
 
 /// Register a service with GhostBridge
 /// Returns: 0 on success, -1 on failure
-pub export fn ghostbridge_register_service(bridge: ?*GhostBridgeOpaque, name: [*:0]const u8, endpoint: [*:0]const u8) callconv(.C) c_int {
+pub export fn ghostbridge_register_service(bridge: ?*GhostBridgeOpaque, name: [*:0]const u8, endpoint: [*:0]const u8) callconv(.c) c_int {
     if (bridge) |b| {
         const real_bridge: *GhostBridge = @ptrCast(@alignCast(b));
         const name_str = std.mem.span(name);
@@ -160,7 +160,7 @@ pub export fn ghostbridge_register_service(bridge: ?*GhostBridgeOpaque, name: [*
 
 /// Unregister a service from GhostBridge
 /// Returns: 0 on success, -1 on failure
-pub export fn ghostbridge_unregister_service(bridge: ?*GhostBridgeOpaque, name: [*:0]const u8) callconv(.C) c_int {
+pub export fn ghostbridge_unregister_service(bridge: ?*GhostBridgeOpaque, name: [*:0]const u8) callconv(.c) c_int {
     if (bridge) |b| {
         const real_bridge: *GhostBridge = @ptrCast(@alignCast(b));
         const name_str = std.mem.span(name);
@@ -177,7 +177,7 @@ pub export fn ghostbridge_unregister_service(bridge: ?*GhostBridgeOpaque, name: 
 
 /// Create gRPC connection to a service
 /// Returns: Opaque connection pointer or null on failure
-pub export fn ghostbridge_create_grpc_connection(bridge: ?*GhostBridgeOpaque, service_name: [*:0]const u8) callconv(.C) ?*GrpcConnectionOpaque {
+pub export fn ghostbridge_create_grpc_connection(bridge: ?*GhostBridgeOpaque, service_name: [*:0]const u8) callconv(.c) ?*GrpcConnectionOpaque {
     if (bridge) |b| {
         const real_bridge: *GhostBridge = @ptrCast(@alignCast(b));
         const name_str = std.mem.span(service_name);
@@ -194,7 +194,7 @@ pub export fn ghostbridge_create_grpc_connection(bridge: ?*GhostBridgeOpaque, se
 }
 
 /// Close gRPC connection
-pub export fn ghostbridge_close_grpc_connection(conn: ?*GrpcConnectionOpaque) callconv(.C) void {
+pub export fn ghostbridge_close_grpc_connection(conn: ?*GrpcConnectionOpaque) callconv(.c) void {
     if (conn) |c| {
         const real_conn: *GrpcConnection = @ptrCast(@alignCast(c));
         // Note: Connection cleanup is handled by GhostBridge.closeConnection()
@@ -205,7 +205,7 @@ pub export fn ghostbridge_close_grpc_connection(conn: ?*GrpcConnectionOpaque) ca
 
 /// Send gRPC request
 /// Returns: Pointer to response or null on failure (caller must free)
-pub export fn ghostbridge_send_grpc_request(conn: ?*GrpcConnectionOpaque, request: *const GrpcRequest) callconv(.C) ?*GrpcResponse {
+pub export fn ghostbridge_send_grpc_request(conn: ?*GrpcConnectionOpaque, request: *const GrpcRequest) callconv(.c) ?*GrpcResponse {
     if (conn) |c| {
         const real_conn: *GrpcConnection = @ptrCast(@alignCast(c));
         
@@ -247,7 +247,7 @@ pub export fn ghostbridge_send_grpc_request(conn: ?*GrpcConnectionOpaque, reques
 }
 
 /// Free gRPC response memory
-pub export fn ghostbridge_free_grpc_response(response: ?*GrpcResponse) callconv(.C) void {
+pub export fn ghostbridge_free_grpc_response(response: ?*GrpcResponse) callconv(.c) void {
     if (response) |resp| {
         // Free the response data
         if (resp.data_len > 0) {
@@ -259,7 +259,7 @@ pub export fn ghostbridge_free_grpc_response(response: ?*GrpcResponse) callconv(
 
 /// Create bidirectional gRPC stream
 /// Returns: Opaque stream pointer or null on failure
-pub export fn ghostbridge_create_grpc_stream(conn: ?*GrpcConnectionOpaque, service: [*:0]const u8, method: [*:0]const u8) callconv(.C) ?*GrpcStreamOpaque {
+pub export fn ghostbridge_create_grpc_stream(conn: ?*GrpcConnectionOpaque, service: [*:0]const u8, method: [*:0]const u8) callconv(.c) ?*GrpcStreamOpaque {
     if (conn) |c| {
         const real_conn: *GrpcConnection = @ptrCast(@alignCast(c));
         const service_str = std.mem.span(service);
@@ -284,7 +284,7 @@ pub export fn ghostbridge_create_grpc_stream(conn: ?*GrpcConnectionOpaque, servi
 
 /// Send data on gRPC stream
 /// Returns: Number of bytes sent, -1 on error
-pub export fn ghostbridge_stream_send(stream: ?*GrpcStreamOpaque, data: [*]const u8, len: usize) callconv(.C) isize {
+pub export fn ghostbridge_stream_send(stream: ?*GrpcStreamOpaque, data: [*]const u8, len: usize) callconv(.c) isize {
     if (stream) |s| {
         const real_stream: *GrpcStream = @ptrCast(@alignCast(s));
         const message_data = data[0..len];
@@ -301,7 +301,7 @@ pub export fn ghostbridge_stream_send(stream: ?*GrpcStreamOpaque, data: [*]const
 
 /// Receive data from gRPC stream
 /// Returns: Number of bytes received, 0 for no data, -1 on error
-pub export fn ghostbridge_stream_receive(stream: ?*GrpcStreamOpaque, buffer: [*]u8, max_len: usize) callconv(.C) isize {
+pub export fn ghostbridge_stream_receive(stream: ?*GrpcStreamOpaque, buffer: [*]u8, max_len: usize) callconv(.c) isize {
     if (stream) |s| {
         const real_stream: *GrpcStream = @ptrCast(@alignCast(s));
         
@@ -327,7 +327,7 @@ pub export fn ghostbridge_stream_receive(stream: ?*GrpcStreamOpaque, buffer: [*]
 }
 
 /// Close gRPC stream
-pub export fn ghostbridge_close_grpc_stream(stream: ?*GrpcStreamOpaque) callconv(.C) void {
+pub export fn ghostbridge_close_grpc_stream(stream: ?*GrpcStreamOpaque) callconv(.c) void {
     if (stream) |s| {
         const real_stream: *GrpcStream = @ptrCast(@alignCast(s));
         real_stream.close() catch |err| {
@@ -339,7 +339,7 @@ pub export fn ghostbridge_close_grpc_stream(stream: ?*GrpcStreamOpaque) callconv
 
 /// Get list of registered services
 /// Returns: Number of services found, -1 on error
-pub export fn ghostbridge_get_services(bridge: ?*GhostBridgeOpaque, services: [*]ServiceInfo, max_services: usize) callconv(.C) c_int {
+pub export fn ghostbridge_get_services(bridge: ?*GhostBridgeOpaque, services: [*]ServiceInfo, max_services: usize) callconv(.c) c_int {
     if (bridge) |b| {
         const real_bridge: *GhostBridge = @ptrCast(@alignCast(b));
         
@@ -385,7 +385,7 @@ pub export fn ghostbridge_get_services(bridge: ?*GhostBridgeOpaque, services: [*
 
 /// Check service health
 /// Returns: Health status (0 = unknown, 1 = healthy, 2 = unhealthy)
-pub export fn ghostbridge_check_service_health(bridge: ?*GhostBridgeOpaque, service_name: [*:0]const u8) callconv(.C) u8 {
+pub export fn ghostbridge_check_service_health(bridge: ?*GhostBridgeOpaque, service_name: [*:0]const u8) callconv(.c) u8 {
     if (bridge) |b| {
         const real_bridge: *GhostBridge = @ptrCast(@alignCast(b));
         const name_str = std.mem.span(service_name);
@@ -402,7 +402,7 @@ pub export fn ghostbridge_check_service_health(bridge: ?*GhostBridgeOpaque, serv
 }
 
 /// Set service health callback
-pub export fn ghostbridge_set_health_callback(bridge: ?*GhostBridge, callback: ?*const fn (service_name: [*:0]const u8, status: u8) callconv(.C) void) callconv(.C) void {
+pub export fn ghostbridge_set_health_callback(bridge: ?*GhostBridge, callback: ?*const fn (service_name: [*:0]const u8, status: u8) callconv(.c) void) callconv(.c) void {
     _ = bridge;
     _ = callback;
 
@@ -410,7 +410,7 @@ pub export fn ghostbridge_set_health_callback(bridge: ?*GhostBridge, callback: ?
 }
 
 /// Get bridge statistics
-pub export fn ghostbridge_get_stats(bridge: ?*GhostBridgeOpaque, total_connections: *u64, active_connections: *u32, requests_handled: *u64, errors: *u64) callconv(.C) c_int {
+pub export fn ghostbridge_get_stats(bridge: ?*GhostBridgeOpaque, total_connections: *u64, active_connections: *u32, requests_handled: *u64, errors: *u64) callconv(.c) c_int {
     if (bridge) |b| {
         const real_bridge: *GhostBridge = @ptrCast(@alignCast(b));
         
@@ -429,7 +429,7 @@ pub export fn ghostbridge_get_stats(bridge: ?*GhostBridgeOpaque, total_connectio
 }
 
 /// Testing function for FFI validation
-pub export fn ghostbridge_test_echo(input: [*:0]const u8) callconv(.C) [*:0]const u8 {
+pub export fn ghostbridge_test_echo(input: [*:0]const u8) callconv(.c) [*:0]const u8 {
     _ = input;
     return "GhostBridge FFI Test OK";
 }

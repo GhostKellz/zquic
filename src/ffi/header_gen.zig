@@ -417,7 +417,7 @@ const HeaderFile = struct {
 
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    defer _ = gpa.deinit();
+    defer _ = gpa.deinit(allocator);
     const allocator = gpa.allocator();
 
     var args = std.process.args();

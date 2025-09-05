@@ -172,12 +172,12 @@ pub const MultiplexedConnection = struct {
     
     pub fn deinit(self: *Self) void {
         if (self.zero_rtt_context) |*ctx| {
-            ctx.deinit();
+            ctx.deinit(allocator);
         }
         if (self.pq_tls_context) |*ctx| {
-            ctx.deinit();
+            ctx.deinit(allocator);
         }
-        self.protocol_streams.deinit();
+        self.protocol_streams.deinit(allocator);
     }
     
     /// Enable protocol on this connection
@@ -318,23 +318,23 @@ pub const CryptoConnectionMultiplexer = struct {
         
         // Clean up all connections
         for (self.connections.items) |conn| {
-            conn.deinit();
+            conn.deinit(allocator);
             self.allocator.destroy(conn);
         }
         
-        self.connections.deinit();
-        self.connection_map.deinit();
+        self.connections.deinit(allocator);
+        self.connection_map.deinit(allocator);
         
         // Clean up protocol pools
         var protocol_iter = std.enums.values(ProtocolType);
         while (protocol_iter.next()) |protocol| {
-            self.protocol_pools.getPtr(protocol).?.deinit();
+            self.protocol_pools.getPtr(protocol).?.deinit(allocator);
         }
         
         // Clean up priority queues
         var priority_iter = std.enums.values(ConnectionPriority);
         while (priority_iter.next()) |priority| {
-            self.priority_queues.getPtr(priority).?.deinit();
+            self.priority_queues.getPtr(priority).?.deinit(allocator);
         }
     }
     
@@ -439,7 +439,7 @@ pub const CryptoConnectionMultiplexer = struct {
         
         // Configure crypto features
         if (self.config.enable_zero_rtt) {
-            mux_conn.zero_rtt_context = ZeroRttContext.init(self.allocator);
+            mux_conn.zero_rtt_context = try ZeroRttContext.init(self.allocator);
         }
         
         if (self.config.enable_post_quantum) {
@@ -450,10 +450,10 @@ pub const CryptoConnectionMultiplexer = struct {
         try mux_conn.enableProtocol(protocol);
         
         // Add to pools
-        try self.connections.append(mux_conn);
+        try self.connections.append(allocator, mux_conn);
         try self.connection_map.put(connection_id, mux_conn);
-        try self.protocol_pools.getPtr(protocol).?.append(mux_conn);
-        try self.priority_queues.getPtr(priority).?.append(mux_conn);
+        try self.protocol_pools.getPtr(protocol).?.append(allocator, mux_conn);
+        try self.priority_queues.getPtr(priority).?.append(allocator, mux_conn);
         
         // Update statistics
         _ = self.total_connections.fetchAdd(1, .Monotonic);
@@ -488,8 +488,8 @@ pub const CryptoConnectionMultiplexer = struct {
         defer self.pool_mutex.unlock();
         
         const now = std.time.microTimestamp();
-        var connections_to_remove = std.ArrayList(usize).init(self.allocator);
-        defer connections_to_remove.deinit();
+        var connections_to_remove = std.ArrayList(usize).init(allocator);
+        defer connections_to_remove.deinit(allocator);
         
         // Check each connection
         for (self.connections.items, 0..) |conn, i| {
@@ -497,7 +497,7 @@ pub const CryptoConnectionMultiplexer = struct {
             
             // Remove idle connections
             if (idle_time > self.config.idle_timeout_ms * 1000) {
-                try connections_to_remove.append(i);
+                try connections_to_remove.append(allocator, i);
                 continue;
             }
             
@@ -506,7 +506,7 @@ pub const CryptoConnectionMultiplexer = struct {
             
             // Remove unhealthy connections
             if (!conn.health.isHealthy() and conn.health.consecutive_failures > 5) {
-                try connections_to_remove.append(i);
+                try connections_to_remove.append(allocator, i);
             }
         }
         
@@ -515,7 +515,7 @@ pub const CryptoConnectionMultiplexer = struct {
         for (connections_to_remove.items) |index| {
             const conn = self.connections.orderedRemove(index);
             self.removeConnectionFromPools(conn);
-            conn.deinit();
+            conn.deinit(allocator);
             self.allocator.destroy(conn);
             
             _ = self.total_connections.fetchSub(1, .Monotonic);

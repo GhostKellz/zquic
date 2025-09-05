@@ -126,8 +126,8 @@ pub const SettingsFrame = struct {
         };
     }
 
-    pub fn deinit(self: *Self) void {
-        self.settings.deinit();
+    pub fn deinit(self: *Self, allocator: std.mem.Allocator) void {
+        self.settings.deinit(allocator);
     }
 
     pub fn addSetting(self: *Self, id: u64, value: u64) !void {
@@ -159,7 +159,7 @@ pub const SettingsFrame = struct {
     }
 
     pub fn parse(data: []const u8, allocator: std.mem.Allocator) Error.ZquicError!Self {
-        var settings = Self.init(allocator);
+        var settings = SettingsFrame.init(allocator);
         var offset: usize = 0;
 
         while (offset < data.len) {
@@ -205,13 +205,13 @@ pub const FrameParser = struct {
         };
     }
 
-    pub fn deinit(self: *Self) void {
-        self.buffer.deinit();
+    pub fn deinit(self: *Self, allocator: std.mem.Allocator) void {
+        self.buffer.deinit(allocator);
     }
 
     /// Process incoming data and extract complete frames
     pub fn processData(self: *Self, data: []const u8, allocator: std.mem.Allocator) Error.ZquicError![]Frame {
-        try self.buffer.appendSlice(data);
+        try self.buffer.appendSlice(allocator, data);
 
         var frames = std.ArrayList(Frame).init(allocator);
 
@@ -244,7 +244,7 @@ pub const FrameParser = struct {
                         .payload = payload,
                     };
 
-                    try frames.append(frame);
+                    try frames.append(allocator, frame);
 
                     // Remove payload bytes from buffer
                     const remaining = self.buffer.items[self.bytes_remaining..];
@@ -352,7 +352,7 @@ test "frame header parsing and serialization" {
 
 test "settings frame" {
     var settings = SettingsFrame.init(std.testing.allocator);
-    defer settings.deinit();
+    defer settings.deinit(std.testing.allocator);
 
     try settings.addSetting(1, 1000);
     try settings.addSetting(6, 4096);

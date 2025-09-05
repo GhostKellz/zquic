@@ -19,12 +19,12 @@ test "Memory Safety: Comprehensive leak detection" {
     const allocator = gpa.allocator();
     
     // Simulate crypto operations with heavy allocation
-    var allocations = std.ArrayList([]u8).init(allocator);
+    var allocations = std.ArrayList([]u8){};
     defer {
         for (allocations.items) |allocation| {
             allocator.free(allocation);
         }
-        allocations.deinit();
+        allocations.deinit(allocator);
     }
     
     // Create many allocations of different sizes (simulating crypto operations)
@@ -34,7 +34,7 @@ test "Memory Safety: Comprehensive leak detection" {
     while (cycle < 100) : (cycle += 1) {
         for (sizes) |size| {
             const data = try allocator.alloc(u8, size);
-            try allocations.append(data);
+            try allocations.append(allocator, data);
             
             // Fill with pattern to ensure we're using the memory
             @memset(data, @as(u8, @intCast(cycle % 256)));
@@ -144,8 +144,8 @@ test "Zero-RTT Operations: Session resumption simulation" {
     };
     
     // Create multiple session tickets
-    var tickets = std.ArrayList(SessionTicket).init(allocator);
-    defer tickets.deinit();
+    var tickets = std.ArrayList(SessionTicket){};
+    defer tickets.deinit(allocator);
     
     const num_sessions = 100;
     var i: u32 = 0;
@@ -161,7 +161,7 @@ test "Zero-RTT Operations: Session resumption simulation" {
         std.crypto.random.bytes(&ticket.ticket_id);
         std.crypto.random.bytes(&ticket.resumption_secret);
         
-        try tickets.append(ticket);
+        try tickets.append(allocator, ticket);
     }
     
     // Validate all tickets
@@ -260,8 +260,8 @@ test "Connection Multiplexing: Pool management simulation" {
         bytes_received: u64,
     };
     
-    var connection_pool = std.ArrayList(Connection).init(allocator);
-    defer connection_pool.deinit();
+    var connection_pool = std.ArrayList(Connection){};
+    defer connection_pool.deinit(allocator);
     
     // Create diverse connection pool
     const protocols = [_]@TypeOf(Connection.protocol){ .doq, .http3, .grpc, .custom };
@@ -280,7 +280,7 @@ test "Connection Multiplexing: Pool management simulation" {
                 .bytes_sent = 0,
                 .bytes_received = 0,
             };
-            try connection_pool.append(conn);
+            try connection_pool.append(allocator, conn);
             conn_id += 1;
         }
     }
@@ -329,8 +329,8 @@ test "Telemetry: Performance monitoring simulation" {
         success: bool,
     };
     
-    var metrics = std.ArrayList(MetricSample).init(allocator);
-    defer metrics.deinit();
+    var metrics = std.ArrayList(MetricSample){};
+    defer metrics.deinit(allocator);
     
     // Simulate high-frequency data collection
     const num_samples = 10000;
@@ -349,7 +349,7 @@ test "Telemetry: Performance monitoring simulation" {
             .success = (sample_id % 100) != 0, // 99% success rate
         };
         
-        try metrics.append(metric);
+        try metrics.append(allocator, metric);
     }
     
     // Calculate performance statistics

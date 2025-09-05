@@ -65,7 +65,7 @@ pub const RoutePattern = struct {
     pub fn init(allocator: std.mem.Allocator, pattern: []const u8) !Self {
         var route = Self{
             .pattern = try allocator.dupe(u8, pattern),
-            .segments = std.ArrayList(Segment).init(allocator),
+            .segments = std.ArrayList(Segment){},
             .allocator = allocator,
         };
 
@@ -78,7 +78,7 @@ pub const RoutePattern = struct {
         for (self.segments.items) |segment| {
             self.allocator.free(segment.value);
         }
-        self.segments.deinit();
+        self.segments.deinit(self.allocator);
     }
 
     fn parsePattern(self: *Self) !void {
@@ -90,19 +90,19 @@ pub const RoutePattern = struct {
             if (std.mem.startsWith(u8, segment, ":")) {
                 // Parameter segment: :id, :name, etc.
                 const param_name = segment[1..];
-                try self.segments.append(Segment{
+                try self.segments.append(self.allocator, Segment{
                     .kind = .parameter,
                     .value = try self.allocator.dupe(u8, param_name),
                 });
             } else if (std.mem.eql(u8, segment, "*")) {
                 // Wildcard segment
-                try self.segments.append(Segment{
+                try self.segments.append(self.allocator, Segment{
                     .kind = .wildcard,
                     .value = try self.allocator.dupe(u8, "*"),
                 });
             } else {
                 // Literal segment
-                try self.segments.append(Segment{
+                try self.segments.append(self.allocator, Segment{
                     .kind = .literal,
                     .value = try self.allocator.dupe(u8, segment),
                 });
@@ -165,25 +165,25 @@ pub const Route = struct {
             .method = method,
             .pattern = try RoutePattern.init(allocator, pattern),
             .handler = handler,
-            .middleware = std.ArrayList(MiddlewareFn).init(allocator),
+            .middleware = std.ArrayList(MiddlewareFn){},
             .allocator = allocator,
         };
     }
 
     pub fn deinit(self: *Self) void {
         self.pattern.deinit();
-        self.middleware.deinit();
+        self.middleware.deinit(self.allocator);
     }
 
     pub fn addMiddleware(self: *Self, middleware: MiddlewareFn) !void {
-        try self.middleware.append(middleware);
+        try self.middleware.append(self.allocator, middleware);
     }
 
     /// Check if this route matches the request
     pub fn matches(self: *const Self, method: Method, path: []const u8) bool {
         if (self.method != method) return false;
 
-        var temp_params = RouteParams.init(self.allocator);
+        var temp_params = std.StringHashMap([]const u8).init(self.allocator);
         defer temp_params.deinit();
 
         return self.pattern.match(path, &temp_params);
@@ -192,7 +192,7 @@ pub const Route = struct {
     /// Execute route with middleware chain
     pub fn execute(self: *const Self, request: *Request, response: *Response) Error.ZquicError!void {
         // Extract route parameters
-        var params = RouteParams.init(self.allocator);
+        var params = std.StringHashMap([]const u8).init(self.allocator);
         defer params.deinit();
 
         _ = self.pattern.match(request.path, &params);
@@ -239,8 +239,8 @@ pub const Router = struct {
 
     pub fn init(allocator: std.mem.Allocator) Self {
         return Self{
-            .routes = std.ArrayList(Route).init(allocator),
-            .global_middleware = std.ArrayList(MiddlewareFn).init(allocator),
+            .routes = std.ArrayList(Route){},
+            .global_middleware = std.ArrayList(MiddlewareFn){},
             .not_found_handler = null,
             .error_handler = null,
             .allocator = allocator,
@@ -251,14 +251,14 @@ pub const Router = struct {
         for (self.routes.items) |*route| {
             route.deinit();
         }
-        self.routes.deinit();
-        self.global_middleware.deinit();
+        self.routes.deinit(self.allocator);
+        self.global_middleware.deinit(self.allocator);
     }
 
     /// Add a route
     pub fn addRoute(self: *Self, method: Method, pattern: []const u8, handler: HandlerFn) !void {
         const route = try Route.init(self.allocator, method, pattern, handler);
-        try self.routes.append(route);
+        try self.routes.append(self.allocator, route);
     }
 
     /// Convenience methods for common HTTP methods
@@ -288,7 +288,7 @@ pub const Router = struct {
 
     /// Add global middleware (applies to all routes)
     pub fn use(self: *Self, middleware: MiddlewareFn) !void {
-        try self.global_middleware.append(middleware);
+        try self.global_middleware.append(self.allocator, middleware);
     }
 
     /// Set custom 404 handler
@@ -346,7 +346,7 @@ test "route pattern matching" {
     var pattern = try RoutePattern.init(std.testing.allocator, "/users/:id/posts/:post_id");
     defer pattern.deinit();
 
-    var params = RouteParams.init(std.testing.allocator);
+    var params = std.StringHashMap([]const u8).init(std.testing.allocator);
     defer params.deinit();
 
     try std.testing.expect(pattern.match("/users/123/posts/456", &params));

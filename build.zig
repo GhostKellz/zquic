@@ -110,7 +110,7 @@ pub fn build(b: *std.Build) void {
     b.installArtifact(doq_server_exe);
 
     // FFI Library for Rust Integration
-    const ffi_lib = b.addSharedLibrary(.{
+    const ffi_lib = b.addLibrary(.{
         .name = "zquic",
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/ffi/zquic_ffi.zig"),
@@ -125,7 +125,7 @@ pub fn build(b: *std.Build) void {
     b.installArtifact(ffi_lib);
 
     // Static library for linking
-    const static_lib = b.addStaticLibrary(.{
+    const static_lib = b.addLibrary(.{
         .name = "zquic",
         .root_module = b.createModule(.{
             .root_source_file = b.path("src/ffi/zquic_ffi.zig"),

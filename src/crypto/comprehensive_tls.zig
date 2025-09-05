@@ -199,7 +199,7 @@ pub const TransportParameters = struct {
         while (iterator.next()) |entry| {
             allocator.free(entry.value_ptr.*);
         }
-        self.custom_parameters.deinit();
+        self.custom_parameters.deinit(allocator);
     }
 };
 
@@ -301,8 +301,8 @@ pub const CryptoKeys = struct {
         defer self.allocator.free(full_label);
         
         // Create HkdfLabel structure
-        var hkdf_label = std.ArrayList(u8).init(self.allocator);
-        defer hkdf_label.deinit();
+        var hkdf_label = std.ArrayList(u8).init(allocator);
+        defer hkdf_label.deinit(allocator);
         
         // Length (2 bytes)
         try hkdf_label.writer().writeIntBig(u16, @intCast(out.len));
@@ -384,7 +384,7 @@ pub const Certificate = struct {
             self.allocator.free(entry.key_ptr.*);
             self.allocator.free(entry.value_ptr.*);
         }
-        self.extensions.deinit();
+        self.extensions.deinit(allocator);
     }
     
     pub fn verify(self: *const Self, signature: []const u8, message: []const u8) !bool {
@@ -521,7 +521,7 @@ pub const ComprehensiveTlsContext = struct {
             .cipher_suite = .tls_aes_128_gcm_sha256,
             .signature_algorithm = .ed25519,
             .key_exchange_algorithm = .x25519,
-            .transport_params = TransportParameters.init(allocator),
+            .transport_params = TransportParameterssrc/crypto/comprehensive_tls.zig,
             .peer_transport_params = null,
             .initial_keys = null,
             .handshake_keys = null,
@@ -554,25 +554,25 @@ pub const ComprehensiveTlsContext = struct {
         }
         
         // Clean up cryptographic keys
-        if (self.initial_keys) |*keys| keys.deinit();
-        if (self.handshake_keys) |*keys| keys.deinit();
-        if (self.application_keys) |*keys| keys.deinit();
-        if (self.zero_rtt_keys) |*keys| keys.deinit();
+        if (self.initial_keys) |*keys| keys.deinit(allocator);
+        if (self.handshake_keys) |*keys| keys.deinit(allocator);
+        if (self.application_keys) |*keys| keys.deinit(allocator);
+        if (self.zero_rtt_keys) |*keys| keys.deinit(allocator);
         
         // Clean up certificates
         for (self.certificate_chain.items) |*cert| {
-            cert.deinit();
+            cert.deinit(allocator);
         }
-        self.certificate_chain.deinit();
+        self.certificate_chain.deinit(allocator);
         
         for (self.peer_certificate_chain.items) |*cert| {
-            cert.deinit();
+            cert.deinit(allocator);
         }
-        self.peer_certificate_chain.deinit();
+        self.peer_certificate_chain.deinit(allocator);
         
         // Clean up session ticket
         if (self.session_ticket) |*ticket| {
-            ticket.deinit();
+            ticket.deinit(allocator);
         }
         
         // Clean up sensitive key material
@@ -617,7 +617,7 @@ pub const ComprehensiveTlsContext = struct {
             self.allocator.free(secret);
         }
         
-        self.handshake_transcript.deinit();
+        self.handshake_transcript.deinit(allocator);
     }
     
     /// Initialize connection for client
@@ -638,7 +638,7 @@ pub const ComprehensiveTlsContext = struct {
         // Load server certificate chain
         for (certificate_chain) |cert_data| {
             const cert = try Certificate.init(self.allocator, cert_data);
-            try self.certificate_chain.append(cert);
+            try self.certificate_chain.append(allocator, cert);
         }
         
         try self.generateKeyPair();
@@ -685,9 +685,9 @@ pub const ComprehensiveTlsContext = struct {
     /// Process handshake message
     pub fn processHandshakeMessage(self: *Self, message_type: u8, message: []const u8) !void {
         // Add to handshake transcript
-        try self.handshake_transcript.append(message_type);
+        try self.handshake_transcript.append(allocator, message_type);
         try self.handshake_transcript.writer().writeIntBig(u24, @intCast(message.len));
-        try self.handshake_transcript.appendSlice(message);
+        try self.handshake_transcript.appendSlice(allocator, message);
         
         switch (message_type) {
             1 => try self.processClientHello(message), // ClientHello

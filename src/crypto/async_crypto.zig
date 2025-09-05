@@ -58,15 +58,15 @@ const QuicCrypto = struct {
 /// Async QUIC crypto pipeline for high-throughput packet processing
 pub const AsyncQuicCrypto = struct {
     allocator: std.mem.Allocator,
-    io: zsync.GreenThreadsIo,
+    io: zsync.Io,
     crypto_pipeline: AsyncCrypto.CryptoPipeline,
     packet_crypto: *PacketCrypto,
 
     const Self = @This();
 
     pub fn init(allocator: std.mem.Allocator, packet_crypto: *PacketCrypto) !Self {
-        // Initialize zsync green threads I/O for high-concurrency crypto operations
-        const io = zsync.GreenThreadsIo{};
+        // Initialize zsync I/O for high-concurrency crypto operations
+        const io = zsync.createBlockingIo(allocator).io();
 
         // Create async crypto pipeline
         const crypto_pipeline = try AsyncCrypto.CryptoPipeline.init(allocator, .{
@@ -84,7 +84,7 @@ pub const AsyncQuicCrypto = struct {
     }
 
     pub fn deinit(self: *Self) void {
-        self.crypto_pipeline.deinit();
+        self.crypto_pipeline.deinit(allocator);
     }
 
     /// Process packet batch asynchronously
@@ -200,13 +200,13 @@ pub const ZeroCopyAsyncProcessor = struct {
     pub fn init(allocator: std.mem.Allocator) !Self {
         return Self{
             .allocator = allocator,
-            .packet_pool = PacketMemoryPool.init(allocator),
+            .packet_pool = PacketMemoryPoolsrc/crypto/async_crypto.zig,
             .crypto_buffers = [_][1500]u8{[_]u8{0} ** 1500} ** 64,
         };
     }
 
     pub fn deinit(self: *Self) void {
-        self.packet_pool.deinit();
+        self.packet_pool.deinit(allocator);
     }
 
     /// Process packet with zero allocation
@@ -240,20 +240,20 @@ pub const AsyncQuicServer = struct {
         return Self{
             .allocator = allocator,
             .async_crypto = try AsyncQuicCrypto.init(allocator, packet_crypto),
-            .zero_copy_processor = try ZeroCopyAsyncProcessor.init(allocator),
+            .zero_copy_processor = try ZeroCopyAsyncProcessorsrc/crypto/async_crypto.zig,
         };
     }
 
     pub fn deinit(self: *Self) void {
-        self.async_crypto.deinit();
-        self.zero_copy_processor.deinit();
+        self.async_crypto.deinit(allocator);
+        self.zero_copy_processor.deinit(allocator);
     }
 
     /// Start async QUIC server
     pub fn start(self: *Self, port: u16) !void {
         // Create listener (simplified interface)
         const listener = try self.createListener(port);
-        defer listener.deinit();
+        defer listener.deinit(allocator);
 
         std.log.info("Starting async QUIC server on port {}", .{port});
 
@@ -341,14 +341,14 @@ test "async crypto initialization" {
         false,
         .aes_256_gcm_sha384,
     );
-    defer tls_context.deinit();
+    defer tls_context.deinit(allocator);
 
     var packet_crypto = try PacketCrypto.init(allocator, &tls_context, null);
-    defer packet_crypto.deinit();
+    defer packet_crypto.deinit(allocator);
 
     // Initialize async crypto
     var async_crypto = try AsyncQuicCrypto.init(allocator, &packet_crypto);
-    defer async_crypto.deinit();
+    defer async_crypto.deinit(allocator);
 
     // Test passed if no errors
     try std.testing.expect(true);

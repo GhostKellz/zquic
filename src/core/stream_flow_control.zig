@@ -292,11 +292,11 @@ pub const StreamPriorityInfo = struct {
     }
     
     pub fn deinit(self: *StreamPriorityInfo) void {
-        self.children.deinit();
+        self.children.deinit(allocator);
     }
     
     pub fn addChild(self: *StreamPriorityInfo, child_stream_id: u64) !void {
-        try self.children.append(child_stream_id);
+        try self.children.append(allocator, child_stream_id);
     }
     
     pub fn removeChild(self: *StreamPriorityInfo, child_stream_id: u64) void {
@@ -374,17 +374,17 @@ pub const StreamScheduler = struct {
     pub fn deinit(self: *StreamScheduler) void {
         var iterator = self.streams.iterator();
         while (iterator.next()) |entry| {
-            entry.value_ptr.deinit();
+            entry.value_ptr.deinit(allocator);
         }
-        self.streams.deinit();
-        self.ready_streams.deinit();
-        self.blocked_streams.deinit();
+        self.streams.deinit(allocator);
+        self.ready_streams.deinit(allocator);
+        self.blocked_streams.deinit(allocator);
     }
     
     pub fn addStream(self: *StreamScheduler, stream_id: u64, priority: StreamPriority) !void {
         const priority_info = StreamPriorityInfo.init(self.allocator, stream_id, priority);
         try self.streams.put(stream_id, priority_info);
-        try self.ready_streams.append(stream_id);
+        try self.ready_streams.append(allocator, stream_id);
     }
     
     pub fn removeStream(self: *StreamScheduler, stream_id: u64) void {
@@ -408,7 +408,7 @@ pub const StreamScheduler = struct {
                 }
             }
             
-            stream_info.deinit();
+            stream_info.deinit(allocator);
             _ = self.streams.remove(stream_id);
         }
         
@@ -456,7 +456,7 @@ pub const StreamScheduler = struct {
         for (self.ready_streams.items, 0..) |id, i| {
             if (id == stream_id) {
                 _ = self.ready_streams.swapRemove(i);
-                self.blocked_streams.append(stream_id) catch {};
+                self.blocked_streams.append(allocator, stream_id) catch {};
                 break;
             }
         }
@@ -467,7 +467,7 @@ pub const StreamScheduler = struct {
         for (self.blocked_streams.items, 0..) |id, i| {
             if (id == stream_id) {
                 _ = self.blocked_streams.swapRemove(i);
-                self.ready_streams.append(stream_id) catch {};
+                self.ready_streams.append(allocator, stream_id) catch {};
                 break;
             }
         }
@@ -560,14 +560,14 @@ pub const StreamScheduler = struct {
     }
     
     fn selectFromTree(self: *StreamScheduler, parent_stream_id: ?u64) ?u64 {
-        var candidates = std.ArrayList(u64).init(self.allocator);
-        defer candidates.deinit();
+        var candidates = std.ArrayList(u64).init(allocator);
+        defer candidates.deinit(allocator);
         
         // Find streams with the specified parent
         for (self.ready_streams.items) |stream_id| {
             if (self.streams.get(stream_id)) |stream_info| {
                 if (stream_info.parent_stream_id == parent_stream_id) {
-                    candidates.append(stream_id) catch continue;
+                    candidates.append(allocator, stream_id) catch continue;
                 }
             }
         }
@@ -664,8 +664,8 @@ pub const FlowControlManager = struct {
     }
     
     pub fn deinit(self: *FlowControlManager) void {
-        self.stream_flow_controls.deinit();
-        self.scheduler.deinit();
+        self.stream_flow_controls.deinit(allocator);
+        self.scheduler.deinit(allocator);
     }
     
     pub fn addStream(self: *FlowControlManager, stream_id: u64, priority: StreamPriority) !void {
@@ -748,13 +748,13 @@ pub const FlowControlManager = struct {
     }
     
     pub fn generateFlowControlUpdates(self: *FlowControlManager) ![]Frame {
-        var frames = std.ArrayList(Frame).init(self.allocator);
-        defer frames.deinit();
+        var frames = std.ArrayList(Frame).init(allocator);
+        defer frames.deinit(allocator);
         
         // Check connection-level flow control
         if (self.connection_flow_control.shouldUpdateReceiveWindow()) {
             const frame = self.connection_flow_control.generateWindowUpdate();
-            try frames.append(Frame{ .max_data = frame });
+            try frames.append(allocator, Frame{ .max_data = frame });
         }
         
         // Check stream-level flow control
@@ -762,7 +762,7 @@ pub const FlowControlManager = struct {
         while (iterator.next()) |entry| {
             if (entry.value_ptr.shouldUpdateReceiveWindow()) {
                 const frame = entry.value_ptr.generateWindowUpdate();
-                try frames.append(Frame{ .max_stream_data = frame });
+                try frames.append(allocator, Frame{ .max_stream_data = frame });
             }
         }
         
@@ -801,8 +801,8 @@ pub const FlowControlManager = struct {
     }
     
     pub fn getFlowControlStats(self: *const FlowControlManager) FlowControlStats {
-        var stream_stats = std.ArrayList(StreamFlowControlStats).init(self.allocator);
-        defer stream_stats.deinit();
+        var stream_stats = std.ArrayList(StreamFlowControlStats).init(allocator);
+        defer stream_stats.deinit(allocator);
         
         var iterator = self.stream_flow_controls.iterator();
         while (iterator.next()) |entry| {
@@ -815,7 +815,7 @@ pub const FlowControlManager = struct {
                 .is_blocked = entry.value_ptr.is_blocked,
                 .utilization = entry.value_ptr.getUtilization(),
             };
-            stream_stats.append(stats) catch continue;
+            stream_stats.append(allocator, stats) catch continue;
         }
         
         return FlowControlStats{

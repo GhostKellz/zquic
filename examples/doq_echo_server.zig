@@ -72,7 +72,7 @@ fn startDemoServer(allocator: std.mem.Allocator) !void {
     // Simulate server operation with periodic stats
     var tick: u32 = 0;
     while (tick < 60) { // Run for 60 seconds
-        std.time.sleep(1_000_000_000); // 1 second
+        std.Thread.sleep(1_000_000_000); // 1 second
         tick += 1;
         
         if (tick % 10 == 0) {
@@ -269,21 +269,21 @@ fn handleMXRecord(query: *const zquic.DoQ.DnsMessage, domain: []const u8, alloca
     const mx_domain = try std.fmt.allocPrint(allocator, "mail.{s}", .{domain});
     defer allocator.free(mx_domain);
     
-    var mx_data = std.ArrayList(u8).init(allocator);
-    defer mx_data.deinit();
+    var mx_data = std.ArrayList(u8){};
+    defer mx_data.deinit(allocator);
     
     // Priority (10)
-    try mx_data.append(0);
-    try mx_data.append(10);
+    try mx_data.append(allocator, 0);
+    try mx_data.append(allocator, 10);
     
     // Encode domain name
     var parts = std.mem.splitScalar(u8, mx_domain, '.');
     while (parts.next()) |part| {
         if (part.len == 0) continue;
-        try mx_data.append(@intCast(part.len));
-        try mx_data.appendSlice(part);
+        try mx_data.append(allocator, @intCast(part.len));
+        try mx_data.appendSlice(allocator, part);
     }
-    try mx_data.append(0); // null terminator
+    try mx_data.append(allocator, 0); // null terminator
 
     response.answers[0] = zquic.DoQ.DnsResourceRecord{
         .name = try allocator.dupe(u8, domain),
@@ -291,7 +291,7 @@ fn handleMXRecord(query: *const zquic.DoQ.DnsMessage, domain: []const u8, alloca
         .rclass = 1,
         .ttl = 300,
         .rdlength = @intCast(mx_data.items.len),
-        .rdata = try mx_data.toOwnedSlice(),
+        .rdata = try mx_data.toOwnedSlice(allocator),
     };
 
     std.log.info("✅ MX Record: {s} -> 10 {s}", .{ domain, mx_domain });

@@ -73,7 +73,7 @@ pub const VpnNode = struct {
             .router = router,
             .load_balancer = load_balancer,
             .tls_context = tls_context,
-            .connections = std.ArrayList(*zquic.Connection.Connection).init(allocator),
+            .connections = std.ArrayList(*zquic.Connection.Connection){},
             .peer_connections = std.HashMap(u64, *zquic.Connection.Connection, std.hash_map.AutoContext(u64), std.hash_map.default_max_load_percentage).init(allocator),
         };
     }
@@ -91,7 +91,7 @@ pub const VpnNode = struct {
             conn.deinit();
             self.allocator.destroy(conn);
         }
-        self.connections.deinit();
+        self.connections.deinit(self.allocator);
         self.peer_connections.deinit();
     }
     
@@ -150,7 +150,7 @@ pub const VpnNode = struct {
             try self.router.addRoute(peer_addr, peer_addr, "ghost0", conn_id);
             
             // Store connection
-            try self.connections.append(connection);
+            try self.connections.append(self.allocator, connection);
             const peer_hash = hashAddress(peer_addr);
             try self.peer_connections.put(peer_hash, connection);
             
