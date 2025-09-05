@@ -183,7 +183,7 @@ pub const Route = struct {
     pub fn matches(self: *const Self, method: Method, path: []const u8) bool {
         if (self.method != method) return false;
 
-        var temp_params = std.StringHashMap([]const u8).init(self.allocator);
+        var temp_params = RouteParams.init(self.allocator);
         defer temp_params.deinit();
 
         return self.pattern.match(path, &temp_params);
@@ -192,7 +192,7 @@ pub const Route = struct {
     /// Execute route with middleware chain
     pub fn execute(self: *const Self, request: *Request, response: *Response) Error.ZquicError!void {
         // Extract route parameters
-        var params = std.StringHashMap([]const u8).init(self.allocator);
+        var params = RouteParams.init(self.allocator);
         defer params.deinit();
 
         _ = self.pattern.match(request.path, &params);

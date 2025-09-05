@@ -256,7 +256,7 @@ pub const Request = struct {
     }
 
     pub fn appendBody(self: *Self, data: []const u8) !void {
-        try self.body.appendSlice(data);
+        try self.body.appendSlice(self.allocator, data);
     }
 
     pub fn getBody(self: *const Self) []const u8 {

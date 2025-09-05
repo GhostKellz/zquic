@@ -261,7 +261,7 @@ pub const DoQServer = struct {
         // Main server loop with zsync async handling
         while (self.is_running) {
             try self.acceptConnections();
-            zsync.yieldNow();
+            std.Thread.sleep(1000000); // 1ms sleep as workaround
         }
     }
 
@@ -287,13 +287,13 @@ pub const DoQServer = struct {
 
     fn loadCertificates(self: *DoQServer) !void {
         // Load TLS certificates for post-quantum crypto
-        const cert_data = std.fs.cwd().readFileAlloc(self.config.cert_path, self.allocator, 1024 * 1024) catch |err| {
+        const cert_data = std.fs.cwd().readFileAlloc(self.config.cert_path, self.allocator, @enumFromInt(1024 * 1024)) catch |err| {
             std.log.err("DoQ: Failed to load certificate {s}: {}", .{ self.config.cert_path, err });
             return err;
         };
         defer self.allocator.free(cert_data);
 
-        const key_data = std.fs.cwd().readFileAlloc(self.allocator, self.config.key_path, 1024 * 1024) catch |err| {
+        const key_data = std.fs.cwd().readFileAlloc(self.config.key_path, self.allocator, @enumFromInt(1024 * 1024)) catch |err| {
             std.log.err("DoQ: Failed to load private key {s}: {}", .{ self.config.key_path, err });
             return err;
         };

@@ -402,7 +402,7 @@ pub const PQQuicContext = struct {
 
     pub fn deinit(self: *Self) void {
         if (self.key_exchange) |*key_ex| {
-            key_ex.deinit(self.allocator);
+            key_ex.deinit();
         }
     }
 

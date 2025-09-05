@@ -239,7 +239,7 @@ pub const ActiveRequest = struct {
 
     pub fn deinit(self: *Self) void {
         self.request.deinit();
-        self.response.deinit(self.allocator);
+        self.response.deinit();
     }
 
     pub fn duration(self: *const Self) i64 {
@@ -483,7 +483,7 @@ pub const Http3Server = struct {
 
         // Encode the frame with type and length
         var frame_data = std.ArrayList(u8){};
-        defer frame_data.deinit();
+        defer frame_data.deinit(self.allocator);
 
         // Write frame type (1 byte)
         try frame_data.append(self.allocator, @as(u8, @intCast(@intFromEnum(frame.frame_type))));
@@ -492,7 +492,7 @@ pub const Http3Server = struct {
         try self.writeVarint(&frame_data, frame.payload.len);
 
         // Write payload
-        try frame_data.appendSlice(frame.payload);
+        try frame_data.appendSlice(self.allocator, frame.payload);
 
         // Send the frame data to the QUIC stream
         const bytes_written = try stream.write(frame_data.items, false);

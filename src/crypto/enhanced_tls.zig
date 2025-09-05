@@ -370,9 +370,9 @@ pub const EnhancedTlsContext = struct {
     }
 
     pub fn deinit(self: *Self) void {
-        if (self.initial_keys) |*keys| keys.deinit(self.allocator);
-        if (self.handshake_keys) |*keys| keys.deinit(self.allocator);
-        if (self.application_keys) |*keys| keys.deinit(self.allocator);
+        if (self.initial_keys) |*keys| keys.deinit();
+        if (self.handshake_keys) |*keys| keys.deinit();
+        if (self.application_keys) |*keys| keys.deinit();
     }
 
     /// Initialize initial keys for QUIC
