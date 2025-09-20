@@ -115,8 +115,7 @@ pub const SuperConnection = struct {
     crypto_operations: ?*anyopaque,
     
     // Async I/O contexts for optimal performance
-    blocking_io_instance: zsync.BlockingIo,  // Storage for BlockingIo
-    io: zsync.Io,        // For network I/O coordination
+    io: zsync.GreenThreadsIo,        // For network I/O coordination
     crypto_io: zsync.BlockingIo,     // For CPU-intensive PQ crypto
     
     // Stream management
@@ -134,7 +133,7 @@ pub const SuperConnection = struct {
             .server => 1, // Server-initiated bidirectional streams start at 1
         };
 
-        var connection = Self{
+        return Self{
             .role = role,
             .state = .initial,
             .local_conn_id = local_conn_id,
@@ -146,17 +145,11 @@ pub const SuperConnection = struct {
             .outgoing_packets = undefined, // TODO: Replace with zsync.bounded(Packet.Packet, allocator, 256) when zsync compatibility fixed
             .stream_events = undefined, // TODO: Replace with zsync.unbounded(StreamEvent, allocator) when zsync compatibility fixed
             .crypto_operations = undefined, // TODO: Replace with zsync.bounded(CryptoOperation, allocator, 64) when zsync compatibility fixed
-            .blocking_io_instance = zsync.BlockingIo.init(allocator, 65536),
-            .io = undefined,
-            .crypto_io = zsync.BlockingIo.init(allocator, 65536),
+            .io = zsync.GreenThreadsIo.init(allocator, .{}) catch @panic("GreenThreadsIo init failed"),
+            .crypto_io = zsync.BlockingIo.init(allocator),
             .streams = std.HashMap(u64, *Stream.SuperStream, std.hash_map.AutoContext(u64), std.hash_map.default_max_load_percentage).init(allocator),
             .allocator = allocator,
         };
-        
-        // Initialize the Io interface after struct creation
-        connection.io = connection.blocking_io_instance.io();
-        
-        return connection;
     }
 
     pub fn deinit(self: *Self) void {
@@ -366,8 +359,12 @@ pub const Connection = struct {
         const stream_id = self.super_connection.next_stream_id;
         self.super_connection.next_stream_id += 4; // Increment by 4 for proper stream ID space
         
-        self.super_connection.createStreamAsync(stream_id, stream_type) catch {
-            return Error.ZquicError.InternalError;
+        self.super_connection.createStreamAsync(stream_id, stream_type) catch |err| {
+            // Convert zsync runtime errors to ZquicError
+            switch (err) {
+                error.AlreadyRunning, error.RuntimeShutdown, error.TaskSpawnFailed, error.SystemResourceExhausted => return Error.ZquicError.InternalError,
+                else => return err,
+            }
         };
         
         // Return a legacy stream wrapper (implementation needed)

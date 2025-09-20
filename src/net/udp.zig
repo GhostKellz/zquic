@@ -57,8 +57,7 @@ pub const SuperUdpSocket = struct {
     packet_batches: zsync.bounded(PacketBatch, 64),
     send_queue: zsync.bounded([]const u8, 1024),
     recv_queue: zsync.bounded(PacketBatch, 128),
-    blocking_io_instance: zsync.BlockingIo,
-    io: zsync.Io,
+    io: zsync.GreenThreadsIo,
     stats: SuperStats,
     allocator: std.mem.Allocator,
     local_address: std.net.Address,
@@ -69,23 +68,17 @@ pub const SuperUdpSocket = struct {
     pub fn init(allocator: std.mem.Allocator, local_address: std.net.Address) !Self {
         const socket = try zsync.UdpSocket.bind(local_address);
         
-        var result = Self{
+        return Self{
             .socket = socket,
-            .packet_batches = try zsync.bounded(PacketBatch, allocator, 64),
-            .send_queue = try zsync.bounded([]const u8, allocator, 1024),
-            .recv_queue = try zsync.bounded(PacketBatch, allocator, 128),
-            .blocking_io_instance = zsync.BlockingIo.init(allocator, 65536),
-            .io = undefined,
+            .packet_batches = zsync.bounded(PacketBatch, 64),
+            .send_queue = zsync.bounded([]const u8, 1024),
+            .recv_queue = zsync.bounded(PacketBatch, 128),
+            .io = zsync.GreenThreadsIo{},
             .stats = SuperStats{},
             .allocator = allocator,
             .local_address = local_address,
             .batch_counter = std.atomic.Value(u64).init(0),
         };
-        
-        // Initialize the Io interface after struct creation
-        result.io = result.blocking_io_instance.io();
-        
-        return result;
     }
 
     pub fn deinit(self: *Self) void {

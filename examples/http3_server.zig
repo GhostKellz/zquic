@@ -147,23 +147,23 @@ fn simulatePostRequest(server: *zquic.Http3.Http3Server, conn_id: []const u8, st
 
 fn createHeadersPayload(allocator: std.mem.Allocator, method: []const u8, path: []const u8, content_type: ?[]const u8) ![]u8 {
     // Simplified QPACK encoding (in reality, this would be properly encoded)
-    var headers = std.ArrayList(u8){};
+    var headers = std.ArrayList(u8).init(allocator);
 
     // Add pseudo-headers
-    try headers.appendSlice(allocator, ":method ");
-    try headers.appendSlice(allocator, method);
-    try headers.appendSlice(allocator, "\n:path ");
-    try headers.appendSlice(allocator, path);
-    try headers.appendSlice(allocator, "\n:scheme https\n:authority example.com\n");
+    try headers.appendSlice(":method ");
+    try headers.appendSlice(method);
+    try headers.appendSlice("\n:path ");
+    try headers.appendSlice(path);
+    try headers.appendSlice("\n:scheme https\n:authority example.com\n");
 
     // Add content-type if provided
     if (content_type) |ct| {
-        try headers.appendSlice(allocator, "content-type ");
-        try headers.appendSlice(allocator, ct);
-        try headers.appendSlice(allocator, "\n");
+        try headers.appendSlice("content-type ");
+        try headers.appendSlice(ct);
+        try headers.appendSlice("\n");
     }
 
-    return headers.toOwnedSlice(allocator);
+    return headers.toOwnedSlice();
 }
 
 // Route Handlers

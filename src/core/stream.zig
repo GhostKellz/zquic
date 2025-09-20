@@ -100,9 +100,8 @@ pub const SuperStream = struct {
     // Flow control channels for optimal throughput
     flow_control: ?*anyopaque,
     
-    // Async I/O context for cooperative multitasking  
-    blocking_io_instance: zsync.BlockingIo,
-    io: zsync.Io,
+    // Async I/O context for cooperative multitasking
+    io: zsync.GreenThreadsIo,
     
     // Flow control state (atomic for lock-free access)
     send_window: std.atomic.Value(u64),
@@ -117,7 +116,7 @@ pub const SuperStream = struct {
     const Self = @This();
 
     pub fn init(allocator: std.mem.Allocator, id: u64, stream_type: StreamType) !Self {
-        var stream = Self{
+        return Self{
             .id = id,
             .stream_type = stream_type,
             .state = std.atomic.Value(StreamState).init(.idle),
@@ -128,8 +127,7 @@ pub const SuperStream = struct {
             .write_data = undefined, // TODO: Replace with zsync.bounded(DataChunk, allocator, 256) when zsync compatibility fixed
             .flow_control = undefined, // TODO: Replace with zsync.bounded(FlowControlEvent, allocator, 64) when zsync compatibility fixed
             
-            .blocking_io_instance = zsync.BlockingIo.init(allocator, 32768),
-            .io = undefined,
+            .io = zsync.GreenThreadsIo.init(allocator, .{}) catch @panic("GreenThreadsIo init failed"),
             
             // Initialize flow control (generous initial windows for high throughput)
             .send_window = std.atomic.Value(u64).init(1_048_576), // 1MB
@@ -140,11 +138,6 @@ pub const SuperStream = struct {
             .peak_throughput = std.atomic.Value(u64).init(0),
             .last_activity = std.atomic.Value(i64).init(std.time.timestamp()),
         };
-        
-        // Initialize the Io interface after struct creation
-        stream.io = stream.blocking_io_instance.io();
-        
-        return stream;
     }
 
     pub fn deinit(self: *Self) void {
@@ -183,15 +176,14 @@ pub const SuperStream = struct {
     /// High-performance stream processor - handles all async operations
     pub fn runStreamProcessor(self: *Self) !void {
         // Spawn concurrent async tasks for maximum throughput
-        // Note: Using zsync.spawn instead of self.io.spawn which doesn't exist in v0.5.3
-        _ = try zsync.spawn(handleReads, .{self});
-        _ = try zsync.spawn(handleWrites, .{self});
-        _ = try zsync.spawn(handleFlowControl, .{self});
+        _ = try self.io.spawn(handleReads, .{self});
+        _ = try self.io.spawn(handleWrites, .{self});
+        _ = try self.io.spawn(handleFlowControl, .{self});
         
         // Main stream loop
         while (self.state.load(.acquire) != .closed) {
             try self.processStreamEvents();
-            zsync.yieldNow(); // Cooperative yielding
+            try zsync.yieldNow(); // Cooperative yielding
         }
     }
 
@@ -228,7 +220,7 @@ pub const SuperStream = struct {
             // try self.processReadChunk(chunk);
             
             // Cooperative yield for now
-            zsync.yieldNow();
+            try self.io.yieldNow();
         }
     }
 
@@ -240,7 +232,7 @@ pub const SuperStream = struct {
             // try self.processWriteChunk(chunk);
             
             // Cooperative yield for now
-            zsync.yieldNow();
+            try self.io.yieldNow();
         }
     }
 
@@ -251,7 +243,7 @@ pub const SuperStream = struct {
             // try self.processFlowControlEvent(event);
             
             // Cooperative yield for now
-            zsync.yieldNow();
+            try self.io.yieldNow();
         }
     }
 

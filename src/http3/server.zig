@@ -111,32 +111,25 @@ pub const SuperHttp3Server = struct {
     handler_pool: zsync.bounded(*void, 100), // TODO: Define RequestHandler
     
     // Different I/O contexts for optimal performance
-    blocking_io_instance: zsync.BlockingIo,  // Storage for BlockingIo
-    network_io: zsync.Io,    // For network operations
+    network_io: zsync.GreenThreadsIo,    // For network operations
     compute_io: zsync.ThreadPoolIo,      // For CPU-intensive tasks
     file_io: zsync.BlockingIo,           // For static file serving
     
     const Self = @This();
 
     pub fn init(allocator: std.mem.Allocator, config: SuperServerConfig) !Self {
-        var server = Self{
+        return Self{
             .config = config,
             .stats = SuperServerStats.init(),
             .allocator = allocator,
-            .request_queue = try zsync.bounded(Request, allocator, 1000),
-            .response_queue = try zsync.bounded(Response, allocator, 1000),
-            .parser_pool = try zsync.bounded(*void, allocator, 100),
-            .handler_pool = try zsync.bounded(*void, allocator, 100),
-            .blocking_io_instance = zsync.BlockingIo.init(allocator, 131072),
-            .network_io = undefined,
+            .request_queue = zsync.bounded(Request, 1000),
+            .response_queue = zsync.bounded(Response, 1000),
+            .parser_pool = zsync.bounded(*void, 100),
+            .handler_pool = zsync.bounded(*void, 100),
+            .network_io = zsync.GreenThreadsIo{},
             .compute_io = zsync.ThreadPoolIo{},
             .file_io = zsync.BlockingIo{},
         };
-        
-        // Initialize the Io interface after struct creation
-        server.network_io = server.blocking_io_instance.io();
-        
-        return server;
     }
 
     /// Run the supercharged HTTP/3 server - sub-millisecond responses
@@ -277,7 +270,7 @@ pub const Http3Server = struct {
             .config = config,
             .stats = SuperServerStats.init(),
             .connections = std.HashMap([]const u8, *ConnectionContext, std.hash_map.StringContext, std.hash_map.default_max_load_percentage).init(allocator),
-            .middleware_stack = std.ArrayList(Middleware.MiddlewareFn){},
+            .middleware_stack = std.ArrayList(Middleware.MiddlewareFn).init(allocator),
         };
 
         // Setup default middleware
@@ -287,7 +280,7 @@ pub const Http3Server = struct {
     }
 
     pub fn deinit(self: *Self) void {
-        self.qpack_decoder.deinit(self.allocator);
+        self.qpack_decoder.deinit();
         self.qpack_encoder.deinit();
         self.router.deinit();
 
@@ -299,39 +292,39 @@ pub const Http3Server = struct {
             self.allocator.free(entry.key_ptr.*);
         }
         self.connections.deinit();
-        self.middleware_stack.deinit(self.allocator);
+        self.middleware_stack.deinit();
     }
 
     fn setupDefaultMiddleware(self: *Self) !void {
         // Security headers (if enabled)
         if (self.config.enable_security_headers) {
             var security = Middleware.SecurityMiddleware.init(self.allocator);
-            try self.middleware_stack.append(self.allocator, security.middleware());
+            try self.middleware_stack.append(security.middleware());
         }
 
         // CORS (if enabled)
         if (self.config.enable_cors) {
             var cors = Middleware.CorsMiddleware.init(self.allocator);
             defer cors.deinit();
-            try self.middleware_stack.append(self.allocator, cors.middleware());
+            try self.middleware_stack.append(cors.middleware());
         }
 
         // Compression (if enabled)
         if (self.config.enable_compression) {
             const compression = Middleware.CompressionMiddleware.init(self.allocator, self.config.compression_level, 256 // min size
             );
-            try self.middleware_stack.append(self.allocator, compression.middleware());
+            try self.middleware_stack.append(compression.middleware());
         }
 
         // Static files (if configured)
         if (self.config.static_files_root) |static_root| {
             const static_middleware = Middleware.StaticMiddleware.init(self.allocator, static_root);
-            try self.middleware_stack.append(self.allocator, static_middleware.middleware());
+            try self.middleware_stack.append(static_middleware.middleware());
         }
 
         // Logging
         const logging = Middleware.LoggingMiddleware.init(self.allocator, .info);
-        try self.middleware_stack.append(self.allocator, logging.middleware());
+        try self.middleware_stack.append(logging.middleware());
     }
 
     /// Start the server
@@ -489,17 +482,17 @@ pub const Http3Server = struct {
         const stream = try connection.createStream(.server_bidirectional);
         
         // Encode the frame with type and length
-        var frame_data = std.ArrayList(u8){};
-        defer frame_data.deinit(self.allocator);
+        var frame_data = std.ArrayList(u8).init(self.allocator);
+        defer frame_data.deinit();
         
         // Write frame type (1 byte)
-        try frame_data.append(self.allocator, @as(u8, @intCast(@intFromEnum(frame.frame_type))));
+        try frame_data.append(@as(u8, @intCast(@intFromEnum(frame.frame_type))));
         
         // Write payload length (variable-length integer)
         try self.writeVarint(&frame_data, frame.payload.len);
         
         // Write payload
-        try frame_data.appendSlice(self.allocator, frame.payload);
+        try frame_data.appendSlice(frame.payload);
         
         // Send the frame data to the QUIC stream
         const bytes_written = try stream.write(frame_data.items, false);
@@ -512,32 +505,33 @@ pub const Http3Server = struct {
     
     /// Write a variable-length integer as defined in RFC 9000
     fn writeVarint(self: *Self, writer: *std.ArrayList(u8), value: usize) !void {
+        _ = self;
         
         if (value < 64) {
-            try writer.append(self.allocator, @intCast(value));
+            try writer.append(@intCast(value));
         } else if (value < 16384) {
-            try writer.append(self.allocator, @intCast(0x40 | (value >> 8)));
-            try writer.append(self.allocator, @intCast(value & 0xFF));
+            try writer.append(@intCast(0x40 | (value >> 8)));
+            try writer.append(@intCast(value & 0xFF));
         } else if (value < 1073741824) {
-            try writer.append(self.allocator, @intCast(0x80 | (value >> 24)));
-            try writer.append(self.allocator, @intCast((value >> 16) & 0xFF));
-            try writer.append(self.allocator, @intCast((value >> 8) & 0xFF));
-            try writer.append(self.allocator, @intCast(value & 0xFF));
+            try writer.append(@intCast(0x80 | (value >> 24)));
+            try writer.append(@intCast((value >> 16) & 0xFF));
+            try writer.append(@intCast((value >> 8) & 0xFF));
+            try writer.append(@intCast(value & 0xFF));
         } else {
-            try writer.append(self.allocator, @intCast(0xC0 | (value >> 56)));
-            try writer.append(self.allocator, @intCast((value >> 48) & 0xFF));
-            try writer.append(self.allocator, @intCast((value >> 40) & 0xFF));
-            try writer.append(self.allocator, @intCast((value >> 32) & 0xFF));
-            try writer.append(self.allocator, @intCast((value >> 24) & 0xFF));
-            try writer.append(self.allocator, @intCast((value >> 16) & 0xFF));
-            try writer.append(self.allocator, @intCast((value >> 8) & 0xFF));
-            try writer.append(self.allocator, @intCast(value & 0xFF));
+            try writer.append(@intCast(0xC0 | (value >> 56)));
+            try writer.append(@intCast((value >> 48) & 0xFF));
+            try writer.append(@intCast((value >> 40) & 0xFF));
+            try writer.append(@intCast((value >> 32) & 0xFF));
+            try writer.append(@intCast((value >> 24) & 0xFF));
+            try writer.append(@intCast((value >> 16) & 0xFF));
+            try writer.append(@intCast((value >> 8) & 0xFF));
+            try writer.append(@intCast(value & 0xFF));
         }
     }
 
     /// Add middleware to the server
     pub fn use(self: *Self, middleware: Middleware.MiddlewareFn) !void {
-        try self.middleware_stack.append(self.allocator, middleware);
+        try self.middleware_stack.append(middleware);
     }
 
     /// Add route handlers
@@ -606,7 +600,7 @@ pub const QpackEncoder = struct {
 
     pub fn init(allocator: std.mem.Allocator) Self {
         return Self{
-            .dynamic_table = std.ArrayList(HeaderField){},
+            .dynamic_table = std.ArrayList(HeaderField).init(allocator),
             .allocator = allocator,
         };
     }
@@ -615,7 +609,7 @@ pub const QpackEncoder = struct {
         for (self.dynamic_table.items) |*field| {
             field.deinit();
         }
-        self.dynamic_table.deinit(self.allocator);
+        self.dynamic_table.deinit();
     }
 
     pub fn encode(self: *Self, headers: []const HeaderField, allocator: std.mem.Allocator) ![]u8 {
