@@ -1,3 +1,7 @@
+<div align="center">
+  <img src="assets/icons/zquic.png" alt="ZQUIC Logo" width="200"/>
+</div>
+
 # ZQUIC — Post-Quantum QUIC Transport for Zig Projects
 
 [![Zig](https://img.shields.io/badge/Zig-0.16-orange.svg)](https://ziglang.org/)
@@ -68,15 +72,28 @@ ZQUIC is a **production-ready, post-quantum QUIC transport library** written in 
 - **No hidden allocations** or runtime overhead
 - **Cross-platform** support with consistent behavior
 
-## � Quick Start
+## 🚀 Quick Start
+
+### Installation
+
+**Recommended**: Add ZQUIC to your project with Zig's package manager:
+
+```bash
+# Add ZQUIC as a dependency to your project
+zig fetch --save https://github.com/ghostkellz/zquic/archive/refs/heads/main.tar.gz
+```
+
+**Alternative**: Clone the repository for development or standalone use:
+
+```bash
+# Clone the repository
+git clone https://github.com/ghostkellz/zquic
+cd zquic
+```
 
 ### Building
 
 ```bash
-# Clone the repository
-git clone <your-repo-url>
-cd zquic
-
 # Build the library and examples
 zig build
 
@@ -89,7 +106,7 @@ zig build install
 # Run examples
 zig build run                    # Main demo
 zig build run-client            # QUIC client example
-zig build run-server            # QUIC server example  
+zig build run-server            # QUIC server example
 zig build run-http3-server      # Enhanced HTTP/3 server
 zig build run-ghostscale        # VPN example
 ```
