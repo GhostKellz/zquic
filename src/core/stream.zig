@@ -6,6 +6,13 @@ const std = @import("std");
 const zsync = @import("zsync");
 const Error = @import("../utils/error.zig");
 
+// Fallback Io when zsync is not available
+const FallbackIo = struct {
+    pub fn init() FallbackIo {
+        return FallbackIo{};
+    }
+};
+
 /// Stream ID and direction utilities
 pub const StreamId = struct {
     id: u64,
@@ -75,7 +82,7 @@ pub const DataChunk = struct {
     offset: u64,
     fin: bool,
     timestamp: u64,
-    
+
     pub fn init(data: []const u8, offset: u64, fin: bool) DataChunk {
         return DataChunk{
             .data = data,
@@ -92,27 +99,27 @@ pub const SuperStream = struct {
     stream_type: StreamType,
     state: std.atomic.Value(StreamState),
     allocator: std.mem.Allocator,
-    
+
     // Zero-copy data channels - will be initialized in init
     read_data: ?*anyopaque,
     write_data: ?*anyopaque,
-    
+
     // Flow control channels for optimal throughput
     flow_control: ?*anyopaque,
-    
+
     // Async I/O context for cooperative multitasking
-    io: zsync.GreenThreadsIo,
-    
+    io: if (@hasDecl(zsync, "GreenThreadsIo")) zsync.GreenThreadsIo else FallbackIo,
+
     // Flow control state (atomic for lock-free access)
     send_window: std.atomic.Value(u64),
     recv_window: std.atomic.Value(u64),
     bytes_sent: std.atomic.Value(u64),
     bytes_received: std.atomic.Value(u64),
-    
+
     // Stream statistics
     peak_throughput: std.atomic.Value(u64),
     last_activity: std.atomic.Value(i64),
-    
+
     const Self = @This();
 
     pub fn init(allocator: std.mem.Allocator, id: u64, stream_type: StreamType) !Self {
@@ -121,20 +128,23 @@ pub const SuperStream = struct {
             .stream_type = stream_type,
             .state = std.atomic.Value(StreamState).init(.idle),
             .allocator = allocator,
-            
+
             // Initialize high-performance channels
             .read_data = undefined, // TODO: Replace with zsync.bounded(DataChunk, allocator, 256) when zsync compatibility fixed
             .write_data = undefined, // TODO: Replace with zsync.bounded(DataChunk, allocator, 256) when zsync compatibility fixed
             .flow_control = undefined, // TODO: Replace with zsync.bounded(FlowControlEvent, allocator, 64) when zsync compatibility fixed
-            
-            .io = zsync.GreenThreadsIo.init(allocator, .{}) catch @panic("GreenThreadsIo init failed"),
-            
+
+            .io = if (@hasDecl(zsync, "GreenThreadsIo"))
+                zsync.GreenThreadsIo.init(allocator, .{}) catch @panic("GreenThreadsIo init failed")
+            else
+                FallbackIo.init(),
+
             // Initialize flow control (generous initial windows for high throughput)
             .send_window = std.atomic.Value(u64).init(1_048_576), // 1MB
             .recv_window = std.atomic.Value(u64).init(1_048_576), // 1MB
             .bytes_sent = std.atomic.Value(u64).init(0),
             .bytes_received = std.atomic.Value(u64).init(0),
-            
+
             .peak_throughput = std.atomic.Value(u64).init(0),
             .last_activity = std.atomic.Value(i64).init(std.time.timestamp()),
         };
@@ -164,7 +174,7 @@ pub const SuperStream = struct {
         _ = self;
         return DataChunk.init(&[_]u8{}, 0, false);
     }
-    
+
     /// Zero-copy async write - takes ownership of data reference
     pub fn writeAsync(self: *Self, data: []const u8, fin: bool) !void {
         // TODO: Fix channel implementation
@@ -179,7 +189,7 @@ pub const SuperStream = struct {
         _ = try self.io.spawn(handleReads, .{self});
         _ = try self.io.spawn(handleWrites, .{self});
         _ = try self.io.spawn(handleFlowControl, .{self});
-        
+
         // Main stream loop
         while (self.state.load(.acquire) != .closed) {
             try self.processStreamEvents();
@@ -191,7 +201,7 @@ pub const SuperStream = struct {
     pub fn handleIncomingData(self: *Self, data: []const u8) !void {
         const current_offset = self.bytes_received.load(.acquire);
         const data_chunk = DataChunk.init(data, current_offset, false);
-        
+
         // TODO: Restore channel usage once zsync compatibility is fully fixed
         _ = data_chunk;
         // try self.read_data.send(data_chunk);
@@ -204,7 +214,7 @@ pub const SuperStream = struct {
         // try self.flow_control.send(.{ .window_update = credits });
     }
 
-    /// Process stream asynchronously 
+    /// Process stream asynchronously
     pub fn processAsync(self: *Self) !void {
         // Non-blocking stream processing
         try self.checkFlowControl();
@@ -218,7 +228,7 @@ pub const SuperStream = struct {
             // TODO: Restore channel usage once zsync compatibility is fully fixed
             // const chunk = self.read_data.recv() catch continue;
             // try self.processReadChunk(chunk);
-            
+
             // Cooperative yield for now
             try self.io.yieldNow();
         }
@@ -226,11 +236,11 @@ pub const SuperStream = struct {
 
     fn handleWrites(self: *Self) !void {
         while (self.state.load(.acquire) != .closed) {
-            // Process write operations  
+            // Process write operations
             // TODO: Restore channel usage once zsync compatibility is fully fixed
             // const chunk = self.write_data.recv() catch continue;
             // try self.processWriteChunk(chunk);
-            
+
             // Cooperative yield for now
             try self.io.yieldNow();
         }
@@ -241,7 +251,7 @@ pub const SuperStream = struct {
             // TODO: Restore channel usage once zsync compatibility is fully fixed
             // const event = self.flow_control.recv() catch continue;
             // try self.processFlowControlEvent(event);
-            
+
             // Cooperative yield for now
             try self.io.yieldNow();
         }
@@ -275,7 +285,7 @@ pub const SuperStream = struct {
                 _ = bytes;
             },
             .bytes_read => |bytes| {
-                // Update receive window  
+                // Update receive window
                 _ = bytes;
             },
             .window_update => |credits| {

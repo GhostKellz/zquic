@@ -4,14 +4,18 @@
 //! Enables ghostd ↔ walletd ↔ edge nodes communication over post-quantum QUIC
 
 const std = @import("std");
-const zquic = @import("../root.zig");
+const zquic_core = @import("zquic_core");
 const zcrypto = @import("zcrypto");
+const build_options = @import("build_options");
 
-const QuicConnection = zquic.Connection.Connection;
-const QuicStream = zquic.Stream.Stream;
-const Http3Server = zquic.Http3.Http3Server;
-const ServerConfig = zquic.Http3.ServerConfig;
-const Error = zquic.Error;
+// Conditionally import HTTP/3 if enabled
+const http3 = if (build_options.enable_http3) @import("http3") else struct {};
+
+const QuicConnection = zquic_core.Connection.Connection;
+const QuicStream = zquic_core.Stream.Stream;
+const Http3Server = if (build_options.enable_http3) http3.Http3Server else void;
+const ServerConfig = if (build_options.enable_http3) http3.ServerConfig else void;
+const Error = zquic_core.Error;
 
 /// GhostBridge configuration
 pub const GhostBridgeConfig = struct {
@@ -59,7 +63,7 @@ pub const GrpcMethod = struct {
     service: []const u8,
     method: []const u8,
     full_path: []const u8, // "/service/method"
-    
+
     pub fn init(allocator: std.mem.Allocator, service: []const u8, method: []const u8) !GrpcMethod {
         const full_path = try std.fmt.allocPrint(allocator, "/{s}/{s}", .{ service, method });
         return GrpcMethod{
@@ -68,7 +72,7 @@ pub const GrpcMethod = struct {
             .full_path = full_path,
         };
     }
-    
+
     pub fn deinit(self: *const GrpcMethod, allocator: std.mem.Allocator) void {
         allocator.free(self.service);
         allocator.free(self.method);
@@ -83,7 +87,7 @@ pub const GrpcRequest = struct {
     body: []const u8,
     request_id: u64,
     timeout_ms: u32,
-    
+
     pub fn init(allocator: std.mem.Allocator, method: GrpcMethod, body: []const u8, request_id: u64) !GrpcRequest {
         return GrpcRequest{
             .method = method,
@@ -93,7 +97,7 @@ pub const GrpcRequest = struct {
             .timeout_ms = 30000,
         };
     }
-    
+
     pub fn deinit(self: *GrpcRequest, allocator: std.mem.Allocator) void {
         self.method.deinit(allocator);
         var iterator = self.headers.iterator();
@@ -104,7 +108,7 @@ pub const GrpcRequest = struct {
         self.headers.deinit();
         allocator.free(self.body);
     }
-    
+
     pub fn addHeader(self: *GrpcRequest, allocator: std.mem.Allocator, key: []const u8, value: []const u8) !void {
         const owned_key = try allocator.dupe(u8, key);
         const owned_value = try allocator.dupe(u8, value);
@@ -119,7 +123,7 @@ pub const GrpcResponse = struct {
     headers: std.StringHashMap([]const u8),
     body: []const u8,
     response_id: u64,
-    
+
     pub fn init(allocator: std.mem.Allocator, status_code: u32, body: []const u8, response_id: u64) !GrpcResponse {
         return GrpcResponse{
             .status_code = status_code,
@@ -129,7 +133,7 @@ pub const GrpcResponse = struct {
             .response_id = response_id,
         };
     }
-    
+
     pub fn deinit(self: *GrpcResponse, allocator: std.mem.Allocator) void {
         allocator.free(self.status_message);
         var iterator = self.headers.iterator();
@@ -140,7 +144,7 @@ pub const GrpcResponse = struct {
         self.headers.deinit();
         allocator.free(self.body);
     }
-    
+
     fn getStatusMessage(status_code: u32) []const u8 {
         return switch (status_code) {
             0 => "OK",
@@ -172,21 +176,21 @@ pub const ServiceRegistration = struct {
     service_type: ServiceType,
     health_status: HealthStatus,
     last_heartbeat: i64,
-    
+
     pub const ServiceType = enum {
         ghostd,
         walletd,
         edge_node,
         other,
     };
-    
+
     pub const HealthStatus = enum {
         unknown,
         healthy,
         unhealthy,
         maintenance,
     };
-    
+
     pub fn init(allocator: std.mem.Allocator, name: []const u8, endpoint: []const u8, service_type: ServiceType) !ServiceRegistration {
         return ServiceRegistration{
             .name = try allocator.dupe(u8, name),
@@ -196,7 +200,7 @@ pub const ServiceRegistration = struct {
             .last_heartbeat = std.time.timestamp(),
         };
     }
-    
+
     pub fn deinit(self: *const ServiceRegistration, allocator: std.mem.Allocator) void {
         allocator.free(self.name);
         allocator.free(self.endpoint);
@@ -212,14 +216,14 @@ pub const GrpcStream = struct {
     send_buffer: std.ArrayList(u8),
     recv_buffer: std.ArrayList(u8),
     allocator: std.mem.Allocator,
-    
+
     const StreamState = enum {
         open,
         half_closed_local,
         half_closed_remote,
         closed,
     };
-    
+
     pub fn init(allocator: std.mem.Allocator, stream_id: u64, method: GrpcMethod, quic_stream: *QuicStream) !*GrpcStream {
         const stream = try allocator.create(GrpcStream);
         stream.* = GrpcStream{
@@ -233,14 +237,14 @@ pub const GrpcStream = struct {
         };
         return stream;
     }
-    
+
     pub fn deinit(self: *GrpcStream) void {
         self.method.deinit(self.allocator);
         self.send_buffer.deinit();
         self.recv_buffer.deinit();
         self.allocator.destroy(self);
     }
-    
+
     pub fn sendMessage(self: *GrpcStream, message_type: GrpcMessageType, data: []const u8) !void {
         // Create gRPC frame header
         const header = GrpcFrameHeader{
@@ -249,17 +253,17 @@ pub const GrpcStream = struct {
             .reserved = 0,
             .length = std.mem.nativeToBig(u32, @intCast(data.len)),
         };
-        
+
         // Serialize header
         const header_bytes = std.mem.asBytes(&header);
         try self.send_buffer.appendSlice(header_bytes);
         try self.send_buffer.appendSlice(data);
-        
+
         // Send via QUIC stream
         try self.quic_stream.send(self.send_buffer.items);
         self.send_buffer.clearRetainingCapacity();
     }
-    
+
     pub fn receiveMessage(self: *GrpcStream) !?GrpcMessage {
         // Try to receive data from QUIC stream
         var temp_buffer: [8192]u8 = undefined;
@@ -267,20 +271,20 @@ pub const GrpcStream = struct {
             error.WouldBlock => return null,
             else => return err,
         };
-        
+
         if (bytes_received == 0) return null;
-        
+
         try self.recv_buffer.appendSlice(temp_buffer[0..bytes_received]);
-        
+
         // Check if we have a complete message
         if (self.recv_buffer.items.len < @sizeOf(GrpcFrameHeader)) return null;
-        
+
         const header = std.mem.bytesAsValue(GrpcFrameHeader, self.recv_buffer.items[0..@sizeOf(GrpcFrameHeader)]);
         const message_length = std.mem.bigToNative(u32, header.length);
         const total_length = @sizeOf(GrpcFrameHeader) + message_length;
-        
+
         if (self.recv_buffer.items.len < total_length) return null;
-        
+
         // Extract message data
         const message_data = self.recv_buffer.items[@sizeOf(GrpcFrameHeader)..total_length];
         const message = GrpcMessage{
@@ -288,14 +292,14 @@ pub const GrpcStream = struct {
             .compressed = header.compressed == 1,
             .data = try self.allocator.dupe(u8, message_data),
         };
-        
+
         // Remove processed data from buffer
         std.mem.copy(u8, self.recv_buffer.items, self.recv_buffer.items[total_length..]);
         self.recv_buffer.shrinkRetainingCapacity(self.recv_buffer.items.len - total_length);
-        
+
         return message;
     }
-    
+
     pub fn close(self: *GrpcStream) !void {
         if (self.state != .closed) {
             try self.sendMessage(.stream_end, &[_]u8{});
@@ -309,7 +313,7 @@ pub const GrpcMessage = struct {
     message_type: GrpcMessageType,
     compressed: bool,
     data: []const u8,
-    
+
     pub fn deinit(self: *const GrpcMessage, allocator: std.mem.Allocator) void {
         allocator.free(self.data);
     }
@@ -322,7 +326,7 @@ pub const GrpcConnection = struct {
     streams: std.HashMap(u64, *GrpcStream, std.hash_map.DefaultContext(u64), std.hash_map.default_max_load_percentage),
     next_stream_id: u64,
     allocator: std.mem.Allocator,
-    
+
     pub fn init(allocator: std.mem.Allocator, connection_id: u64, quic_connection: *QuicConnection) !*GrpcConnection {
         const conn = try allocator.create(GrpcConnection);
         conn.* = GrpcConnection{
@@ -334,7 +338,7 @@ pub const GrpcConnection = struct {
         };
         return conn;
     }
-    
+
     pub fn deinit(self: *GrpcConnection) void {
         var iterator = self.streams.iterator();
         while (iterator.next()) |entry| {
@@ -343,21 +347,21 @@ pub const GrpcConnection = struct {
         self.streams.deinit();
         self.allocator.destroy(self);
     }
-    
+
     pub fn createStream(self: *GrpcConnection, method: GrpcMethod) !*GrpcStream {
         const stream_id = self.next_stream_id;
         self.next_stream_id += 2; // Increment by 2 for client-initiated streams
-        
+
         // Create new QUIC stream
         const quic_stream = try self.quic_connection.openStream(stream_id);
-        
+
         // Create gRPC stream wrapper
         const grpc_stream = try GrpcStream.init(self.allocator, stream_id, method, quic_stream);
-        
+
         try self.streams.put(stream_id, grpc_stream);
         return grpc_stream;
     }
-    
+
     pub fn closeStream(self: *GrpcConnection, stream_id: u64) !void {
         if (self.streams.get(stream_id)) |stream| {
             try stream.close();
@@ -365,27 +369,27 @@ pub const GrpcConnection = struct {
             _ = self.streams.remove(stream_id);
         }
     }
-    
+
     pub fn sendUnaryRequest(self: *GrpcConnection, method: GrpcMethod, request_data: []const u8) !GrpcResponse {
         const stream = try self.createStream(method);
         defer self.closeStream(stream.stream_id) catch {};
-        
+
         // Send request
         try stream.sendMessage(.request, request_data);
-        
+
         // Wait for response (simplified - would need proper async handling)
         var attempts: u32 = 0;
         while (attempts < 1000) : (attempts += 1) {
             if (try stream.receiveMessage()) |message| {
                 defer message.deinit(self.allocator);
-                
+
                 if (message.message_type == .response) {
                     return GrpcResponse.init(self.allocator, 0, message.data, stream.stream_id);
                 }
             }
             std.time.sleep(1000000); // 1ms sleep
         }
-        
+
         return Error.ZquicError.NetworkError;
     }
 };
@@ -400,13 +404,13 @@ pub const BridgeStats = struct {
     bytes_received: u64 = 0,
     uptime_seconds: u64 = 0,
     start_time: i64,
-    
+
     pub fn init() BridgeStats {
         return BridgeStats{
             .start_time = std.time.timestamp(),
         };
     }
-    
+
     pub fn updateUptime(self: *BridgeStats) void {
         self.uptime_seconds = @intCast(std.time.timestamp() - self.start_time);
     }
@@ -422,7 +426,7 @@ pub const GhostBridge = struct {
     stats: BridgeStats,
     allocator: std.mem.Allocator,
     running: bool,
-    
+
     pub fn init(allocator: std.mem.Allocator, config: GhostBridgeConfig) !*GhostBridge {
         const bridge = try allocator.create(GhostBridge);
         bridge.* = GhostBridge{
@@ -437,10 +441,10 @@ pub const GhostBridge = struct {
         };
         return bridge;
     }
-    
+
     pub fn deinit(self: *GhostBridge) void {
         self.stop();
-        
+
         // Clean up services
         var service_iterator = self.services.iterator();
         while (service_iterator.next()) |entry| {
@@ -448,20 +452,20 @@ pub const GhostBridge = struct {
             self.allocator.free(entry.key_ptr.*);
         }
         self.services.deinit();
-        
+
         // Clean up connections
         var conn_iterator = self.connections.iterator();
         while (conn_iterator.next()) |entry| {
             entry.value_ptr.*.deinit();
         }
         self.connections.deinit();
-        
+
         self.allocator.destroy(self);
     }
-    
+
     pub fn start(self: *GhostBridge) !void {
         if (self.running) return;
-        
+
         // Create HTTP/3 server for gRPC-over-QUIC
         const server_config = ServerConfig{
             .address = self.config.address,
@@ -473,37 +477,37 @@ pub const GhostBridge = struct {
             .enable_0rtt = true,
             .idle_timeout_ms = self.config.request_timeout_ms,
         };
-        
+
         self.server = try Http3Server.init(self.allocator, server_config);
-        
+
         // Register gRPC handler
         // TODO: Integrate with HTTP/3 server routing
-        
+
         self.running = true;
         std.log.info("GhostBridge started on {s}:{d}", .{ self.config.address, self.config.port });
     }
-    
+
     pub fn stop(self: *GhostBridge) void {
         if (!self.running) return;
-        
+
         if (self.server) |server| {
             server.deinit();
             self.allocator.destroy(server);
             self.server = null;
         }
-        
+
         self.running = false;
         std.log.info("GhostBridge stopped", .{});
     }
-    
+
     pub fn registerService(self: *GhostBridge, name: []const u8, endpoint: []const u8, service_type: ServiceRegistration.ServiceType) !void {
         const service = try ServiceRegistration.init(self.allocator, name, endpoint, service_type);
         const owned_name = try self.allocator.dupe(u8, name);
         try self.services.put(owned_name, service);
-        
+
         std.log.info("Registered service '{s}' at {s}", .{ name, endpoint });
     }
-    
+
     pub fn unregisterService(self: *GhostBridge, name: []const u8) !void {
         if (self.services.fetchRemove(name)) |entry| {
             entry.value.deinit(self.allocator);
@@ -511,42 +515,42 @@ pub const GhostBridge = struct {
             std.log.info("Unregistered service '{s}'", .{name});
         }
     }
-    
+
     pub fn createConnection(self: *GhostBridge, service_name: []const u8) !*GrpcConnection {
         // Find service endpoint
         const service = self.services.get(service_name) orelse return Error.ZquicError.InvalidArgument;
-        
+
         // Create QUIC connection to service
         // TODO: Implement actual QUIC connection establishment
         const quic_connection = try self.allocator.create(QuicConnection);
         _ = service; // Will be used when implementing actual connection establishment
         // Initialize connection...
-        
+
         const connection_id = self.next_connection_id;
         self.next_connection_id += 1;
-        
+
         const grpc_connection = try GrpcConnection.init(self.allocator, connection_id, quic_connection);
         try self.connections.put(connection_id, grpc_connection);
-        
+
         self.stats.total_connections += 1;
         self.stats.active_connections += 1;
-        
+
         return grpc_connection;
     }
-    
+
     pub fn closeConnection(self: *GhostBridge, connection_id: u64) void {
         if (self.connections.fetchRemove(connection_id)) |entry| {
             entry.value.deinit();
             self.stats.active_connections -= 1;
         }
     }
-    
+
     pub fn getServices(self: *const GhostBridge) []const ServiceRegistration {
         // TODO: Return array of services
         _ = self;
         return &[_]ServiceRegistration{};
     }
-    
+
     pub fn checkServiceHealth(self: *GhostBridge, service_name: []const u8) ServiceRegistration.HealthStatus {
         if (self.services.getPtr(service_name)) |service| {
             // Update health based on last heartbeat
@@ -558,7 +562,7 @@ pub const GhostBridge = struct {
         }
         return .unknown;
     }
-    
+
     pub fn updateStats(self: *GhostBridge) void {
         self.stats.updateUptime();
     }
@@ -567,15 +571,15 @@ pub const GhostBridge = struct {
 // Unit tests
 test "GhostBridge initialization" {
     const allocator = std.testing.allocator;
-    
+
     const config = GhostBridgeConfig{
         .port = 50051,
         .max_connections = 100,
     };
-    
+
     var bridge = try GhostBridge.init(allocator, config);
     defer bridge.deinit();
-    
+
     try std.testing.expect(bridge.config.port == 50051);
     try std.testing.expect(bridge.config.max_connections == 100);
     try std.testing.expect(!bridge.running);
@@ -583,19 +587,19 @@ test "GhostBridge initialization" {
 
 test "service registration" {
     const allocator = std.testing.allocator;
-    
+
     const config = GhostBridgeConfig{};
     var bridge = try GhostBridge.init(allocator, config);
     defer bridge.deinit();
-    
+
     try bridge.registerService("ghostd", "localhost:50001", .ghostd);
     try bridge.registerService("walletd", "localhost:50002", .walletd);
-    
+
     try std.testing.expect(bridge.services.count() == 2);
-    
+
     const ghostd_health = bridge.checkServiceHealth("ghostd");
     try std.testing.expect(ghostd_health == .unknown);
-    
+
     try bridge.unregisterService("ghostd");
     try std.testing.expect(bridge.services.count() == 1);
 }

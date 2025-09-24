@@ -25,7 +25,7 @@ pub fn main() !void {
     };
 
     // Initialize DoQ server
-    var server = zquic.DoQ.Server.init(allocator, config) catch |err| {
+    var server = zquic.DoQ.DoqServer.init(allocator, config) catch |err| {
         // Fallback to self-signed cert for demo
         std.log.warn("⚠️  Could not load certificates: {}, using demo mode", .{err});
         return startDemoServer(allocator);
@@ -50,7 +50,7 @@ pub fn main() !void {
 fn startDemoServer(allocator: std.mem.Allocator) !void {
     std.log.info("🔧 Demo Mode: Running without TLS certificates", .{});
     std.log.info("📝 In production, provide valid cert_path and key_path", .{});
-    
+
     // Create basic configuration for demo
     const demo_config = zquic.DoQ.ServerConfig{
         .address = "127.0.0.1",
@@ -63,7 +63,7 @@ fn startDemoServer(allocator: std.mem.Allocator) !void {
         .handler = customDnsHandler,
     };
 
-    var demo_server = try zquic.DoQ.Server.init(allocator, demo_config);
+    var demo_server = try zquic.DoQ.DoqServer.init(allocator, demo_config);
     defer demo_server.deinit();
 
     std.log.info("🌐 Demo DoQ Server listening on 127.0.0.1:8530", .{});
@@ -74,7 +74,7 @@ fn startDemoServer(allocator: std.mem.Allocator) !void {
     while (tick < 60) { // Run for 60 seconds
         std.Thread.sleep(1_000_000_000); // 1 second
         tick += 1;
-        
+
         if (tick % 10 == 0) {
             const stats = demo_server.getStats();
             std.log.info("📊 Stats: {} queries processed, {} active connections", .{
@@ -83,19 +83,19 @@ fn startDemoServer(allocator: std.mem.Allocator) !void {
             });
         }
     }
-    
+
     std.log.info("✅ Demo completed", .{});
 }
 
 /// Custom DNS handler function (matches TODO.md interface)
-fn customDnsHandler(query: *zquic.DoQ.DnsMessage, allocator: std.mem.Allocator) !zquic.DoQ.DnsMessage {
+fn customDnsHandler(query: *zquic.DoQ.Message.DnsMessage, allocator: std.mem.Allocator) !zquic.DoQ.Message.DnsMessage {
     if (query.questions.len == 0) {
-        return createErrorResponse(query, allocator, zquic.DoQ.DnsResponseCode.FormErr);
+        return createErrorResponse(query, allocator, zquic.DoQ.Message.DnsResponseCode.FormErr);
     }
 
     const domain = query.questions[0].name;
     const qtype = query.questions[0].qtype;
-    const record_type = @as(zquic.DoQ.DnsRecordType, @enumFromInt(qtype));
+    const record_type = @as(zquic.DoQ.Message.DnsRecordType, @enumFromInt(qtype));
 
     std.log.info("🔍 DoQ Query: {s} (type: {s})", .{ domain, record_type.toString() });
 
@@ -113,10 +113,10 @@ fn customDnsHandler(query: *zquic.DoQ.DnsMessage, allocator: std.mem.Allocator) 
 }
 
 /// Handle A record queries (IPv4 addresses)
-fn handleARecord(query: *const zquic.DoQ.DnsMessage, domain: []const u8, allocator: std.mem.Allocator) !zquic.DoQ.DnsMessage {
-    var response = zquic.DoQ.DnsMessage.init(allocator);
-    
-    response.header = zquic.DoQ.DnsHeader{
+fn handleARecord(query: *const zquic.DoQ.Message.DnsMessage, domain: []const u8, allocator: std.mem.Allocator) !zquic.DoQ.Message.DnsMessage {
+    var response = zquic.DoQ.Message.DnsMessage.init(allocator);
+
+    response.header = zquic.DoQ.Message.DnsHeader{
         .id = query.header.id,
         .flags = 0x8180, // QR=1, RD=1, RA=1
         .qdcount = 1,
@@ -126,16 +126,16 @@ fn handleARecord(query: *const zquic.DoQ.DnsMessage, domain: []const u8, allocat
     };
 
     // Copy question
-    response.questions = try allocator.alloc(zquic.DoQ.DnsQuestion, 1);
-    response.questions[0] = zquic.DoQ.DnsQuestion{
+    response.questions = try allocator.alloc(zquic.DoQ.Message.DnsQuestion, 1);
+    response.questions[0] = zquic.DoQ.Message.DnsQuestion{
         .name = try allocator.dupe(u8, domain),
-        .qtype = @intFromEnum(zquic.DoQ.DnsRecordType.A),
+        .qtype = @intFromEnum(zquic.DoQ.Message.DnsRecordType.A),
         .qclass = query.questions[0].qclass,
     };
 
     // Create A record answer
-    response.answers = try allocator.alloc(zquic.DoQ.DnsResourceRecord, 1);
-    
+    response.answers = try allocator.alloc(zquic.DoQ.Message.DnsResourceRecord, 1);
+
     // Demo IP addresses based on domain
     const ip_data = if (std.mem.eql(u8, domain, "example.com"))
         [_]u8{ 93, 184, 216, 34 } // example.com actual IP
@@ -146,9 +146,9 @@ fn handleARecord(query: *const zquic.DoQ.DnsMessage, domain: []const u8, allocat
     else
         [_]u8{ 198, 51, 100, 1 }; // RFC 5737 test IP
 
-    response.answers[0] = zquic.DoQ.DnsResourceRecord{
+    response.answers[0] = zquic.DoQ.Message.DnsResourceRecord{
         .name = try allocator.dupe(u8, domain),
-        .rtype = @intFromEnum(zquic.DoQ.DnsRecordType.A),
+        .rtype = @intFromEnum(zquic.DoQ.Message.DnsRecordType.A),
         .rclass = 1, // IN
         .ttl = 300,
         .rdlength = 4,
@@ -160,10 +160,10 @@ fn handleARecord(query: *const zquic.DoQ.DnsMessage, domain: []const u8, allocat
 }
 
 /// Handle AAAA record queries (IPv6 addresses)
-fn handleAAAARecord(query: *const zquic.DoQ.DnsMessage, domain: []const u8, allocator: std.mem.Allocator) !zquic.DoQ.DnsMessage {
-    var response = zquic.DoQ.DnsMessage.init(allocator);
-    
-    response.header = zquic.DoQ.DnsHeader{
+fn handleAAAARecord(query: *const zquic.DoQ.Message.DnsMessage, domain: []const u8, allocator: std.mem.Allocator) !zquic.DoQ.Message.DnsMessage {
+    var response = zquic.DoQ.Message.DnsMessage.init(allocator);
+
+    response.header = zquic.DoQ.Message.DnsHeader{
         .id = query.header.id,
         .flags = 0x8180,
         .qdcount = 1,
@@ -172,24 +172,24 @@ fn handleAAAARecord(query: *const zquic.DoQ.DnsMessage, domain: []const u8, allo
         .arcount = 0,
     };
 
-    response.questions = try allocator.alloc(zquic.DoQ.DnsQuestion, 1);
-    response.questions[0] = zquic.DoQ.DnsQuestion{
+    response.questions = try allocator.alloc(zquic.DoQ.Message.DnsQuestion, 1);
+    response.questions[0] = zquic.DoQ.Message.DnsQuestion{
         .name = try allocator.dupe(u8, domain),
-        .qtype = @intFromEnum(zquic.DoQ.DnsRecordType.AAAA),
+        .qtype = @intFromEnum(zquic.DoQ.Message.DnsRecordType.AAAA),
         .qclass = query.questions[0].qclass,
     };
 
-    response.answers = try allocator.alloc(zquic.DoQ.DnsResourceRecord, 1);
-    
+    response.answers = try allocator.alloc(zquic.DoQ.Message.DnsResourceRecord, 1);
+
     // Demo IPv6 address (::1 for localhost, 2001:db8::1 for others)
     const ipv6_data = if (std.mem.eql(u8, domain, "localhost"))
         [_]u8{ 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1 } // ::1
     else
         [_]u8{ 0x20, 0x01, 0x0d, 0xb8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1 }; // 2001:db8::1
 
-    response.answers[0] = zquic.DoQ.DnsResourceRecord{
+    response.answers[0] = zquic.DoQ.Message.DnsResourceRecord{
         .name = try allocator.dupe(u8, domain),
-        .rtype = @intFromEnum(zquic.DoQ.DnsRecordType.AAAA),
+        .rtype = @intFromEnum(zquic.DoQ.Message.DnsRecordType.AAAA),
         .rclass = 1,
         .ttl = 300,
         .rdlength = 16,
@@ -201,10 +201,10 @@ fn handleAAAARecord(query: *const zquic.DoQ.DnsMessage, domain: []const u8, allo
 }
 
 /// Handle TXT record queries
-fn handleTXTRecord(query: *const zquic.DoQ.DnsMessage, domain: []const u8, allocator: std.mem.Allocator) !zquic.DoQ.DnsMessage {
-    var response = zquic.DoQ.DnsMessage.init(allocator);
-    
-    response.header = zquic.DoQ.DnsHeader{
+fn handleTXTRecord(query: *const zquic.DoQ.Message.DnsMessage, domain: []const u8, allocator: std.mem.Allocator) !zquic.DoQ.Message.DnsMessage {
+    var response = zquic.DoQ.Message.DnsMessage.init(allocator);
+
+    response.header = zquic.DoQ.Message.DnsHeader{
         .id = query.header.id,
         .flags = 0x8180,
         .qdcount = 1,
@@ -213,15 +213,15 @@ fn handleTXTRecord(query: *const zquic.DoQ.DnsMessage, domain: []const u8, alloc
         .arcount = 0,
     };
 
-    response.questions = try allocator.alloc(zquic.DoQ.DnsQuestion, 1);
-    response.questions[0] = zquic.DoQ.DnsQuestion{
+    response.questions = try allocator.alloc(zquic.DoQ.Message.DnsQuestion, 1);
+    response.questions[0] = zquic.DoQ.Message.DnsQuestion{
         .name = try allocator.dupe(u8, domain),
-        .qtype = @intFromEnum(zquic.DoQ.DnsRecordType.TXT),
+        .qtype = @intFromEnum(zquic.DoQ.Message.DnsRecordType.TXT),
         .qclass = query.questions[0].qclass,
     };
 
-    response.answers = try allocator.alloc(zquic.DoQ.DnsResourceRecord, 1);
-    
+    response.answers = try allocator.alloc(zquic.DoQ.Message.DnsResourceRecord, 1);
+
     // Create demo TXT record
     const txt_content = if (std.mem.startsWith(u8, domain, "ghost"))
         "ghostchain-verified=true quantum-safe=enabled"
@@ -230,9 +230,9 @@ fn handleTXTRecord(query: *const zquic.DoQ.DnsMessage, domain: []const u8, alloc
 
     const txt_data = try std.fmt.allocPrint(allocator, "{c}{s}", .{ @as(u8, @intCast(txt_content.len)), txt_content });
 
-    response.answers[0] = zquic.DoQ.DnsResourceRecord{
+    response.answers[0] = zquic.DoQ.Message.DnsResourceRecord{
         .name = try allocator.dupe(u8, domain),
-        .rtype = @intFromEnum(zquic.DoQ.DnsRecordType.TXT),
+        .rtype = @intFromEnum(zquic.DoQ.Message.DnsRecordType.TXT),
         .rclass = 1,
         .ttl = 300,
         .rdlength = @intCast(txt_data.len),
@@ -244,10 +244,10 @@ fn handleTXTRecord(query: *const zquic.DoQ.DnsMessage, domain: []const u8, alloc
 }
 
 /// Handle MX record queries
-fn handleMXRecord(query: *const zquic.DoQ.DnsMessage, domain: []const u8, allocator: std.mem.Allocator) !zquic.DoQ.DnsMessage {
-    var response = zquic.DoQ.DnsMessage.init(allocator);
-    
-    response.header = zquic.DoQ.DnsHeader{
+fn handleMXRecord(query: *const zquic.DoQ.Message.DnsMessage, domain: []const u8, allocator: std.mem.Allocator) !zquic.DoQ.Message.DnsMessage {
+    var response = zquic.DoQ.Message.DnsMessage.init(allocator);
+
+    response.header = zquic.DoQ.Message.DnsHeader{
         .id = query.header.id,
         .flags = 0x8180,
         .qdcount = 1,
@@ -256,26 +256,26 @@ fn handleMXRecord(query: *const zquic.DoQ.DnsMessage, domain: []const u8, alloca
         .arcount = 0,
     };
 
-    response.questions = try allocator.alloc(zquic.DoQ.DnsQuestion, 1);
-    response.questions[0] = zquic.DoQ.DnsQuestion{
+    response.questions = try allocator.alloc(zquic.DoQ.Message.DnsQuestion, 1);
+    response.questions[0] = zquic.DoQ.Message.DnsQuestion{
         .name = try allocator.dupe(u8, domain),
-        .qtype = @intFromEnum(zquic.DoQ.DnsRecordType.MX),
+        .qtype = @intFromEnum(zquic.DoQ.Message.DnsRecordType.MX),
         .qclass = query.questions[0].qclass,
     };
 
-    response.answers = try allocator.alloc(zquic.DoQ.DnsResourceRecord, 1);
-    
+    response.answers = try allocator.alloc(zquic.DoQ.Message.DnsResourceRecord, 1);
+
     // Create demo MX record: priority (2 bytes) + domain name
     const mx_domain = try std.fmt.allocPrint(allocator, "mail.{s}", .{domain});
     defer allocator.free(mx_domain);
-    
+
     var mx_data = std.ArrayList(u8){};
     defer mx_data.deinit(allocator);
-    
+
     // Priority (10)
     try mx_data.append(allocator, 0);
     try mx_data.append(allocator, 10);
-    
+
     // Encode domain name
     var parts = std.mem.splitScalar(u8, mx_domain, '.');
     while (parts.next()) |part| {
@@ -285,9 +285,9 @@ fn handleMXRecord(query: *const zquic.DoQ.DnsMessage, domain: []const u8, alloca
     }
     try mx_data.append(allocator, 0); // null terminator
 
-    response.answers[0] = zquic.DoQ.DnsResourceRecord{
+    response.answers[0] = zquic.DoQ.Message.DnsResourceRecord{
         .name = try allocator.dupe(u8, domain),
-        .rtype = @intFromEnum(zquic.DoQ.DnsRecordType.MX),
+        .rtype = @intFromEnum(zquic.DoQ.Message.DnsRecordType.MX),
         .rclass = 1,
         .ttl = 300,
         .rdlength = @intCast(mx_data.items.len),
@@ -299,10 +299,10 @@ fn handleMXRecord(query: *const zquic.DoQ.DnsMessage, domain: []const u8, alloca
 }
 
 /// Create echo response (fallback)
-fn createEchoResponse(query: *const zquic.DoQ.DnsMessage, allocator: std.mem.Allocator) !zquic.DoQ.DnsMessage {
-    var response = zquic.DoQ.DnsMessage.init(allocator);
-    
-    response.header = zquic.DoQ.DnsHeader{
+fn createEchoResponse(query: *const zquic.DoQ.Message.DnsMessage, allocator: std.mem.Allocator) !zquic.DoQ.Message.DnsMessage {
+    var response = zquic.DoQ.Message.DnsMessage.init(allocator);
+
+    response.header = zquic.DoQ.Message.DnsHeader{
         .id = query.header.id,
         .flags = 0x8180,
         .qdcount = query.header.qdcount,
@@ -313,9 +313,9 @@ fn createEchoResponse(query: *const zquic.DoQ.DnsMessage, allocator: std.mem.All
 
     // Copy questions only
     if (query.questions.len > 0) {
-        response.questions = try allocator.alloc(zquic.DoQ.DnsQuestion, query.questions.len);
+        response.questions = try allocator.alloc(zquic.DoQ.Message.DnsQuestion, query.questions.len);
         for (query.questions, 0..) |question, i| {
-            response.questions[i] = zquic.DoQ.DnsQuestion{
+            response.questions[i] = zquic.DoQ.Message.DnsQuestion{
                 .name = try allocator.dupe(u8, question.name),
                 .qtype = question.qtype,
                 .qclass = question.qclass,
@@ -328,10 +328,10 @@ fn createEchoResponse(query: *const zquic.DoQ.DnsMessage, allocator: std.mem.All
 }
 
 /// Create error response
-fn createErrorResponse(query: *const zquic.DoQ.DnsMessage, allocator: std.mem.Allocator, rcode: zquic.DoQ.DnsResponseCode) !zquic.DoQ.DnsMessage {
-    var response = zquic.DoQ.DnsMessage.init(allocator);
-    
-    response.header = zquic.DoQ.DnsHeader{
+fn createErrorResponse(query: *const zquic.DoQ.Message.DnsMessage, allocator: std.mem.Allocator, rcode: zquic.DoQ.Message.DnsResponseCode) !zquic.DoQ.Message.DnsMessage {
+    var response = zquic.DoQ.Message.DnsMessage.init(allocator);
+
+    response.header = zquic.DoQ.Message.DnsHeader{
         .id = query.header.id,
         .flags = 0x8000 | (@as(u16, @intFromEnum(rcode)) & 0x000F), // QR=1, RCODE=rcode
         .qdcount = query.header.qdcount,
@@ -342,9 +342,9 @@ fn createErrorResponse(query: *const zquic.DoQ.DnsMessage, allocator: std.mem.Al
 
     // Copy questions
     if (query.questions.len > 0) {
-        response.questions = try allocator.alloc(zquic.DoQ.DnsQuestion, query.questions.len);
+        response.questions = try allocator.alloc(zquic.DoQ.Message.DnsQuestion, query.questions.len);
         for (query.questions, 0..) |question, i| {
-            response.questions[i] = zquic.DoQ.DnsQuestion{
+            response.questions[i] = zquic.DoQ.Message.DnsQuestion{
                 .name = try allocator.dupe(u8, question.name),
                 .qtype = question.qtype,
                 .qclass = question.qclass,

@@ -2,3 +2,10 @@
 /zig-out/
 *.o
 *.exe
+.zig-cache/
+knowledge-transfer/ 
+archive/
+CLAUDE.md 
+CRYPTO-PROJECTS.md 
+TODO.md 
+WORKFLOW.md 

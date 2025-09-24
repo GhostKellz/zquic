@@ -24,12 +24,12 @@ pub const CipherSuite = enum(u16) {
     tls_chacha20_poly1305_sha256 = 0x1303,
     tls_aes_128_ccm_sha256 = 0x1304,
     tls_aes_128_ccm_8_sha256 = 0x1305,
-    
+
     // Post-quantum hybrid cipher suites
     tls_ml_kem_768_aes_128_gcm_sha256 = 0xFE00,
     tls_ml_kem_1024_aes_256_gcm_sha384 = 0xFE01,
     tls_ml_kem_768_chacha20_poly1305_sha256 = 0xFE02,
-    
+
     pub fn getHashAlgorithm(self: CipherSuite) HashAlgorithm {
         return switch (self) {
             .tls_aes_128_gcm_sha256, .tls_aes_128_ccm_sha256, .tls_aes_128_ccm_8_sha256, .tls_ml_kem_768_aes_128_gcm_sha256 => .sha256,
@@ -37,7 +37,7 @@ pub const CipherSuite = enum(u16) {
             .tls_chacha20_poly1305_sha256, .tls_ml_kem_768_chacha20_poly1305_sha256 => .sha256,
         };
     }
-    
+
     pub fn getKeyLength(self: CipherSuite) u32 {
         return switch (self) {
             .tls_aes_128_gcm_sha256, .tls_aes_128_ccm_sha256, .tls_aes_128_ccm_8_sha256, .tls_ml_kem_768_aes_128_gcm_sha256 => 16,
@@ -45,7 +45,7 @@ pub const CipherSuite = enum(u16) {
             .tls_chacha20_poly1305_sha256, .tls_ml_kem_768_chacha20_poly1305_sha256 => 32,
         };
     }
-    
+
     pub fn isPostQuantum(self: CipherSuite) bool {
         return switch (self) {
             .tls_ml_kem_768_aes_128_gcm_sha256, .tls_ml_kem_1024_aes_256_gcm_sha384, .tls_ml_kem_768_chacha20_poly1305_sha256 => true,
@@ -60,7 +60,7 @@ pub const HashAlgorithm = enum {
     sha384,
     sha512,
     blake3,
-    
+
     pub fn getHashSize(self: HashAlgorithm) u32 {
         return switch (self) {
             .sha256 => 32,
@@ -77,21 +77,21 @@ pub const SignatureAlgorithm = enum(u16) {
     ecdsa_secp256r1_sha256 = 0x0403,
     ecdsa_secp384r1_sha384 = 0x0503,
     ecdsa_secp521r1_sha512 = 0x0603,
-    
+
     // RSA algorithms
     rsa_pss_rsae_sha256 = 0x0804,
     rsa_pss_rsae_sha384 = 0x0805,
     rsa_pss_rsae_sha512 = 0x0806,
-    
+
     // EdDSA algorithms
     ed25519 = 0x0807,
     ed448 = 0x0808,
-    
+
     // Post-quantum signature algorithms
     dilithium3 = 0xFE10,
     falcon512 = 0xFE11,
     sphincs_sha256_128s = 0xFE12,
-    
+
     pub fn isPostQuantum(self: SignatureAlgorithm) bool {
         return switch (self) {
             .dilithium3, .falcon512, .sphincs_sha256_128s => true,
@@ -108,19 +108,19 @@ pub const KeyExchangeAlgorithm = enum(u16) {
     secp521r1 = 0x0019,
     x25519 = 0x001D,
     x448 = 0x001E,
-    
+
     // Post-quantum key exchange
     ml_kem_512 = 0xFE20,
     ml_kem_768 = 0xFE21,
     ml_kem_1024 = 0xFE22,
-    
+
     pub fn isPostQuantum(self: KeyExchangeAlgorithm) bool {
         return switch (self) {
             .ml_kem_512, .ml_kem_768, .ml_kem_1024 => true,
             else => false,
         };
     }
-    
+
     pub fn getKeySize(self: KeyExchangeAlgorithm) u32 {
         return switch (self) {
             .secp256r1 => 32,
@@ -147,12 +147,12 @@ pub const HandshakeState = enum {
     wait_finished,
     connected,
     wait_new_session_ticket,
-    
+
     // 0-RTT states
     wait_early_data,
     early_data_accepted,
     early_data_rejected,
-    
+
     // Error states
     failed,
     closed,
@@ -173,27 +173,27 @@ pub const TransportParameters = struct {
     max_ack_delay: u64 = 25,
     disable_active_migration: bool = false,
     active_connection_id_limit: u64 = 2,
-    
+
     // Connection identifiers
     initial_source_connection_id: ?[]const u8 = null,
     original_destination_connection_id: ?[]const u8 = null,
     retry_source_connection_id: ?[]const u8 = null,
     stateless_reset_token: ?[16]u8 = null,
-    
+
     // Advanced parameters
     max_datagram_frame_size: ?u64 = null,
     grease_quic_bit: bool = false,
     version_information: ?[]const u32 = null,
-    
+
     // Custom extensions
     custom_parameters: std.HashMap(u64, []const u8, std.hash_map.AutoContext(u64), std.hash_map.default_max_load_percentage),
-    
+
     pub fn init(allocator: std.mem.Allocator) TransportParameters {
         return TransportParameters{
             .custom_parameters = std.HashMap(u64, []const u8, std.hash_map.AutoContext(u64), std.hash_map.default_max_load_percentage).init(allocator),
         };
     }
-    
+
     pub fn deinit(self: *TransportParameters, allocator: std.mem.Allocator) void {
         var iterator = self.custom_parameters.iterator();
         while (iterator.next()) |entry| {
@@ -207,34 +207,34 @@ pub const TransportParameters = struct {
 pub const CryptoKeys = struct {
     cipher_suite: CipherSuite,
     hash_algorithm: HashAlgorithm,
-    
+
     // Key material
     client_write_key: []u8,
     server_write_key: []u8,
     client_write_iv: []u8,
     server_write_iv: []u8,
-    
+
     // Header protection keys
     client_hp_key: []u8,
     server_hp_key: []u8,
-    
+
     // Key update support
     update_secret: []u8,
     key_update_count: u64,
-    
+
     // Post-quantum keys
     pq_shared_secret: ?[]u8,
-    
+
     allocator: std.mem.Allocator,
-    
+
     const Self = @This();
-    
+
     pub fn init(allocator: std.mem.Allocator, cipher_suite: CipherSuite) !Self {
         const key_len = cipher_suite.getKeyLength();
         const iv_len = 12; // All TLS 1.3 ciphers use 12-byte IV
         const hp_key_len = key_len;
         const hash_size = cipher_suite.getHashAlgorithm().getHashSize();
-        
+
         return Self{
             .cipher_suite = cipher_suite,
             .hash_algorithm = cipher_suite.getHashAlgorithm(),
@@ -250,7 +250,7 @@ pub const CryptoKeys = struct {
             .allocator = allocator,
         };
     }
-    
+
     pub fn deinit(self: *Self) void {
         // Zero out sensitive key material
         std.crypto.utils.secureZero(u8, self.client_write_key);
@@ -260,12 +260,12 @@ pub const CryptoKeys = struct {
         std.crypto.utils.secureZero(u8, self.client_hp_key);
         std.crypto.utils.secureZero(u8, self.server_hp_key);
         std.crypto.utils.secureZero(u8, self.update_secret);
-        
+
         if (self.pq_shared_secret) |pq_secret| {
             std.crypto.utils.secureZero(u8, pq_secret);
             self.allocator.free(pq_secret);
         }
-        
+
         self.allocator.free(self.client_write_key);
         self.allocator.free(self.server_write_key);
         self.allocator.free(self.client_write_iv);
@@ -274,47 +274,47 @@ pub const CryptoKeys = struct {
         self.allocator.free(self.server_hp_key);
         self.allocator.free(self.update_secret);
     }
-    
+
     /// Derive keys from traffic secret using HKDF with ZCrypto
     pub fn deriveFromTrafficSecret(self: *Self, traffic_secret: []const u8, is_client: bool) !void {
-        const hash_len = self.hash_algorithm.getHashSize();
-        
+        _ = self.hash_algorithm.getHashSize(); // Acknowledge hash_len usage
+
         // Derive write key
         const write_key = if (is_client) self.client_write_key else self.server_write_key;
         try self.hkdfExpandLabel(traffic_secret, "quic key", &[_]u8{}, write_key);
-        
+
         // Derive write IV
         const write_iv = if (is_client) self.client_write_iv else self.server_write_iv;
         try self.hkdfExpandLabel(traffic_secret, "quic iv", &[_]u8{}, write_iv);
-        
+
         // Derive header protection key
         const hp_key = if (is_client) self.client_hp_key else self.server_hp_key;
         try self.hkdfExpandLabel(traffic_secret, "quic hp", &[_]u8{}, hp_key);
-        
+
         // Update key update secret
         try self.hkdfExpandLabel(traffic_secret, "quic ku", &[_]u8{}, self.update_secret);
     }
-    
+
     /// HKDF-Expand-Label implementation using ZCrypto
     fn hkdfExpandLabel(self: *Self, secret: []const u8, label: []const u8, context: []const u8, out: []u8) !void {
         const full_label = try std.fmt.allocPrint(self.allocator, "tls13 {s}", .{label});
         defer self.allocator.free(full_label);
-        
+
         // Create HkdfLabel structure
-        var hkdf_label = std.ArrayList(u8).init(allocator);
-        defer hkdf_label.deinit(allocator);
-        
+        var hkdf_label = std.ArrayList(u8).init(self.allocator);
+        defer hkdf_label.deinit();
+
         // Length (2 bytes)
         try hkdf_label.writer().writeIntBig(u16, @intCast(out.len));
-        
+
         // Label length and label
         try hkdf_label.writer().writeIntBig(u8, @intCast(full_label.len));
         try hkdf_label.writer().writeAll(full_label);
-        
+
         // Context length and context
         try hkdf_label.writer().writeIntBig(u8, @intCast(context.len));
         try hkdf_label.writer().writeAll(context);
-        
+
         // Perform HKDF-Expand using ZCrypto
         switch (self.hash_algorithm) {
             .sha256 => {
@@ -329,17 +329,17 @@ pub const CryptoKeys = struct {
             else => return Error.ZquicError.UnsupportedAlgorithm,
         }
     }
-    
+
     /// Perform key update
     pub fn updateKeys(self: *Self, is_client: bool) !void {
         const new_secret = try self.allocator.alloc(u8, self.update_secret.len);
         defer self.allocator.free(new_secret);
-        
+
         try self.hkdfExpandLabel(self.update_secret, "quic ku", &[_]u8{}, new_secret);
-        
+
         @memcpy(self.update_secret, new_secret);
         try self.deriveFromTrafficSecret(new_secret, is_client);
-        
+
         self.key_update_count += 1;
     }
 };
@@ -354,15 +354,15 @@ pub const Certificate = struct {
     not_before: i64,
     not_after: i64,
     extensions: std.HashMap([]const u8, []const u8, std.hash_map.StringContext, std.hash_map.default_max_load_percentage),
-    
+
     allocator: std.mem.Allocator,
-    
+
     const Self = @This();
-    
+
     pub fn init(allocator: std.mem.Allocator, der_data: []const u8) !Self {
         // Parse DER-encoded certificate (simplified)
         // In production, would use a proper ASN.1 parser
-        
+
         return Self{
             .data = try allocator.dupe(u8, der_data),
             .signature_algorithm = .ed25519, // Default
@@ -375,18 +375,18 @@ pub const Certificate = struct {
             .allocator = allocator,
         };
     }
-    
+
     pub fn deinit(self: *Self) void {
         self.allocator.free(self.data);
-        
+
         var iterator = self.extensions.iterator();
         while (iterator.next()) |entry| {
             self.allocator.free(entry.key_ptr.*);
             self.allocator.free(entry.value_ptr.*);
         }
-        self.extensions.deinit(allocator);
+        self.extensions.deinit();
     }
-    
+
     pub fn verify(self: *const Self, signature: []const u8, message: []const u8) !bool {
         switch (self.signature_algorithm) {
             .ed25519 => {
@@ -413,7 +413,7 @@ pub const Certificate = struct {
             else => return Error.ZquicError.UnsupportedAlgorithm,
         }
     }
-    
+
     pub fn isValidAt(self: *const Self, timestamp: i64) bool {
         return timestamp >= self.not_before and timestamp <= self.not_after;
     }
@@ -428,11 +428,11 @@ pub const SessionTicket = struct {
     age_add: u32,
     issued_at: i64,
     lifetime: u32,
-    
+
     allocator: std.mem.Allocator,
-    
+
     const Self = @This();
-    
+
     pub fn init(allocator: std.mem.Allocator, ticket_data: []const u8, secret: []const u8, cipher_suite: CipherSuite) !Self {
         return Self{
             .ticket = try allocator.dupe(u8, ticket_data),
@@ -445,18 +445,18 @@ pub const SessionTicket = struct {
             .allocator = allocator,
         };
     }
-    
+
     pub fn deinit(self: *Self) void {
         self.allocator.free(self.ticket);
         std.crypto.utils.secureZero(u8, self.resumption_secret);
         self.allocator.free(self.resumption_secret);
     }
-    
+
     pub fn isValid(self: *const Self) bool {
         const now = std.time.timestamp();
         return now >= self.issued_at and now < self.issued_at + self.lifetime;
     }
-    
+
     pub fn getAge(self: *const Self) u32 {
         const now = std.time.timestamp();
         const age = @as(u32, @intCast(now - self.issued_at));
@@ -472,48 +472,48 @@ pub const ComprehensiveTlsContext = struct {
     cipher_suite: CipherSuite,
     signature_algorithm: SignatureAlgorithm,
     key_exchange_algorithm: KeyExchangeAlgorithm,
-    
+
     // Transport parameters
     transport_params: TransportParameters,
     peer_transport_params: ?TransportParameters,
-    
+
     // Cryptographic keys
     initial_keys: ?CryptoKeys,
     handshake_keys: ?CryptoKeys,
     application_keys: ?CryptoKeys,
     zero_rtt_keys: ?CryptoKeys,
-    
+
     // Certificate chain
     certificate_chain: std.ArrayList(Certificate),
     peer_certificate_chain: std.ArrayList(Certificate),
-    
+
     // Session resumption
     session_ticket: ?SessionTicket,
     resumption_secret: ?[]const u8,
-    
+
     // 0-RTT support
     max_early_data_size: u32,
     early_data_accepted: bool,
-    
+
     // Handshake transcript
     handshake_transcript: std.ArrayList(u8),
-    
+
     // Key exchange materials
     private_key: ?[]const u8,
     public_key: ?[]const u8,
     peer_public_key: ?[]const u8,
     shared_secret: ?[]const u8,
-    
+
     // Post-quantum support
     pq_private_key: ?[]const u8,
     pq_public_key: ?[]const u8,
     pq_peer_public_key: ?[]const u8,
     pq_shared_secret: ?[]const u8,
-    
+
     allocator: std.mem.Allocator,
-    
+
     const Self = @This();
-    
+
     pub fn init(allocator: std.mem.Allocator, is_server: bool) Self {
         return Self{
             .state = .initial,
@@ -521,7 +521,7 @@ pub const ComprehensiveTlsContext = struct {
             .cipher_suite = .tls_aes_128_gcm_sha256,
             .signature_algorithm = .ed25519,
             .key_exchange_algorithm = .x25519,
-            .transport_params = TransportParameterssrc/crypto/comprehensive_tls.zig,
+            .transport_params = TransportParameters{},
             .peer_transport_params = null,
             .initial_keys = null,
             .handshake_keys = null,
@@ -545,109 +545,109 @@ pub const ComprehensiveTlsContext = struct {
             .allocator = allocator,
         };
     }
-    
+
     pub fn deinit(self: *Self) void {
         // Clean up transport parameters
         self.transport_params.deinit(self.allocator);
         if (self.peer_transport_params) |*params| {
             params.deinit(self.allocator);
         }
-        
+
         // Clean up cryptographic keys
-        if (self.initial_keys) |*keys| keys.deinit(allocator);
-        if (self.handshake_keys) |*keys| keys.deinit(allocator);
-        if (self.application_keys) |*keys| keys.deinit(allocator);
-        if (self.zero_rtt_keys) |*keys| keys.deinit(allocator);
-        
+        if (self.initial_keys) |*keys| keys.deinit(self.allocator);
+        if (self.handshake_keys) |*keys| keys.deinit(self.allocator);
+        if (self.application_keys) |*keys| keys.deinit(self.allocator);
+        if (self.zero_rtt_keys) |*keys| keys.deinit(self.allocator);
+
         // Clean up certificates
         for (self.certificate_chain.items) |*cert| {
-            cert.deinit(allocator);
+            cert.deinit(self.allocator);
         }
-        self.certificate_chain.deinit(allocator);
-        
+        self.certificate_chain.deinit();
+
         for (self.peer_certificate_chain.items) |*cert| {
-            cert.deinit(allocator);
+            cert.deinit(self.allocator);
         }
-        self.peer_certificate_chain.deinit(allocator);
-        
+        self.peer_certificate_chain.deinit();
+
         // Clean up session ticket
         if (self.session_ticket) |*ticket| {
-            ticket.deinit(allocator);
+            ticket.deinit(self.allocator);
         }
-        
+
         // Clean up sensitive key material
         if (self.resumption_secret) |secret| {
             std.crypto.utils.secureZero(u8, secret);
             self.allocator.free(secret);
         }
-        
+
         if (self.private_key) |key| {
             std.crypto.utils.secureZero(u8, key);
             self.allocator.free(key);
         }
-        
+
         if (self.public_key) |key| {
             self.allocator.free(key);
         }
-        
+
         if (self.peer_public_key) |key| {
             self.allocator.free(key);
         }
-        
+
         if (self.shared_secret) |secret| {
             std.crypto.utils.secureZero(u8, secret);
             self.allocator.free(secret);
         }
-        
+
         if (self.pq_private_key) |key| {
             std.crypto.utils.secureZero(u8, key);
             self.allocator.free(key);
         }
-        
+
         if (self.pq_public_key) |key| {
             self.allocator.free(key);
         }
-        
+
         if (self.pq_peer_public_key) |key| {
             self.allocator.free(key);
         }
-        
+
         if (self.pq_shared_secret) |secret| {
             std.crypto.utils.secureZero(u8, secret);
             self.allocator.free(secret);
         }
-        
-        self.handshake_transcript.deinit(allocator);
+
+        self.handshake_transcript.deinit();
     }
-    
+
     /// Initialize connection for client
     pub fn initClient(self: *Self, server_name: []const u8) !void {
         _ = server_name;
         self.state = .initial;
         try self.generateKeyPair();
-        
+
         if (self.cipher_suite.isPostQuantum()) {
             try self.generatePostQuantumKeyPair();
         }
     }
-    
+
     /// Initialize connection for server
     pub fn initServer(self: *Self, certificate_chain: []const []const u8) !void {
         self.state = .wait_client_hello;
-        
+
         // Load server certificate chain
         for (certificate_chain) |cert_data| {
             const cert = try Certificate.init(self.allocator, cert_data);
-            try self.certificate_chain.append(allocator, cert);
+            try self.certificate_chain.append(self.allocator, cert);
         }
-        
+
         try self.generateKeyPair();
-        
+
         if (self.cipher_suite.isPostQuantum()) {
             try self.generatePostQuantumKeyPair();
         }
     }
-    
+
     /// Generate key pair for selected algorithm
     fn generateKeyPair(self: *Self) !void {
         switch (self.key_exchange_algorithm) {
@@ -664,7 +664,7 @@ pub const ComprehensiveTlsContext = struct {
             else => return Error.ZquicError.UnsupportedAlgorithm,
         }
     }
-    
+
     /// Generate post-quantum key pair
     fn generatePostQuantumKeyPair(self: *Self) !void {
         switch (self.key_exchange_algorithm) {
@@ -681,14 +681,15 @@ pub const ComprehensiveTlsContext = struct {
             else => {}, // No post-quantum support for this algorithm
         }
     }
-    
+
     /// Process handshake message
     pub fn processHandshakeMessage(self: *Self, message_type: u8, message: []const u8) !void {
         // Add to handshake transcript
-        try self.handshake_transcript.append(allocator, message_type);
+        // Update handshake transcript
+        try self.handshake_transcript.append(self.allocator, message_type);
         try self.handshake_transcript.writer().writeIntBig(u24, @intCast(message.len));
-        try self.handshake_transcript.appendSlice(allocator, message);
-        
+        try self.handshake_transcript.appendSlice(self.allocator, message);
+
         switch (message_type) {
             1 => try self.processClientHello(message), // ClientHello
             2 => try self.processServerHello(message), // ServerHello
@@ -699,85 +700,85 @@ pub const ComprehensiveTlsContext = struct {
             else => return Error.ZquicError.UnsupportedMessage,
         }
     }
-    
+
     /// Process ClientHello message
     fn processClientHello(self: *Self, message: []const u8) !void {
         _ = message;
-        
+
         if (!self.is_server) {
             return Error.ZquicError.UnexpectedMessage;
         }
-        
+
         // Parse ClientHello and extract supported cipher suites, extensions, etc.
         // This is simplified - full implementation would parse TLS message format
-        
+
         self.state = .wait_server_hello;
     }
-    
+
     /// Process ServerHello message
     fn processServerHello(self: *Self, message: []const u8) !void {
         _ = message;
-        
+
         if (self.is_server) {
             return Error.ZquicError.UnexpectedMessage;
         }
-        
+
         // Parse ServerHello and extract selected cipher suite, key share, etc.
         // This is simplified - full implementation would parse TLS message format
-        
+
         self.state = .wait_encrypted_extensions;
     }
-    
+
     /// Process EncryptedExtensions message
     fn processEncryptedExtensions(self: *Self, message: []const u8) !void {
         _ = message;
-        
+
         if (self.is_server) {
             return Error.ZquicError.UnexpectedMessage;
         }
-        
+
         // Parse transport parameters from EncryptedExtensions
         self.state = .wait_certificate;
     }
-    
+
     /// Process Certificate message
     fn processCertificate(self: *Self, message: []const u8) !void {
         _ = message;
-        
+
         // Parse certificate chain
         // This is simplified - full implementation would parse certificate_list
-        
+
         self.state = .wait_certificate_verify;
     }
-    
+
     /// Process CertificateVerify message
     fn processCertificateVerify(self: *Self, message: []const u8) !void {
         _ = message;
-        
+
         // Verify certificate signature
         // This is simplified - full implementation would verify the signature
-        
+
         self.state = .wait_finished;
     }
-    
+
     /// Process Finished message
     fn processFinished(self: *Self, message: []const u8) !void {
         _ = message;
-        
+
         // Verify finished message
         // This is simplified - full implementation would verify HMAC
-        
+
         self.state = .connected;
     }
-    
+
     /// Generate session ticket for 0-RTT
     pub fn generateSessionTicket(self: *Self) !SessionTicket {
         const ticket_data = try self.allocator.alloc(u8, 32);
         defer self.allocator.free(ticket_data);
-        
+
         // Generate random ticket
         try zcrypto.random.secure_random(ticket_data);
-        
+
         // Derive resumption secret
         const resumption_secret = try self.allocator.alloc(u8, 32);
         try zcrypto.kdf.hkdf_expand_sha256(
@@ -785,22 +786,23 @@ pub const ComprehensiveTlsContext = struct {
             "resumption",
             resumption_secret,
         );
-        
+
         return SessionTicket.init(self.allocator, ticket_data, resumption_secret, self.cipher_suite);
     }
-    
+
     /// Validate session ticket for 0-RTT
     pub fn validateSessionTicket(self: *Self, ticket: SessionTicket) !bool {
+        _ = self; // Suppress unused parameter warning
         if (!ticket.isValid()) {
             return false;
         }
-        
+
         // Verify ticket authenticity
         // This is simplified - full implementation would verify ticket MAC
-        
+
         return true;
     }
-    
+
     /// Get current encryption level
     pub fn getCurrentEncryptionLevel(self: *const Self) u8 {
         return switch (self.state) {
@@ -812,12 +814,12 @@ pub const ComprehensiveTlsContext = struct {
             else => 0,
         };
     }
-    
+
     /// Check if ready for 0-RTT
     pub fn canSendEarlyData(self: *const Self) bool {
         return self.session_ticket != null and self.zero_rtt_keys != null;
     }
-    
+
     /// Check if connection is established
     pub fn isConnected(self: *const Self) bool {
         return self.state == .connected;
@@ -863,10 +865,10 @@ pub const TlsExtensionType = enum(u16) {
     post_handshake_auth = 49,
     signature_algorithms_cert = 50,
     key_share = 51,
-    
+
     // QUIC transport parameters
     quic_transport_parameters = 57,
-    
+
     // Post-quantum extensions
     post_quantum_key_share = 0xFE00,
     hybrid_key_share = 0xFE01,

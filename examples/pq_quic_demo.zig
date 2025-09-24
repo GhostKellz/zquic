@@ -48,83 +48,53 @@ pub fn main() !void {
 
     // Demonstrate FFI crypto functions
     std.debug.print("\nTesting FFI Crypto Functions:\n", .{});
-
-    // Ed25519 keypair generation
-    var ed25519_public: [32]u8 = undefined;
-    var ed25519_private: [64]u8 = undefined;
-    
-    const ed_result = zquic.zcrypto_ed25519_keypair(&ed25519_public, &ed25519_private);
-    if (ed_result == 0) {
-        std.debug.print("✓ Ed25519 keypair generated successfully\n", .{});
-    }
-
-    // Sign a message
-    const message = "Hello, Post-Quantum World!";
-    var signature: [64]u8 = undefined;
-    
-    const sign_result = zquic.zcrypto_ed25519_sign(
-        &ed25519_private,
-        message.ptr,
-        message.len,
-        &signature,
-    );
-    if (sign_result == 0) {
-        std.debug.print("✓ Message signed with Ed25519\n", .{});
-    }
-
-    // Verify signature
-    const verify_result = zquic.zcrypto_ed25519_verify(
-        &ed25519_public,
-        message.ptr,
-        message.len,
-        &signature,
-    );
-    if (verify_result == 0) {
-        std.debug.print("✓ Signature verified successfully\n", .{});
-    }
+    std.debug.print("⚠️  FFI functions disabled in this build\n", .{});
 
     // Test hashing
     std.debug.print("\nTesting Hash Functions:\n", .{});
+    std.debug.print("⚠️  Hash functions disabled (FFI)\n", .{});
 
-    var blake3_hash: [64]u8 = undefined;
-    const blake3_result = zquic.zcrypto_blake3_hash(
-        message.ptr,
-        message.len,
-        &blake3_hash,
-    );
-    if (blake3_result == 0) {
-        std.debug.print("✓ Blake3 hash computed: ", .{});
-        for (blake3_hash[0..8]) |byte| {
-            std.debug.print("{x:0>2}", .{byte});
-        }
-        std.debug.print("...\n", .{});
-    }
+    // var blake3_hash: [64]u8 = undefined;
+    // const blake3_result = zquic.zcrypto_blake3_hash(
+    //     message.ptr,
+    //     message.len,
+    //     &blake3_hash,
+    // );
+    // if (blake3_result == 0) {
+    //     std.debug.print("✓ Blake3 hash computed: ", .{});
+    //     for (blake3_hash[0..8]) |byte| {
+    //         std.debug.print("{x:0>2}", .{byte});
+    //     }
+    //     std.debug.print("...\n", .{});
+    // }
 
-    var sha256_hash: [32]u8 = undefined;
-    const sha256_result = zquic.zcrypto_sha256_hash(
-        message.ptr,
-        message.len,
-        &sha256_hash,
-    );
-    if (sha256_result == 0) {
-        std.debug.print("✓ SHA-256 hash computed: ", .{});
-        for (sha256_hash[0..8]) |byte| {
-            std.debug.print("{x:0>2}", .{byte});
-        }
-        std.debug.print("...\n", .{});
-    }
+    // var sha256_hash: [32]u8 = undefined;
+    // const sha256_result = zquic.zcrypto_sha256_hash(
+    //     message.ptr,
+    //     message.len,
+    //     &sha256_hash,
+    // );
+    // if (sha256_result == 0) {
+    //     std.debug.print("✓ SHA-256 hash computed: ", .{});
+    //     for (sha256_hash[0..8]) |byte| {
+    //         std.debug.print("{x:0>2}", .{byte});
+    //     }
+    //     std.debug.print("...\n", .{});
+    // }
 
     // Demonstrate secure random generation
     std.debug.print("\nGenerating Secure Random Data:\n", .{});
-    var random_bytes: [32]u8 = undefined;
-    const random_result = zquic.zcrypto_random_bytes(&random_bytes, 32);
-    if (random_result == 0) {
-        std.debug.print("✓ Generated 32 random bytes: ", .{});
-        for (random_bytes[0..8]) |byte| {
-            std.debug.print("{x:0>2}", .{byte});
-        }
-        std.debug.print("...\n", .{});
-    }
+    std.debug.print("⚠️  Random functions disabled (FFI)\n", .{});
+
+    // var random_bytes: [32]u8 = undefined;
+    // const random_result = zquic.zcrypto_random_bytes(&random_bytes, 32);
+    // if (random_result == 0) {
+    //     std.debug.print("✓ Generated 32 random bytes: ", .{});
+    //     for (random_bytes[0..8]) |byte| {
+    //         std.debug.print("{x:0>2}", .{byte});
+    //     }
+    //     std.debug.print("...\n", .{});
+    // }
 
     // Performance comparison
     std.debug.print("\nPerformance Characteristics:\n", .{});
@@ -136,7 +106,7 @@ pub fn main() !void {
 
     std.debug.print("\n✓ Post-Quantum QUIC is ready for production use!\n", .{});
     std.debug.print("  Your QUIC connections are now quantum-safe.\n", .{});
-    
+
     // Demonstrate server creation
     std.debug.print("\nDemonstrating quantum-safe server creation...\n", .{});
     try createQuantumSafeServer(allocator);

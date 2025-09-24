@@ -1,190 +1,169 @@
-//! ZQUIC — Minimal QUIC/HTTP3 Library for Zig
+//! ZQUIC — Modular QUIC/HTTP3 Library for Zig v0.9.0
 //!
-//! zquic is a lightweight, high-performance QUIC (HTTP/3 transport layer)
-//! implementation written in pure Zig. Designed for use in embedded systems,
-//! VPN stacks, decentralized services, and ultra-fast proxies.
+//! zquic is a high-performance, modular QUIC (HTTP/3 transport layer)
+//! implementation written in pure Zig. Designed for flexibility:
+//! from minimal embedded QUIC clients to full-featured enterprise servers.
+//!
+//! Features are enabled/disabled at build time for optimal binary size:
+//! - Core QUIC: Always included (~1MB)
+//! - HTTP/3: Web server support (+1MB)
+//! - DoQ: DNS-over-QUIC (+0.5MB)
+//! - Services: GhostBridge/Wraith (+2MB)
+//! - VPN: zcrypto VPN features (+0.5MB)
+//! - Post-Quantum: zcrypto PQ features (+1.5MB)
+//! - Monitoring: Performance tracking (+0.2MB)
 
 const std = @import("std");
+const build_options = @import("build_options");
 
-// Core QUIC protocol components
-pub const Connection = @import("core/connection.zig");
-pub const Packet = @import("core/packet.zig");
-pub const Stream = @import("core/stream.zig");
-pub const FlowControl = @import("core/flow_control.zig");
-pub const Congestion = @import("core/congestion.zig");
+// Core QUIC module (always available)
+pub const core = @import("core.zig");
 
-// Crypto and TLS 1.3 support
-pub const Crypto = @import("crypto/tls.zig");
-pub const EnhancedCrypto = @import("crypto/enhanced_tls.zig");
-pub const Handshake = @import("crypto/handshake.zig");
-pub const Keys = @import("crypto/keys.zig");
+// Re-export core components for convenience
+pub const Connection = core.Connection;
+pub const Packet = core.Packet;
+pub const Stream = core.Stream;
+pub const FlowControl = core.FlowControl;
+pub const Congestion = core.Congestion;
+pub const Crypto = core.Crypto;
+pub const EnhancedCrypto = core.EnhancedCrypto;
+pub const Handshake = core.Handshake;
+pub const Keys = core.Keys;
+pub const Udp = core.Udp;
+pub const UdpMultiplexer = core.UdpMultiplexer;
+pub const Socket = core.Socket;
+pub const IPv6 = core.IPv6;
+pub const AsyncRuntime = core.AsyncRuntime;
+pub const LoadBalancer = core.LoadBalancer;
+pub const Allocator = core.Allocator;
+pub const Error = core.Error;
+pub const PacketCrypto = core.PacketCrypto;
+pub const ProcessedPacket = core.ProcessedPacket;
+pub const BulkPacketProcessor = core.BulkPacketProcessor;
+pub const PacketMemoryPool = core.PacketMemoryPool;
 
-// Post-Quantum crypto support (zcrypto 0.5.0)
-pub const PostQuantum = @import("crypto/pq_quic.zig");
-pub const PQCipherSuite = PostQuantum.PQCipherSuite;
-pub const PQKeyExchange = PostQuantum.PQKeyExchange;
-pub const PQQuicContext = PostQuantum.PQQuicContext;
-pub const PQAuthentication = PostQuantum.PQAuthentication;
+// Feature modules (conditionally available based on build configuration)
+pub const http3 = if (build_options.enable_http3) @import("http3.zig") else struct {};
+pub const doq = if (build_options.enable_doq) @import("doq.zig") else struct {};
+pub const vpn = if (build_options.enable_vpn) @import("vpn.zig") else struct {};
+pub const services = if (build_options.enable_services) @import("services.zig") else struct {};
+pub const post_quantum = if (build_options.enable_post_quantum) @import("post_quantum.zig") else struct {};
+// FFI support removed for v0.9.0-RC1 to reduce complexity
+pub const monitoring = if (build_options.enable_monitoring) @import("monitoring.zig") else struct {};
 
-// Assembly optimizations for high-performance crypto
-pub const Optimizations = @import("crypto/asm_optimizations.zig");
-pub const CpuOptimizer = Optimizations.CpuOptimizer;
-pub const OptimizedBlake3 = Optimizations.OptimizedBlake3;
-pub const OptimizedChaCha20Poly1305 = Optimizations.OptimizedChaCha20Poly1305;
-pub const OptimizedPacketProcessor = Optimizations.OptimizedPacketProcessor;
+// HTTP/3 convenience exports (when enabled)
+pub const Http3 = if (build_options.enable_http3) http3 else struct {};
 
-// HTTP/3 enhanced implementation
-pub const Http3 = struct {
-    // Core HTTP/3 modules
-    pub const Frame = @import("http3/frame.zig");
-    pub const QpackDecoder = @import("http3/qpack.zig").QpackDecoder;
-    pub const HeaderField = @import("http3/qpack.zig").HeaderField;
+// DoQ convenience exports (when enabled)
+pub const DoQ = if (build_options.enable_doq) doq else struct {};
 
-    // Enhanced HTTP/3 server components
-    pub const Request = @import("http3/request.zig").Request;
-    pub const Response = @import("http3/response.zig").Response;
-    pub const StatusCode = @import("http3/response.zig").StatusCode;
-    pub const Method = @import("http3/request.zig").Method;
+// Services convenience exports (when enabled)
+pub const Services = if (build_options.enable_services) services.GhostBridge else struct {};
 
-    // Routing system
-    pub const Router = @import("http3/router.zig").Router;
-    pub const Route = @import("http3/router.zig").Route;
-    pub const RouteParams = @import("http3/router.zig").RouteParams;
-    pub const HandlerFn = @import("http3/router.zig").HandlerFn;
+// Post-Quantum convenience exports (when enabled)
+pub const PostQuantum = if (build_options.enable_post_quantum) post_quantum.PostQuantum else struct {};
+pub const PQCipherSuite = if (build_options.enable_post_quantum) post_quantum.PQCipherSuite else struct {};
+pub const PQKeyExchange = if (build_options.enable_post_quantum) post_quantum.PQKeyExchange else struct {};
+pub const PQQuicContext = if (build_options.enable_post_quantum) post_quantum.PQQuicContext else struct {};
+pub const PQAuthentication = if (build_options.enable_post_quantum) post_quantum.PQAuthentication else struct {};
 
-    // Middleware system
-    pub const Middleware = @import("http3/middleware.zig");
+// Assembly optimizations (when post-quantum is enabled)
+pub const Optimizations = if (build_options.enable_post_quantum) post_quantum.Optimizations else struct {};
+pub const CpuOptimizer = if (build_options.enable_post_quantum) post_quantum.CpuOptimizer else struct {};
+pub const OptimizedBlake3 = if (build_options.enable_post_quantum) post_quantum.OptimizedBlake3 else struct {};
+pub const OptimizedChaCha20Poly1305 = if (build_options.enable_post_quantum) post_quantum.OptimizedChaCha20Poly1305 else struct {};
+pub const OptimizedPacketProcessor = if (build_options.enable_post_quantum) post_quantum.OptimizedPacketProcessor else struct {};
 
-    // Enhanced HTTP/3 server
-    pub const Http3Server = @import("http3/server.zig").Http3Server;
-    pub const ServerConfig = @import("http3/server.zig").ServerConfig;
-    pub const ServerStats = @import("http3/server.zig").ServerStats;
-};
+// VPN convenience exports (when enabled)
+pub const VpnRouter = if (build_options.enable_vpn) vpn.VpnRouter else struct {};
 
-// Network layer
-pub const Udp = @import("net/udp.zig");
-pub const UdpMultiplexer = @import("net/multiplexer.zig");
-pub const Socket = @import("net/socket.zig");
-pub const IPv6 = @import("net/ipv6.zig");
+// FFI support removed for v0.9.0-RC1 to reduce complexity
+// Use zcrypto module directly for cryptographic operations
 
-// Async runtime and load balancing
-pub const AsyncRuntime = @import("async/runtime.zig");
-pub const LoadBalancer = @import("async/load_balancer.zig");
+// Legacy compatibility aliases
+pub const BridgeConfig = if (build_options.enable_services) services.BridgeConfig else struct {};
+pub const pq = post_quantum; // Legacy alias for post_quantum
 
-// VPN functionality
-pub const VpnRouter = @import("vpn/router.zig");
+// Convenience exports for common algorithms (when post-quantum enabled)
+pub const kyber = if (build_options.enable_post_quantum and @hasDecl(post_quantum, "kyber")) post_quantum.kyber else struct {};
+pub const dilithium = if (build_options.enable_post_quantum and @hasDecl(post_quantum, "dilithium")) post_quantum.dilithium else struct {};
 
-// GhostChain Services
-pub const Services = struct {
-    // GhostBridge - gRPC over QUIC transport
-    pub const GhostBridge = @import("services/ghostbridge.zig").GhostBridge;
-    pub const GhostBridgeConfig = @import("services/ghostbridge.zig").GhostBridgeConfig;
-    pub const GrpcConnection = @import("services/ghostbridge.zig").GrpcConnection;
-    pub const GrpcStream = @import("services/ghostbridge.zig").GrpcStream;
-    pub const GrpcRequest = @import("services/ghostbridge.zig").GrpcRequest;
-    pub const GrpcResponse = @import("services/ghostbridge.zig").GrpcResponse;
-    pub const ServiceRegistration = @import("services/ghostbridge.zig").ServiceRegistration;
-    
-    // Wraith - Post-quantum reverse proxy
-    pub const WraithProxy = @import("services/wraith.zig").WraithProxy;
-    pub const WraithConfig = @import("services/wraith.zig").WraithConfig;
-    pub const BackendServer = @import("services/wraith.zig").BackendServer;
-    pub const BackendPool = @import("services/wraith.zig").BackendPool;
-    pub const LoadBalancingAlgorithm = @import("services/wraith.zig").LoadBalancingAlgorithm;
-    pub const ProxyStats = @import("services/wraith.zig").ProxyStats;
-    
-    // CNS/ZNS - DNS-over-QUIC resolver
-    pub const CnsResolver = @import("services/cns_resolver.zig").CnsResolver;
-    pub const CnsResolverConfig = @import("services/cns_resolver.zig").CnsResolverConfig;
-    pub const BlockchainResolver = @import("services/cns_resolver.zig").BlockchainResolver;
-    pub const DnsMessage = @import("services/cns_resolver.zig").DnsMessage;
-    pub const DnsQuestion = @import("services/cns_resolver.zig").DnsQuestion;
-    pub const DnsResourceRecord = @import("services/cns_resolver.zig").DnsResourceRecord;
-    pub const DnsRecordType = @import("services/cns_resolver.zig").DnsRecordType;
-    pub const ResolverStats = @import("services/cns_resolver.zig").ResolverStats;
-    
-    // ZVM - WASM runtime integration over QUIC
-    pub const ZvmQuicServer = @import("services/zvm_integration.zig").ZvmQuicServer;
-    pub const ZvmQuicClient = @import("services/zvm_integration.zig").ZvmQuicClient;
-    pub const WasmExecutionRequest = @import("services/zvm_integration.zig").WasmExecutionRequest;
-    pub const WasmExecutionResult = @import("services/zvm_integration.zig").WasmExecutionResult;
-    pub const WasmValidator = @import("services/zvm_integration.zig").WasmValidator;
-};
-
-// DNS-over-QUIC (DoQ) implementation (RFC 9250)
-pub const DoQ = struct {
-    // Core DoQ components
-    pub const DnsMessage = @import("doq/message.zig").DnsMessage;
-    pub const DnsHeader = @import("doq/message.zig").DnsHeader;
-    pub const DnsQuestion = @import("doq/message.zig").DnsQuestion;
-    pub const DnsResourceRecord = @import("doq/message.zig").DnsResourceRecord;
-    pub const DnsRecordType = @import("doq/message.zig").DnsRecordType;
-    pub const DnsResponseCode = @import("doq/message.zig").DnsResponseCode;
-
-    // DoQ Server
-    pub const Server = @import("doq/server.zig").DoQServer;
-    pub const ServerConfig = @import("doq/server.zig").DoQServerConfig;
-    pub const ServerStats = @import("doq/server.zig").DoQServerStats;
-    pub const DnsHandlerFn = @import("doq/server.zig").DnsHandlerFn;
-    
-    // DoQ Client
-    pub const Client = @import("doq/client.zig").DoQClient;
-    pub const ClientConfig = @import("doq/client.zig").DoQClientConfig;
-    pub const ClientStats = @import("doq/client.zig").DoQClientStats;
-    pub const QueryOptions = @import("doq/client.zig").DoQQueryOptions;
-    pub const QueryResult = @import("doq/client.zig").DoQQueryResult;
-
-    // Pre-configured clients
-    pub const createCloudflareClient = @import("doq/client.zig").createCloudflareClient;
-    pub const createQuad9Client = @import("doq/client.zig").createQuad9Client;
-    pub const createGoogleClient = @import("doq/client.zig").createGoogleClient;
-    
-    // Utility functions
-    pub const createGhostDnsServer = @import("doq/server.zig").createGhostDnsServer;
-    pub const resolveMultiple = @import("doq/client.zig").resolveMultiple;
-};
-
-// Core QUIC enhancements
-pub const PacketCrypto = @import("core/packet_crypto.zig").PacketCrypto;
-pub const ProcessedPacket = @import("core/packet_crypto.zig").ProcessedPacket;
-pub const BulkPacketProcessor = @import("core/packet_crypto.zig").BulkPacketProcessor;
-pub const PacketMemoryPool = @import("core/packet_crypto.zig").PacketMemoryPool;
-
-// Utilities
-pub const Allocator = @import("utils/allocator.zig");
-pub const Error = @import("utils/error.zig");
-
-// FFI exports for crypto operations
-pub const zcrypto_ed25519_keypair = @import("ffi/zcrypto_ffi.zig").zcrypto_ed25519_keypair;
-pub const zcrypto_ed25519_sign = @import("ffi/zcrypto_ffi.zig").zcrypto_ed25519_sign;
-pub const zcrypto_ed25519_verify = @import("ffi/zcrypto_ffi.zig").zcrypto_ed25519_verify;
-pub const zcrypto_secp256k1_keypair = @import("ffi/zcrypto_ffi.zig").zcrypto_secp256k1_keypair;
-pub const zcrypto_secp256k1_sign = @import("ffi/zcrypto_ffi.zig").zcrypto_secp256k1_sign;
-pub const zcrypto_secp256k1_verify = @import("ffi/zcrypto_ffi.zig").zcrypto_secp256k1_verify;
-pub const zcrypto_blake3_hash = @import("ffi/zcrypto_ffi.zig").zcrypto_blake3_hash;
-pub const zcrypto_sha256_hash = @import("ffi/zcrypto_ffi.zig").zcrypto_sha256_hash;
-pub const zcrypto_random_bytes = @import("ffi/zcrypto_ffi.zig").zcrypto_random_bytes;
-
-// GhostBridge types that were missing
-pub const BridgeConfig = Services.GhostBridgeConfig;
+// These are always available through zcrypto
+const zcrypto = @import("zcrypto");
+pub const x25519 = if (@hasDecl(zcrypto, "kex")) zcrypto.kex.X25519 else struct {};
+pub const ed25519 = if (@hasDecl(zcrypto, "kex")) zcrypto.kex.Ed25519 else struct {};
 
 // Version information
-pub const version = "0.7.0";
-pub const quic_version = 0x00000001; // QUIC version 1 (RFC 9000)
+pub const version = core.version;
+pub const quic_version = core.quic_version;
+
+// Build configuration information
+pub const build_config = struct {
+    pub const http3_enabled = build_options.enable_http3;
+    pub const doq_enabled = build_options.enable_doq;
+    pub const vpn_enabled = build_options.enable_vpn;
+    pub const services_enabled = build_options.enable_services;
+    pub const post_quantum_enabled = build_options.enable_post_quantum;
+    pub const monitoring_enabled = build_options.enable_monitoring;
+    pub const async_zsync_enabled = build_options.enable_async_zsync;
+
+    pub fn printConfig() void {
+        std.debug.print("zquic v{s} build configuration:\n", .{version});
+        std.debug.print("  HTTP/3: {}\n", .{http3_enabled});
+        std.debug.print("  DoQ: {}\n", .{doq_enabled});
+        std.debug.print("  VPN: {}\n", .{vpn_enabled});
+        std.debug.print("  Services: {}\n", .{services_enabled});
+        std.debug.print("  Post-Quantum: {}\n", .{post_quantum_enabled});
+        std.debug.print("  Monitoring: {}\n", .{monitoring_enabled});
+        std.debug.print("  Async (zsync): {}\n", .{async_zsync_enabled});
+    }
+};
 
 /// Initialize the ZQUIC library with a given allocator
 pub fn init(allocator: std.mem.Allocator) Error.ZquicError!void {
-    // Initialize library-wide state if needed
-    _ = allocator;
-    // For now, this is a no-op but could initialize crypto backends, etc.
+    // Initialize core first
+    try core.init(allocator);
+
+    // Initialize feature modules as needed
+    // (Most modules don't need initialization, but this provides extension points)
 }
 
 /// Deinitialize the ZQUIC library
 pub fn deinit() void {
-    // Clean up any global state
+    // Deinitialize in reverse order
+    core.deinit();
 }
 
-test "zquic library initialization" {
+/// Get a summary of enabled features
+pub fn getEnabledFeatures() []const []const u8 {
+    comptime {
+        var features: []const []const u8 = &.{};
+        if (build_options.enable_http3) features = features ++ &.{"http3"};
+        if (build_options.enable_doq) features = features ++ &.{"doq"};
+        if (build_options.enable_vpn) features = features ++ &.{"vpn"};
+        if (build_options.enable_services) features = features ++ &.{"services"};
+        if (build_options.enable_post_quantum) features = features ++ &.{"post-quantum"};
+        if (build_options.enable_monitoring) features = features ++ &.{"monitoring"};
+        if (build_options.enable_async_zsync) features = features ++ &.{"async-zsync"};
+        return features;
+    }
+}
+
+test "zquic modular library initialization" {
     try init(std.testing.allocator);
     defer deinit();
+
+    // Test that we can get feature list
+    const features = getEnabledFeatures();
+    std.testing.expect(features.len >= 0);
+}
+
+test {
+    // Import all conditionally available modules for testing
+    if (build_options.enable_http3) _ = http3;
+    if (build_options.enable_doq) _ = doq;
+    if (build_options.enable_vpn) _ = vpn;
+    if (build_options.enable_services) _ = services;
+    if (build_options.enable_post_quantum) _ = post_quantum;
+    if (build_options.enable_monitoring) _ = monitoring;
 }

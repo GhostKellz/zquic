@@ -113,7 +113,7 @@ fn simulateGetRequest(server: *zquic.Http3.Http3Server, conn_id: []const u8, str
     const headers_payload = try createHeadersPayload(allocator, "GET", path, null);
     defer allocator.free(headers_payload);
 
-    const headers_frame = zquic.Http3.Frame.Frame{
+    const headers_frame = zquic.Http3.Frame{
         .frame_type = .headers,
         .payload = headers_payload,
     };
@@ -127,7 +127,7 @@ fn simulatePostRequest(server: *zquic.Http3.Http3Server, conn_id: []const u8, st
     const headers_payload = try createHeadersPayload(allocator, "POST", path, "application/json");
     defer allocator.free(headers_payload);
 
-    const headers_frame = zquic.Http3.Frame.Frame{
+    const headers_frame = zquic.Http3.Frame{
         .frame_type = .headers,
         .payload = headers_payload,
     };
@@ -135,7 +135,7 @@ fn simulatePostRequest(server: *zquic.Http3.Http3Server, conn_id: []const u8, st
     try server.processFrame(conn_id, stream_id, headers_frame);
 
     // Create DATA frame
-    const data_frame = zquic.Http3.Frame.Frame{
+    const data_frame = zquic.Http3.Frame{
         .frame_type = .data,
         .payload = try allocator.dupe(u8, body),
     };
@@ -147,23 +147,23 @@ fn simulatePostRequest(server: *zquic.Http3.Http3Server, conn_id: []const u8, st
 
 fn createHeadersPayload(allocator: std.mem.Allocator, method: []const u8, path: []const u8, content_type: ?[]const u8) ![]u8 {
     // Simplified QPACK encoding (in reality, this would be properly encoded)
-    var headers = std.ArrayList(u8).init(allocator);
+    var headers = try std.ArrayList(u8).initCapacity(allocator, 0);
 
     // Add pseudo-headers
-    try headers.appendSlice(":method ");
-    try headers.appendSlice(method);
-    try headers.appendSlice("\n:path ");
-    try headers.appendSlice(path);
-    try headers.appendSlice("\n:scheme https\n:authority example.com\n");
+    try headers.appendSlice(allocator, ":method ");
+    try headers.appendSlice(allocator, method);
+    try headers.appendSlice(allocator, "\n:path ");
+    try headers.appendSlice(allocator, path);
+    try headers.appendSlice(allocator, "\n:scheme https\n:authority example.com\n");
 
     // Add content-type if provided
     if (content_type) |ct| {
-        try headers.appendSlice("content-type ");
-        try headers.appendSlice(ct);
-        try headers.appendSlice("\n");
+        try headers.appendSlice(allocator, "content-type ");
+        try headers.appendSlice(allocator, ct);
+        try headers.appendSlice(allocator, "\n");
     }
 
-    return headers.toOwnedSlice();
+    return headers.toOwnedSlice(allocator);
 }
 
 // Route Handlers

@@ -3,14 +3,18 @@
 //! Post-quantum DNS resolver for decentralized naming (.ghost, .zns, .eth domains)
 
 const std = @import("std");
-const zquic = @import("../root.zig");
+const zquic_core = @import("zquic_core");
 const zcrypto = @import("zcrypto");
+const build_options = @import("build_options");
 const Error = @import("../utils/error.zig");
 
-const Http3Server = zquic.Http3.Http3Server;
-const ServerConfig = zquic.Http3.ServerConfig;
-const QuicConnection = zquic.Connection.Connection;
-const QuicStream = zquic.Stream.Stream;
+/// Conditionally import HTTP/3 if enabled
+const http3 = if (build_options.enable_http3) @import("http3") else struct {};
+
+const Http3Server = if (build_options.enable_http3) http3.Http3Server else void;
+const ServerConfig = if (build_options.enable_http3) http3.ServerConfig else void;
+const QuicConnection = zquic_core.Connection.Connection;
+const QuicStream = zquic_core.Stream.Stream;
 
 /// CNS resolver configuration
 pub const CnsResolverConfig = struct {
@@ -56,56 +60,56 @@ pub const DnsRecordType = enum(u16) {
     RRSIG = 46,
     NSEC = 47,
     DNSKEY = 48,
-    
+
     // Custom types for blockchain domains
     BLOCKCHAIN = 65280, // Custom type for blockchain resolution
-    IPFS = 65281,      // IPFS hash
-    CONTENT = 65282,   // Content hash
+    IPFS = 65281, // IPFS hash
+    CONTENT = 65282, // Content hash
 };
 
 /// DNS query class
 pub const DnsClass = enum(u16) {
-    IN = 1,     // Internet
-    CS = 2,     // CSNET (obsolete)
-    CH = 3,     // Chaos
-    HS = 4,     // Hesiod
-    ANY = 255,  // Any class
+    IN = 1, // Internet
+    CS = 2, // CSNET (obsolete)
+    CH = 3, // Chaos
+    HS = 4, // Hesiod
+    ANY = 255, // Any class
 };
 
 /// DNS response code
 pub const DnsResponseCode = enum(u8) {
     NoError = 0,
-    FormErr = 1,      // Format error
-    ServFail = 2,     // Server failure
-    NXDomain = 3,     // Non-existent domain
-    NotImp = 4,       // Not implemented
-    Refused = 5,      // Query refused
-    YXDomain = 6,     // Domain exists when it shouldn't
-    YXRRSet = 7,      // RR set exists when it shouldn't
-    NXRRSet = 8,      // RR set doesn't exist when it should
-    NotAuth = 9,      // Server not authoritative
-    NotZone = 10,     // Name not in zone
+    FormErr = 1, // Format error
+    ServFail = 2, // Server failure
+    NXDomain = 3, // Non-existent domain
+    NotImp = 4, // Not implemented
+    Refused = 5, // Query refused
+    YXDomain = 6, // Domain exists when it shouldn't
+    YXRRSet = 7, // RR set exists when it shouldn't
+    NXRRSet = 8, // RR set doesn't exist when it should
+    NotAuth = 9, // Server not authoritative
+    NotZone = 10, // Name not in zone
 };
 
 /// DNS message header
 pub const DnsHeader = packed struct {
     id: u16,
     flags: packed struct {
-        rd: u1,         // Recursion desired
-        tc: u1,         // Truncated
-        aa: u1,         // Authoritative answer
-        opcode: u4,     // Operation code
-        qr: u1,         // Query/Response flag
-        rcode: u4,      // Response code
-        cd: u1,         // Checking disabled
-        ad: u1,         // Authentic data
-        z: u1,          // Reserved
-        ra: u1,         // Recursion available
+        rd: u1, // Recursion desired
+        tc: u1, // Truncated
+        aa: u1, // Authoritative answer
+        opcode: u4, // Operation code
+        qr: u1, // Query/Response flag
+        rcode: u4, // Response code
+        cd: u1, // Checking disabled
+        ad: u1, // Authentic data
+        z: u1, // Reserved
+        ra: u1, // Recursion available
     },
-    qdcount: u16,       // Question count
-    ancount: u16,       // Answer count
-    nscount: u16,       // Authority count
-    arcount: u16,       // Additional count
+    qdcount: u16, // Question count
+    ancount: u16, // Answer count
+    nscount: u16, // Authority count
+    arcount: u16, // Additional count
 };
 
 /// DNS question
@@ -113,7 +117,7 @@ pub const DnsQuestion = struct {
     name: []const u8,
     qtype: DnsRecordType,
     qclass: DnsClass,
-    
+
     pub fn init(allocator: std.mem.Allocator, name: []const u8, qtype: DnsRecordType, qclass: DnsClass) !DnsQuestion {
         return DnsQuestion{
             .name = try allocator.dupe(u8, name),
@@ -121,17 +125,17 @@ pub const DnsQuestion = struct {
             .qclass = qclass,
         };
     }
-    
+
     pub fn deinit(self: *const DnsQuestion, allocator: std.mem.Allocator) void {
         allocator.free(self.name);
     }
-    
+
     pub fn serialize(self: *const DnsQuestion, writer: anytype) !void {
         try self.writeDomainName(writer, self.name);
         try writer.writeInt(u16, @intFromEnum(self.qtype), .big);
         try writer.writeInt(u16, @intFromEnum(self.qclass), .big);
     }
-    
+
     fn writeDomainName(self: *const DnsQuestion, writer: anytype, name: []const u8) !void {
         _ = self;
         var labels = std.mem.split(u8, name, ".");
@@ -151,7 +155,7 @@ pub const DnsResourceRecord = struct {
     rclass: DnsClass,
     ttl: u32,
     data: []const u8,
-    
+
     pub fn init(allocator: std.mem.Allocator, name: []const u8, rtype: DnsRecordType, rclass: DnsClass, ttl: u32, data: []const u8) !DnsResourceRecord {
         return DnsResourceRecord{
             .name = try allocator.dupe(u8, name),
@@ -161,12 +165,12 @@ pub const DnsResourceRecord = struct {
             .data = try allocator.dupe(u8, data),
         };
     }
-    
+
     pub fn deinit(self: *const DnsResourceRecord, allocator: std.mem.Allocator) void {
         allocator.free(self.name);
         allocator.free(self.data);
     }
-    
+
     pub fn serialize(self: *const DnsResourceRecord, writer: anytype) !void {
         try self.writeDomainName(writer, self.name);
         try writer.writeInt(u16, @intFromEnum(self.rtype), .big);
@@ -175,7 +179,7 @@ pub const DnsResourceRecord = struct {
         try writer.writeInt(u16, @intCast(self.data.len), .big);
         try writer.writeAll(self.data);
     }
-    
+
     fn writeDomainName(self: *const DnsResourceRecord, writer: anytype, name: []const u8) !void {
         _ = self;
         var labels = std.mem.split(u8, name, ".");
@@ -196,7 +200,7 @@ pub const DnsMessage = struct {
     authorities: std.ArrayList(DnsResourceRecord),
     additionals: std.ArrayList(DnsResourceRecord),
     allocator: std.mem.Allocator,
-    
+
     pub fn init(allocator: std.mem.Allocator) DnsMessage {
         return DnsMessage{
             .header = std.mem.zeroes(DnsHeader),
@@ -207,7 +211,7 @@ pub const DnsMessage = struct {
             .allocator = allocator,
         };
     }
-    
+
     pub fn deinit(self: *DnsMessage) void {
         for (self.questions.items) |*question| {
             question.deinit(self.allocator);
@@ -221,19 +225,19 @@ pub const DnsMessage = struct {
         for (self.additionals.items) |*additional| {
             additional.deinit(self.allocator);
         }
-        
+
         self.questions.deinit();
         self.answers.deinit();
         self.authorities.deinit();
         self.additionals.deinit();
     }
-    
+
     pub fn serialize(self: *const DnsMessage) ![]u8 {
         var buffer = std.ArrayList(u8).init(self.allocator);
         defer buffer.deinit();
-        
+
         const writer = buffer.writer();
-        
+
         // Write header
         try writer.writeInt(u16, self.header.id, .big);
         try writer.writeInt(u16, @bitCast(self.header.flags), .big);
@@ -241,27 +245,27 @@ pub const DnsMessage = struct {
         try writer.writeInt(u16, self.header.ancount, .big);
         try writer.writeInt(u16, self.header.nscount, .big);
         try writer.writeInt(u16, self.header.arcount, .big);
-        
+
         // Write questions
         for (self.questions.items) |*question| {
             try question.serialize(writer);
         }
-        
+
         // Write answers
         for (self.answers.items) |*answer| {
             try answer.serialize(writer);
         }
-        
+
         // Write authorities
         for (self.authorities.items) |*authority| {
             try authority.serialize(writer);
         }
-        
+
         // Write additionals
         for (self.additionals.items) |*additional| {
             try additional.serialize(writer);
         }
-        
+
         return try self.allocator.dupe(u8, buffer.items);
     }
 };
@@ -272,7 +276,7 @@ pub const BlockchainResolver = struct {
     eth_rpc_endpoint: []const u8,
     ghost_rpc_endpoint: []const u8,
     zns_rpc_endpoint: []const u8,
-    
+
     pub fn init(allocator: std.mem.Allocator, config: *const CnsResolverConfig) !BlockchainResolver {
         return BlockchainResolver{
             .allocator = allocator,
@@ -281,13 +285,13 @@ pub const BlockchainResolver = struct {
             .zns_rpc_endpoint = try allocator.dupe(u8, config.zns_rpc_endpoint),
         };
     }
-    
+
     pub fn deinit(self: *BlockchainResolver) void {
         self.allocator.free(self.eth_rpc_endpoint);
         self.allocator.free(self.ghost_rpc_endpoint);
         self.allocator.free(self.zns_rpc_endpoint);
     }
-    
+
     pub fn resolveDomain(self: *BlockchainResolver, domain: []const u8) !?[]const u8 {
         if (std.mem.endsWith(u8, domain, ".eth")) {
             return try self.resolveEnsName(domain);
@@ -298,46 +302,46 @@ pub const BlockchainResolver = struct {
         } else if (std.mem.endsWith(u8, domain, ".crypto") or std.mem.endsWith(u8, domain, ".nft")) {
             return try self.resolveUnstoppableName(domain);
         }
-        
+
         return null;
     }
-    
+
     fn resolveEnsName(self: *BlockchainResolver, name: []const u8) !?[]const u8 {
         _ = name;
-        
+
         // TODO: Implement ENS resolution via Ethereum RPC
         // This would involve:
         // 1. Hash the name using namehash algorithm
         // 2. Query ENS registry contract
         // 3. Get resolver contract address
         // 4. Query resolver for A/AAAA records
-        
+
         // Placeholder implementation
         return try self.allocator.dupe(u8, "192.168.1.100");
     }
-    
+
     fn resolveGhostName(self: *BlockchainResolver, name: []const u8) !?[]const u8 {
         _ = name;
-        
+
         // TODO: Implement GhostChain domain resolution
         // This would query the GhostChain naming contract
-        
+
         return try self.allocator.dupe(u8, "10.0.1.100");
     }
-    
+
     fn resolveZnsName(self: *BlockchainResolver, name: []const u8) !?[]const u8 {
         _ = name;
-        
+
         // TODO: Implement ZNS resolution
-        
+
         return try self.allocator.dupe(u8, "172.16.1.100");
     }
-    
+
     fn resolveUnstoppableName(self: *BlockchainResolver, name: []const u8) !?[]const u8 {
         _ = name;
-        
+
         // TODO: Implement Unstoppable Domains resolution
-        
+
         return try self.allocator.dupe(u8, "203.0.113.100");
     }
 };
@@ -348,7 +352,7 @@ pub const CacheEntry = struct {
     answers: std.ArrayList(DnsResourceRecord),
     expiry_time: i64,
     hit_count: u32,
-    
+
     pub fn init(allocator: std.mem.Allocator, question: DnsQuestion) CacheEntry {
         return CacheEntry{
             .question = question,
@@ -357,7 +361,7 @@ pub const CacheEntry = struct {
             .hit_count = 0,
         };
     }
-    
+
     pub fn deinit(self: *CacheEntry, allocator: std.mem.Allocator) void {
         self.question.deinit(allocator);
         for (self.answers.items) |*answer| {
@@ -365,7 +369,7 @@ pub const CacheEntry = struct {
         }
         self.answers.deinit(allocator);
     }
-    
+
     pub fn isExpired(self: *const CacheEntry) bool {
         return std.time.timestamp() > self.expiry_time;
     }
@@ -378,7 +382,7 @@ pub const DnsCache = struct {
     current_size: u32,
     allocator: std.mem.Allocator,
     mutex: std.Thread.RwLock,
-    
+
     pub fn init(allocator: std.mem.Allocator, max_size_mb: u32) DnsCache {
         return DnsCache{
             .cache = std.HashMap(u64, CacheEntry, std.hash_map.DefaultContext(u64), std.hash_map.default_max_load_percentage).init(allocator),
@@ -388,7 +392,7 @@ pub const DnsCache = struct {
             .mutex = std.Thread.RwLock{},
         };
     }
-    
+
     pub fn deinit(self: *DnsCache) void {
         var iterator = self.cache.iterator();
         while (iterator.next()) |entry| {
@@ -396,11 +400,11 @@ pub const DnsCache = struct {
         }
         self.cache.deinit();
     }
-    
+
     pub fn get(self: *DnsCache, question: *const DnsQuestion) ?[]const DnsResourceRecord {
         self.mutex.lockShared();
         defer self.mutex.unlockShared();
-        
+
         const key = self.hashQuestion(question);
         if (self.cache.getPtr(key)) |entry| {
             if (!entry.isExpired()) {
@@ -408,26 +412,26 @@ pub const DnsCache = struct {
                 return entry.answers.items;
             }
         }
-        
+
         return null;
     }
-    
+
     pub fn put(self: *DnsCache, question: DnsQuestion, answers: []const DnsResourceRecord, ttl: u32) !void {
         self.mutex.lock();
         defer self.mutex.unlock();
-        
+
         const key = self.hashQuestion(&question);
         var entry = CacheEntry.init(self.allocator, question);
-        
+
         for (answers) |answer| {
             try entry.answers.append(answer);
         }
-        
+
         entry.expiry_time = std.time.timestamp() + ttl;
-        
+
         try self.cache.put(key, entry);
     }
-    
+
     fn hashQuestion(self: *DnsCache, question: *const DnsQuestion) u64 {
         _ = self;
         var hasher = std.hash.Wyhash.init(0);
@@ -446,7 +450,7 @@ pub const CnsResolver = struct {
     dns_cache: DnsCache,
     allocator: std.mem.Allocator,
     running: bool,
-    
+
     // Statistics
     stats: struct {
         total_queries: u64 = 0,
@@ -458,10 +462,10 @@ pub const CnsResolver = struct {
         avg_response_time_us: u64 = 0,
         start_time: i64,
     },
-    
+
     pub fn init(allocator: std.mem.Allocator, config: CnsResolverConfig) !*CnsResolver {
         const resolver = try allocator.create(CnsResolver);
-        
+
         resolver.* = CnsResolver{
             .config = config,
             .server = null,
@@ -471,26 +475,26 @@ pub const CnsResolver = struct {
             .running = false,
             .stats = .{ .start_time = std.time.timestamp() },
         };
-        
+
         return resolver;
     }
-    
+
     pub fn deinit(self: *CnsResolver) void {
         self.stop();
-        
+
         if (self.server) |server| {
             server.deinit();
             self.allocator.destroy(server);
         }
-        
+
         self.blockchain_resolver.deinit();
         self.dns_cache.deinit();
         self.allocator.destroy(self);
     }
-    
+
     pub fn start(self: *CnsResolver) !void {
         if (self.running) return;
-        
+
         // Create HTTP/3 server for DNS-over-QUIC
         const server_config = ServerConfig{
             .address = self.config.address,
@@ -502,29 +506,29 @@ pub const CnsResolver = struct {
             .enable_0rtt = true,
             .idle_timeout_ms = self.config.query_timeout_ms,
         };
-        
+
         self.server = try Http3Server.init(self.allocator, server_config);
-        
+
         // TODO: Setup DNS-over-QUIC protocol handling
         // This would involve handling raw DNS messages over QUIC streams
-        
+
         self.running = true;
         std.log.info("CNS resolver started on {s}:{d}", .{ self.config.address, self.config.port });
     }
-    
+
     pub fn stop(self: *CnsResolver) void {
         if (!self.running) return;
-        
+
         if (self.server) |server| {
             server.deinit();
             self.allocator.destroy(server);
             self.server = null;
         }
-        
+
         self.running = false;
         std.log.info("CNS resolver stopped", .{});
     }
-    
+
     pub fn resolveQuery(self: *CnsResolver, question: *const DnsQuestion) !DnsMessage {
         const start_time = std.time.microTimestamp();
         defer {
@@ -536,9 +540,9 @@ pub const CnsResolver = struct {
                 self.stats.avg_response_time_us = (self.stats.avg_response_time_us * 9 + elapsed) / 10;
             }
         }
-        
+
         self.stats.total_queries += 1;
-        
+
         // Check cache first
         if (self.config.enable_caching) {
             if (self.dns_cache.get(question)) |cached_answers| {
@@ -547,25 +551,25 @@ pub const CnsResolver = struct {
             }
             self.stats.cache_misses += 1;
         }
-        
+
         // Resolve the query
         const answers = try self.performResolution(question);
-        
+
         // Cache the result
         if (self.config.enable_caching and answers.len > 0) {
             try self.dns_cache.put(question.*, answers, self.config.default_cache_ttl_s);
         }
-        
+
         self.stats.successful_queries += 1;
         return try self.buildResponse(question, answers);
     }
-    
+
     fn performResolution(self: *CnsResolver, question: *const DnsQuestion) ![]DnsResourceRecord {
         // Try blockchain resolution for supported domains
         if (try self.blockchain_resolver.resolveDomain(question.name)) |ip_address| {
             defer self.allocator.free(ip_address);
             self.stats.blockchain_queries += 1;
-            
+
             // Create A record
             const a_record = try DnsResourceRecord.init(
                 self.allocator,
@@ -575,55 +579,55 @@ pub const CnsResolver = struct {
                 self.config.default_cache_ttl_s,
                 ip_address,
             );
-            
+
             const answers = try self.allocator.alloc(DnsResourceRecord, 1);
             answers[0] = a_record;
             return answers;
         }
-        
+
         // Fallback to traditional DNS resolution
         return try self.performTraditionalResolution(question);
     }
-    
+
     fn performTraditionalResolution(self: *CnsResolver, question: *const DnsQuestion) ![]DnsResourceRecord {
         // TODO: Implement traditional DNS resolution
         // This would forward queries to upstream DNS servers
-        
+
         _ = question;
-        
+
         // For now, return empty answer (NXDOMAIN equivalent)
         return try self.allocator.alloc(DnsResourceRecord, 0);
     }
-    
+
     fn buildResponse(self: *CnsResolver, question: *const DnsQuestion, answers: []const DnsResourceRecord) !DnsMessage {
         var response = DnsMessage.init(self.allocator);
-        
+
         // Set response header
         response.header.id = 12345; // Would be copied from query
         response.header.flags.qr = 1; // Response
         response.header.flags.aa = 1; // Authoritative
         response.header.flags.ra = 1; // Recursion available
-        
+
         if (answers.len > 0) {
             response.header.flags.rcode = @intFromEnum(DnsResponseCode.NoError);
         } else {
             response.header.flags.rcode = @intFromEnum(DnsResponseCode.NXDomain);
         }
-        
+
         response.header.qdcount = 1;
         response.header.ancount = @intCast(answers.len);
-        
+
         // Add question
         try response.questions.append(question.*);
-        
+
         // Add answers
         for (answers) |answer| {
             try response.answers.append(answer);
         }
-        
+
         return response;
     }
-    
+
     pub fn getStats(self: *const CnsResolver) ResolverStats {
         return ResolverStats{
             .total_queries = self.stats.total_queries,
@@ -634,9 +638,10 @@ pub const CnsResolver = struct {
             .blockchain_queries = self.stats.blockchain_queries,
             .avg_response_time_us = self.stats.avg_response_time_us,
             .uptime_seconds = @intCast(std.time.timestamp() - self.stats.start_time),
-            .cache_hit_rate = if (self.stats.total_queries > 0) 
+            .cache_hit_rate = if (self.stats.total_queries > 0)
                 @as(f64, @floatFromInt(self.stats.cache_hits)) / @as(f64, @floatFromInt(self.stats.total_queries))
-                else 0.0,
+            else
+                0.0,
         };
     }
 };
@@ -656,46 +661,46 @@ pub const ResolverStats = struct {
 
 test "DNS message creation" {
     const allocator = std.testing.allocator;
-    
+
     var message = DnsMessage.init(allocator);
     defer message.deinit();
-    
+
     const question = try DnsQuestion.init(allocator, "example.eth", .A, .IN);
     try message.questions.append(question);
-    
+
     message.header.id = 12345;
     message.header.qdcount = 1;
-    
+
     try std.testing.expect(message.questions.items.len == 1);
     try std.testing.expectEqualStrings("example.eth", message.questions.items[0].name);
 }
 
 test "blockchain resolver initialization" {
     const allocator = std.testing.allocator;
-    
+
     const config = CnsResolverConfig{
         .eth_rpc_endpoint = "https://test.rpc",
         .ghost_rpc_endpoint = "https://ghost.rpc",
         .zns_rpc_endpoint = "https://zns.rpc",
     };
-    
+
     var resolver = try BlockchainResolver.init(allocator, &config);
     defer resolver.deinit();
-    
+
     try std.testing.expectEqualStrings("https://test.rpc", resolver.eth_rpc_endpoint);
 }
 
 test "CNS resolver initialization" {
     const allocator = std.testing.allocator;
-    
+
     const config = CnsResolverConfig{
         .port = 8053,
         .max_connections = 1000,
     };
-    
+
     var resolver = try CnsResolver.init(allocator, config);
     defer resolver.deinit();
-    
+
     try std.testing.expect(resolver.config.port == 8053);
     try std.testing.expect(!resolver.running);
 }

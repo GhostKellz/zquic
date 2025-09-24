@@ -3,12 +3,12 @@
 //! Post-quantum secure DoQ client for async DNS queries
 
 const std = @import("std");
-const zquic = @import("../root.zig");
+const zquic_core = @import("zquic_core");
 const message = @import("message.zig");
 const Error = @import("../utils/error.zig");
 
-const Connection = zquic.Connection.Connection;
-const Stream = zquic.Stream.Stream;
+const Connection = zquic_core.Connection.Connection;
+const Stream = zquic_core.Stream.Stream;
 const DnsMessage = message.DnsMessage;
 const DnsRecordType = message.DnsRecordType;
 
@@ -125,7 +125,7 @@ pub const DoQClient = struct {
         std.log.info("🔗 DoQ: Connecting to {}:{} with post-quantum crypto", .{ self.config.server_address, self.config.server_port });
 
         // Create QUIC connection with post-quantum crypto
-        const conn_config = zquic.Connection.ConnectionConfig{
+        const conn_config = zquic_core.Connection.ConnectionConfig{
             .max_streams = 1, // DoQ typically uses stream 0
             .max_packet_size = 1200,
             .idle_timeout_ms = self.config.keep_alive_seconds * 1000,
@@ -157,7 +157,7 @@ pub const DoQClient = struct {
     /// Query DNS record
     pub fn query(self: *DoQClient, domain: []const u8, record_type: DnsRecordType, options: DoQQueryOptions) !DoQQueryResult {
         const start_time = std.time.milliTimestamp();
-        
+
         try self.connect();
 
         const query_id = if (options.id != 0) options.id else blk: {
@@ -183,10 +183,10 @@ pub const DoQClient = struct {
                     std.log.err("DoQ: Query failed after {} retries: {}", .{ max_retries, err });
                     return err;
                 }
-                
+
                 self.stats.queries_retried += 1;
                 std.log.warn("DoQ: Query failed, retrying ({}/{}): {}", .{ retry_count, max_retries, err });
-                
+
                 // Reconnect on failure
                 self.disconnect();
                 try self.connect();
@@ -243,14 +243,14 @@ pub const DoQClient = struct {
 
     fn isConnectionValid(self: *const DoQClient) bool {
         if (self.connection == null) return false;
-        
+
         const age = std.time.timestamp() - self.connection_created_at;
         return age < self.config.keep_alive_seconds and self.connection.?.isActive();
     }
 
     fn createQuery(self: *DoQClient, domain: []const u8, record_type: DnsRecordType, query_id: u16, options: DoQQueryOptions) !DnsMessage {
         var query_msg = DnsMessage.init(self.allocator);
-        
+
         query_msg.header = message.DnsHeader{
             .id = query_id,
             .flags = if (options.recursion_desired) 0x0100 else 0x0000, // RD bit
@@ -293,7 +293,7 @@ pub const DoQClient = struct {
         // Read response with timeout
         var response_buffer: [4096]u8 = undefined;
         const bytes_read = try stream.readWithTimeout(response_buffer[0..], timeout_ms);
-        
+
         if (bytes_read == 0) {
             return Error.ZquicError.EmptyResponse;
         }
@@ -319,7 +319,7 @@ pub fn createCloudflareClient(allocator: std.mem.Allocator) DoQClient {
         .max_retries = 2,
         .enable_connection_reuse = true,
     };
-    
+
     return DoQClient.init(allocator, config);
 }
 
@@ -333,7 +333,7 @@ pub fn createQuad9Client(allocator: std.mem.Allocator) DoQClient {
         .max_retries = 2,
         .enable_connection_reuse = true,
     };
-    
+
     return DoQClient.init(allocator, config);
 }
 
@@ -347,7 +347,7 @@ pub fn createGoogleClient(allocator: std.mem.Allocator) DoQClient {
         .max_retries = 2,
         .enable_connection_reuse = true,
     };
-    
+
     return DoQClient.init(allocator, config);
 }
 
@@ -357,7 +357,7 @@ pub fn resolveMultiple(allocator: std.mem.Allocator, domains: []const []const u8
     defer client.deinit(allocator);
 
     var results = try allocator.alloc(DoQQueryResult, domains.len);
-    
+
     const options = DoQQueryOptions{
         .recursion_desired = true,
         .timeout_ms = 3000,
@@ -366,7 +366,7 @@ pub fn resolveMultiple(allocator: std.mem.Allocator, domains: []const []const u8
     for (domains, 0..) |domain, i| {
         results[i] = client.query(domain, record_type, options) catch |err| {
             std.log.err("DoQ: Failed to resolve {s}: {}", .{ domain, err });
-            
+
             // Create empty result for failed queries
             const empty_response = DnsMessage.init(allocator);
             results[i] = DoQQueryResult{
@@ -384,33 +384,33 @@ pub fn resolveMultiple(allocator: std.mem.Allocator, domains: []const []const u8
 
 test "DoQ client initialization" {
     const allocator = std.testing.allocator;
-    
+
     const config = DoQClientConfig{
         .server_address = "1.1.1.1",
         .server_port = 853,
     };
-    
+
     var client = DoQClient.init(allocator, config);
     defer client.deinit(allocator);
-    
+
     try std.testing.expect(client.config.server_port == 853);
     try std.testing.expect(client.stats.queries_sent == 0);
 }
 
 test "DoQ query creation" {
     const allocator = std.testing.allocator;
-    
+
     var client = DoQClient.init(allocator, DoQClientConfig{});
     defer client.deinit(allocator);
-    
+
     const options = DoQQueryOptions{
         .id = 0x1234,
         .recursion_desired = true,
     };
-    
+
     var query = try client.createQuery("example.com", DnsRecordType.A, 0x1234, options);
     defer query.deinit(allocator);
-    
+
     try std.testing.expect(query.header.id == 0x1234);
     try std.testing.expect(query.questions.len == 1);
     try std.testing.expectEqualStrings("example.com", query.questions[0].name);
