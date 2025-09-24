@@ -136,17 +136,19 @@ pub fn deinit() void {
 
 /// Get a summary of enabled features
 pub fn getEnabledFeatures() []const []const u8 {
-    comptime {
-        var features: []const []const u8 = &.{};
-        if (build_options.enable_http3) features = features ++ &.{"http3"};
-        if (build_options.enable_doq) features = features ++ &.{"doq"};
-        if (build_options.enable_vpn) features = features ++ &.{"vpn"};
-        if (build_options.enable_services) features = features ++ &.{"services"};
-        if (build_options.enable_post_quantum) features = features ++ &.{"post-quantum"};
-        if (build_options.enable_monitoring) features = features ++ &.{"monitoring"};
-        if (build_options.enable_async_zsync) features = features ++ &.{"async-zsync"};
-        return features;
-    }
+    // Return compile-time known feature list
+    const features = comptime blk: {
+        var list: []const []const u8 = &[_][]const u8{};
+        if (build_options.enable_http3) list = list ++ &[_][]const u8{"http3"};
+        if (build_options.enable_doq) list = list ++ &[_][]const u8{"doq"};
+        if (build_options.enable_vpn) list = list ++ &[_][]const u8{"vpn"};
+        if (build_options.enable_services) list = list ++ &[_][]const u8{"services"};
+        if (build_options.enable_post_quantum) list = list ++ &[_][]const u8{"post-quantum"};
+        if (build_options.enable_monitoring) list = list ++ &[_][]const u8{"monitoring"};
+        if (build_options.enable_async_zsync) list = list ++ &[_][]const u8{"async-zsync"};
+        break :blk list;
+    };
+    return features;
 }
 
 test "zquic modular library initialization" {
@@ -155,7 +157,7 @@ test "zquic modular library initialization" {
 
     // Test that we can get feature list
     const features = getEnabledFeatures();
-    std.testing.expect(features.len >= 0);
+    try std.testing.expect(features.len >= 0);
 }
 
 test {
