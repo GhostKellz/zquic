@@ -6,6 +6,7 @@
 
 [![Built with Zig](https://img.shields.io/badge/Built%20with-Zig-yellow.svg?logo=zig)](https://ziglang.org/)
 [![Zig Version](https://img.shields.io/badge/Zig-v0.16.0--dev-orange.svg)](https://ziglang.org/)
+[![CI/CD Pipeline](https://github.com/ghostkellz/zquic/actions/workflows/ci.yml/badge.svg)](https://github.com/ghostkellz/zquic/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
 [![Post-Quantum](https://img.shields.io/badge/crypto-post--quantum-green.svg)](#)
 [![QUIC](https://img.shields.io/badge/QUIC-v1-blue.svg)](#)
