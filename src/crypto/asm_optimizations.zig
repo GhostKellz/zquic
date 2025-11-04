@@ -520,14 +520,16 @@ pub const OptimizationBenchmark = struct {
         for (input, 0..) |*byte, i| {
             byte.* = @intCast(i % 256);
         }
-        
-        const start = std.time.nanoTimestamp();
-        
+
+        const ts_start = try std.posix.clock_gettime(std.posix.CLOCK.REALTIME);
+        const start = @as(i128, ts_start.sec) * std.time.ns_per_s + ts_start.nsec;
+
         for (0..iterations) |_| {
             blake3_opt.hash(input, output);
         }
-        
-        const end = std.time.nanoTimestamp();
+
+        const ts_end = try std.posix.clock_gettime(std.posix.CLOCK.REALTIME);
+        const end = @as(i128, ts_end.sec) * std.time.ns_per_s + ts_end.nsec;
         const elapsed_ns = end - start;
         const elapsed_ms = @divFloor(elapsed_ns, 1_000_000);
         
@@ -567,14 +569,16 @@ pub const OptimizationBenchmark = struct {
         for (key, 0..) |*byte, i| byte.* = @intCast(i % 256);
         for (nonce, 0..) |*byte, i| byte.* = @intCast(i % 256);
         for (plaintext, 0..) |*byte, i| byte.* = @intCast(i % 256);
-        
-        const start = std.time.nanoTimestamp();
-        
+
+        const ts_start = try std.posix.clock_gettime(std.posix.CLOCK.REALTIME);
+        const start = @as(i128, ts_start.sec) * std.time.ns_per_s + ts_start.nsec;
+
         for (0..iterations) |_| {
             try chacha_opt.encrypt(key, nonce, aad, plaintext, ciphertext, tag);
         }
-        
-        const end = std.time.nanoTimestamp();
+
+        const ts_end = try std.posix.clock_gettime(std.posix.CLOCK.REALTIME);
+        const end = @as(i128, ts_end.sec) * std.time.ns_per_s + ts_end.nsec;
         const elapsed_ns = end - start;
         const elapsed_ms = @divFloor(elapsed_ns, 1_000_000);
         

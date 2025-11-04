@@ -314,7 +314,8 @@ pub const CryptoOptimizedCongestionController = struct {
         // Update RTT with crypto-aware filtering
         if (rtt_sample < self.bbr_state.round_trip_time or self.bbr_state.round_trip_time == 0) {
             self.bbr_state.round_trip_time = rtt_sample;
-            self.bbr_state.min_rtt_timestamp = std.time.microTimestamp();
+            const ts = std.posix.clock_gettime(std.posix.CLOCK.REALTIME) catch unreachable;
+            self.bbr_state.min_rtt_timestamp = (@as(i128, ts.sec) * std.time.ns_per_s + ts.nsec) / 1000;
         }
         
         self.updateCryptoBbrState();
@@ -388,7 +389,8 @@ pub const CryptoOptimizedCongestionController = struct {
         }
         
         // Reset CUBIC epoch
-        self.cubic_state.epoch_start = std.time.microTimestamp();
+        const ts = std.posix.clock_gettime(std.posix.CLOCK.REALTIME) catch unreachable;
+        self.cubic_state.epoch_start = (@as(i128, ts.sec) * std.time.ns_per_s + ts.nsec) / 1000;
         self.cubic_state.k = std.math.cbrt((self.cubic_state.w_max * reduction_factor) / self.cubic_state.c);
     }
     
@@ -404,7 +406,8 @@ pub const CryptoOptimizedCongestionController = struct {
     
     /// Update BBR state machine with crypto optimizations
     fn updateCryptoBbrState(self: *Self) void {
-        const now = std.time.microTimestamp();
+        const ts = std.posix.clock_gettime(std.posix.CLOCK.REALTIME) catch unreachable;
+        const now = (@as(i128, ts.sec) * std.time.ns_per_s + ts.nsec) / 1000;
         
         switch (self.bbr_state.phase) {
             .startup => {
@@ -462,7 +465,8 @@ pub const CryptoOptimizedCongestionController = struct {
     
     /// Crypto-optimized CUBIC window update
     fn cryptoCubicUpdate(self: *Self, growth_multiplier: u32) void {
-        const now = std.time.microTimestamp();
+        const ts = std.posix.clock_gettime(std.posix.CLOCK.REALTIME) catch unreachable;
+        const now = (@as(i128, ts.sec) * std.time.ns_per_s + ts.nsec) / 1000;
         const t = @as(f64, @floatFromInt(now - self.cubic_state.epoch_start)) / 1_000_000.0;
         
         // CUBIC function with crypto optimizations

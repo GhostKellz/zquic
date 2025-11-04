@@ -72,7 +72,7 @@ fn startDemoServer(allocator: std.mem.Allocator) !void {
     // Simulate server operation with periodic stats
     var tick: u32 = 0;
     while (tick < 60) { // Run for 60 seconds
-        std.Thread.sleep(1_000_000_000); // 1 second
+        std.posix.nanosleep(0, 1_000_000_000); // 1 second
         tick += 1;
 
         if (tick % 10 == 0) {

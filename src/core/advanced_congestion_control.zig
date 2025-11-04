@@ -677,10 +677,11 @@ pub const BBR = struct {
     
     fn updateRTT(cc: *CongestionControl, rtt: u64) void {
         const self = getSelf(cc);
-        
+
         if (cc.metrics.min_rtt > rtt) {
             cc.metrics.min_rtt = rtt;
-            self.min_rtt_timestamp = std.time.microTimestamp();
+            const ts = std.posix.clock_gettime(std.posix.CLOCK.REALTIME) catch unreachable;
+            self.min_rtt_timestamp = (@as(i128, ts.sec) * std.time.ns_per_s + ts.nsec) / 1000;
         }
         
         // Update smoothed RTT

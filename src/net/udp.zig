@@ -28,7 +28,10 @@ pub const PacketBatch = struct {
             .packets = undefined,
             .count = 0,
             .batch_id = batch_id,
-            .timestamp = std.time.nanoTimestamp(),
+            .timestamp = blk: {
+                const ts = std.posix.clock_gettime(std.posix.CLOCK.REALTIME) catch unreachable;
+                break :blk @as(i128, ts.sec) * std.time.ns_per_s + ts.nsec;
+            },
         };
     }
 };
@@ -47,7 +50,8 @@ pub const SuperStats = struct {
         if (bytes > self.peak_throughput) {
             self.peak_throughput = bytes;
         }
-        self.last_update = std.time.timestamp();
+        const ts = std.posix.clock_gettime(std.posix.CLOCK.REALTIME) catch unreachable;
+        self.last_update = ts.sec;
     }
 };
 
@@ -126,11 +130,12 @@ pub const SuperUdpSocket = struct {
             const result = self.socket.tryRecv(packet_data) catch break;
 
             if (result) |recv_result| {
+                const ts = std.posix.clock_gettime(std.posix.CLOCK.REALTIME) catch unreachable;
                 batch.packets[batch.count] = PacketBatch.RawPacket{
                     .data = packet_data[0..recv_result.len],
                     .addr = recv_result.addr,
                     .size = recv_result.len,
-                    .timestamp = std.time.nanoTimestamp(),
+                    .timestamp = @as(i128, ts.sec) * std.time.ns_per_s + ts.nsec,
                 };
                 batch.count += 1;
             } else break;

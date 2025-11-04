@@ -84,11 +84,13 @@ pub const DataChunk = struct {
     timestamp: u64,
 
     pub fn init(data: []const u8, offset: u64, fin: bool) DataChunk {
+        const ts = std.posix.clock_gettime(std.posix.CLOCK.REALTIME) catch unreachable;
+        const timestamp = @as(i128, ts.sec) * std.time.ns_per_s + ts.nsec;
         return DataChunk{
             .data = data,
             .offset = offset,
             .fin = fin,
-            .timestamp = @intCast(std.time.nanoTimestamp()),
+            .timestamp = @intCast(timestamp),
         };
     }
 };
@@ -146,7 +148,10 @@ pub const SuperStream = struct {
             .bytes_received = std.atomic.Value(u64).init(0),
 
             .peak_throughput = std.atomic.Value(u64).init(0),
-            .last_activity = std.atomic.Value(i64).init(std.time.timestamp()),
+            .last_activity = std.atomic.Value(i64).init(blk: {
+                const ts = std.posix.clock_gettime(std.posix.CLOCK.REALTIME) catch unreachable;
+                break :blk ts.sec;
+            }),
         };
     }
 
@@ -304,7 +309,8 @@ pub const SuperStream = struct {
     }
 
     fn updateActivityTimestamp(self: *Self) !void {
-        self.last_activity.store(std.time.timestamp(), .release);
+        const ts = try std.posix.clock_gettime(std.posix.CLOCK.REALTIME);
+        self.last_activity.store(ts.sec, .release);
     }
 
     /// Get stream statistics

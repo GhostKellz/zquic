@@ -64,7 +64,10 @@ pub const SuperServerStats = struct {
             .bytes_sent = std.atomic.Value(u64).init(0),
             .bytes_received = std.atomic.Value(u64).init(0),
             .errors_count = std.atomic.Value(u64).init(0),
-            .start_time = std.time.timestamp(),
+            .start_time = blk: {
+                const ts = std.posix.clock_gettime(std.posix.CLOCK.REALTIME) catch unreachable;
+                break :blk ts.sec;
+            },
             .peak_rps = std.atomic.Value(u64).init(0),
             .avg_response_time_us = std.atomic.Value(u64).init(0),
         };
@@ -72,7 +75,8 @@ pub const SuperServerStats = struct {
 
     /// Get uptime in seconds
     pub fn uptime(self: *const Self) i64 {
-        return std.time.timestamp() - self.start_time;
+        const ts = std.posix.clock_gettime(std.posix.CLOCK.REALTIME) catch unreachable;
+        return ts.sec - self.start_time;
     }
 
     /// Increment request counter atomically
@@ -195,7 +199,10 @@ pub const ConnectionContext = struct {
         return Self{
             .connection = connection,
             .active_requests = std.HashMap(u64, *ActiveRequest, std.hash_map.AutoContext(u64), std.hash_map.default_max_load_percentage).init(allocator),
-            .last_activity = std.time.timestamp(),
+            .last_activity = blk: {
+                const ts = std.posix.clock_gettime(std.posix.CLOCK.REALTIME) catch unreachable;
+                break :blk ts.sec;
+            },
             .allocator = allocator,
         };
     }
@@ -210,11 +217,13 @@ pub const ConnectionContext = struct {
     }
 
     pub fn updateActivity(self: *Self) void {
-        self.last_activity = std.time.timestamp();
+        const ts = std.posix.clock_gettime(std.posix.CLOCK.REALTIME) catch unreachable;
+        self.last_activity = ts.sec;
     }
 
     pub fn isExpired(self: *const Self, timeout_ms: u32) bool {
-        const now = std.time.timestamp();
+        const ts = std.posix.clock_gettime(std.posix.CLOCK.REALTIME) catch unreachable;
+        const now = ts.sec;
         return (now - self.last_activity) > (timeout_ms / 1000);
     }
 };
@@ -232,7 +241,10 @@ pub const ActiveRequest = struct {
         return Self{
             .request = Request.init(allocator, stream_id, connection_id),
             .response = Response.init(allocator, stream_id),
-            .start_time = std.time.microTimestamp(),
+            .start_time = blk: {
+                const ts = std.posix.clock_gettime(std.posix.CLOCK.REALTIME) catch unreachable;
+                break :blk @intCast(@divTrunc((@as(i128, ts.sec) * std.time.ns_per_s + ts.nsec), 1000));
+            },
             .allocator = allocator,
         };
     }
@@ -243,7 +255,9 @@ pub const ActiveRequest = struct {
     }
 
     pub fn duration(self: *const Self) i64 {
-        return std.time.microTimestamp() - self.start_time;
+        const ts = std.posix.clock_gettime(std.posix.CLOCK.REALTIME) catch unreachable;
+        const now: i64 = @intCast(@divTrunc((@as(i128, ts.sec) * std.time.ns_per_s + ts.nsec), 1000));
+        return now - self.start_time;
     }
 };
 

@@ -162,7 +162,8 @@ pub const LoggingMiddleware = struct {
 
         return struct {
             fn handle(request: *Request, response: *Response, next: NextFn) Error.ZquicError!void {
-                const start_time = std.time.microTimestamp();
+                const ts_start = std.posix.clock_gettime(std.posix.CLOCK.REALTIME) catch unreachable;
+                const start_time = @divTrunc((@as(i128, ts_start.sec) * std.time.ns_per_s + ts_start.nsec), 1000);
 
                 // Log request
                 std.log.info("HTTP/3 {s} {s} - Stream {}", .{ request.method.toString(), request.path, request.context.stream_id });
@@ -170,7 +171,9 @@ pub const LoggingMiddleware = struct {
                 try next(request, response);
 
                 // Log response
-                const duration = std.time.microTimestamp() - start_time;
+                const ts_end = std.posix.clock_gettime(std.posix.CLOCK.REALTIME) catch unreachable;
+                const end_time = @divTrunc((@as(i128, ts_end.sec) * std.time.ns_per_s + ts_end.nsec), 1000);
+                const duration = end_time - start_time;
                 std.log.info("HTTP/3 {s} {s} {} - {}μs", .{ request.method.toString(), request.path, response.status.getCode(), duration });
             }
         }.handle;

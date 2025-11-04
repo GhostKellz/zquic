@@ -243,7 +243,10 @@ pub const DoQServer = struct {
             .blocking_io_instance = zsync.BlockingIo.init(allocator, 65536),
             .io = undefined, // Will be set after init
             .pending_queries = std.ArrayList(PendingQuery){},
-            .start_time = std.time.timestamp(),
+            .start_time = blk: {
+                const ts = std.posix.clock_gettime(std.posix.CLOCK.REALTIME) catch unreachable;
+                break :blk ts.sec;
+            },
         };
 
         // Initialize the Io interface after struct creation
@@ -285,7 +288,7 @@ pub const DoQServer = struct {
         // Main server loop with zsync async handling
         while (self.is_running) {
             try self.acceptConnections();
-            std.Thread.sleep(1000000); // 1ms sleep as workaround
+            std.posix.nanosleep(0, 1000000); // 1ms sleep as workaround
         }
     }
 
@@ -305,7 +308,8 @@ pub const DoQServer = struct {
     /// Get server statistics
     pub fn getStats(self: *DoQServer) DoQServerStats {
         var stats = self.stats;
-        stats.uptime_seconds = @intCast(std.time.timestamp() - self.start_time);
+        const ts = std.posix.clock_gettime(std.posix.CLOCK.REALTIME) catch unreachable;
+        stats.uptime_seconds = @intCast(ts.sec - self.start_time);
         return stats;
     }
 
@@ -338,10 +342,10 @@ pub const DoQServer = struct {
                 zsync.yieldNow();
 
                 // Small delay to prevent busy loop
-                std.Thread.sleep(std.time.ns_per_ms * 10);
+                std.posix.nanosleep(0, std.time.ns_per_ms * 10);
             } else {
                 // Max connections reached, wait before checking again
-                std.Thread.sleep(std.time.ns_per_ms * 100);
+                std.posix.nanosleep(0, std.time.ns_per_ms * 100);
                 zsync.yieldNow();
             }
         }
@@ -356,11 +360,12 @@ pub const DoQServer = struct {
         // Create a mock DNS query for testing
         const query_data = try self.allocator.dupe(u8, "example.com");
 
+        const ts = std.posix.clock_gettime(std.posix.CLOCK.REALTIME) catch unreachable;
         const pending_query = PendingQuery{
             .query_id = query_id,
             .query_data = query_data,
             .response_callback = &mockResponseCallback,
-            .timestamp = std.time.timestamp(),
+            .timestamp = ts.sec,
         };
 
         try self.pending_queries.append(self.allocator, pending_query);
@@ -402,7 +407,7 @@ pub const DoQServer = struct {
 
             // Yield and sleep to prevent busy loop
             zsync.yieldNow();
-            std.Thread.sleep(std.time.ns_per_ms * 50);
+            std.posix.nanosleep(0, std.time.ns_per_ms * 50);
         }
 
         std.log.info("⚙️  DoQ: Query processor stopped", .{});
@@ -452,7 +457,8 @@ pub const DoQServer = struct {
 
         while (self.is_running) {
             // Monitor response metrics and handle connection cleanup
-            const current_time = std.time.timestamp();
+            const ts = std.posix.clock_gettime(std.posix.CLOCK.REALTIME) catch unreachable;
+            const current_time = ts.sec;
 
             // Clean up expired queries (older than 30 seconds)
             var i: usize = 0;
@@ -488,7 +494,7 @@ pub const DoQServer = struct {
             self.stats.bytes_sent += 128;
 
             zsync.yieldNow();
-            std.Thread.sleep(std.time.ns_per_s * 1); // Check every second
+            std.posix.nanosleep(0, std.time.ns_per_s * 1); // Check every second
         }
 
         std.log.info("📡 DoQ: Response handler stopped", .{});

@@ -116,10 +116,11 @@ pub const StreamFlowControl = struct {
     pub fn consumeSendWindow(self: *StreamFlowControl, bytes: u64) !void {
         if (!self.canSend(bytes)) {
             self.is_blocked = true;
-            self.blocked_since = std.time.timestamp();
+            const ts = std.posix.clock_gettime(std.posix.CLOCK.REALTIME) catch unreachable;
+            self.blocked_since = ts.sec;
             return Error.ZquicError.FlowControlBlocked;
         }
-        
+
         self.bytes_sent += bytes;
     }
     
@@ -211,10 +212,11 @@ pub const ConnectionFlowControl = struct {
     pub fn consumeSendWindow(self: *ConnectionFlowControl, bytes: u64) !void {
         if (!self.canSend(bytes)) {
             self.is_blocked = true;
-            self.blocked_since = std.time.timestamp();
+            const ts = std.posix.clock_gettime(std.posix.CLOCK.REALTIME) catch unreachable;
+            self.blocked_since = ts.sec;
             return Error.ZquicError.FlowControlBlocked;
         }
-        
+
         self.bytes_sent += bytes;
     }
     
@@ -603,8 +605,9 @@ pub const StreamScheduler = struct {
     pub fn recordStreamScheduled(self: *StreamScheduler, stream_id: u64, bytes_sent: u64) void {
         if (self.streams.getPtr(stream_id)) |stream_info| {
             stream_info.bytes_scheduled += bytes_sent;
-            stream_info.last_scheduled = std.time.timestamp();
-            
+            const ts = std.posix.clock_gettime(std.posix.CLOCK.REALTIME) catch unreachable;
+            stream_info.last_scheduled = ts.sec;
+
             // Update deficit for DRR
             if (self.algorithm == .deficit_round_robin) {
                 stream_info.deficit -= @as(f64, @floatFromInt(bytes_sent));

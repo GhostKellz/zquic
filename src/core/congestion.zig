@@ -504,7 +504,8 @@ pub const CongestionController = union(CongestionAlgorithm) {
                 // BBR needs RTT and timestamp - use reasonable defaults for now
                 // In real implementation, these would be passed from the caller
                 const rtt = 50000; // 50ms default
-                const now = @as(u64, @intCast(std.time.microTimestamp()));
+                const ts = std.posix.clock_gettime(std.posix.CLOCK.REALTIME) catch unreachable;
+                const now = @as(u64, @intCast((@as(i128, ts.sec) * std.time.ns_per_s + ts.nsec) / 1000));
                 cc.onAcked(acked_bytes, rtt, now);
                 // Note: largest_acked_packet is not used by BBR
             },
@@ -532,7 +533,8 @@ pub const CongestionController = union(CongestionAlgorithm) {
                 const actual_rtt = rtt_sample -| ack_delay;
                 if (actual_rtt < cc.min_rtt) {
                     cc.min_rtt = actual_rtt;
-                    cc.min_rtt_timestamp = @as(u64, @intCast(std.time.microTimestamp()));
+                    const ts = std.posix.clock_gettime(std.posix.CLOCK.REALTIME) catch unreachable;
+                    cc.min_rtt_timestamp = @as(u64, @intCast((@as(i128, ts.sec) * std.time.ns_per_s + ts.nsec) / 1000));
                 }
             },
         }

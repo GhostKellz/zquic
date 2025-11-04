@@ -322,8 +322,10 @@ fn uploadHandler(request: *zquic.Http3.Request, response: *zquic.Http3.Response)
     const body = request.getBody();
     const content_type = request.getContentType() orelse "application/octet-stream";
 
+    const ts = std.posix.clock_gettime(std.posix.CLOCK.REALTIME) catch unreachable;
+    const timestamp = ts.sec;
     var buffer: [512]u8 = undefined;
-    const json_response = std.fmt.bufPrint(&buffer, "{{\"uploaded\": true, \"size\": {}, \"content_type\": \"{s}\", \"upload_id\": \"upload-123456\", \"timestamp\": {}}}", .{ body.len, content_type, std.time.timestamp() }) catch {
+    const json_response = std.fmt.bufPrint(&buffer, "{{\"uploaded\": true, \"size\": {}, \"content_type\": \"{s}\", \"upload_id\": \"upload-123456\", \"timestamp\": {}}}", .{ body.len, content_type, timestamp }) catch {
         response.setStatus(.internal_server_error);
         try response.text("Response too large");
         return;
@@ -342,14 +344,17 @@ fn streamHandler(request: *zquic.Http3.Request, response: *zquic.Http3.Response)
 
     var i: u32 = 0;
     while (i < 5) {
-        try response.writeFormat("data: Streaming message {} at {}\n\n", .{ i + 1, std.time.timestamp() });
+        const ts = std.posix.clock_gettime(std.posix.CLOCK.REALTIME) catch unreachable;
+        try response.writeFormat("data: Streaming message {} at {}\n\n", .{ i + 1, ts.sec });
         i += 1;
     }
 }
 
 fn notFoundHandler(request: *zquic.Http3.Request, response: *zquic.Http3.Response) zquic.Error.ZquicError!void {
+    const ts = std.posix.clock_gettime(std.posix.CLOCK.REALTIME) catch unreachable;
+    const timestamp = ts.sec;
     var buffer: [512]u8 = undefined;
-    const json_response = std.fmt.bufPrint(&buffer, "{{\"error\": \"Not Found\", \"message\": \"The requested resource was not found\", \"path\": \"{s}\", \"method\": \"{s}\", \"timestamp\": {}}}", .{ request.path, request.method.toString(), std.time.timestamp() }) catch {
+    const json_response = std.fmt.bufPrint(&buffer, "{{\"error\": \"Not Found\", \"message\": \"The requested resource was not found\", \"path\": \"{s}\", \"method\": \"{s}\", \"timestamp\": {}}}", .{ request.path, request.method.toString(), timestamp }) catch {
         response.setStatus(.internal_server_error);
         try response.text("Response too large");
         return;
@@ -362,11 +367,13 @@ fn notFoundHandler(request: *zquic.Http3.Request, response: *zquic.Http3.Respons
 fn errorHandler(request: *zquic.Http3.Request, response: *zquic.Http3.Response, error_code: zquic.Error.ZquicError) zquic.Error.ZquicError!void {
     _ = request;
 
+    const ts = std.posix.clock_gettime(std.posix.CLOCK.REALTIME) catch unreachable;
+    const timestamp = ts.sec;
     var buffer: [256]u8 = undefined;
     const error_name = switch (error_code) {
         else => "InternalError",
     };
-    const json_response = std.fmt.bufPrint(&buffer, "{{\"error\": \"Internal Server Error\", \"message\": \"An unexpected error occurred\", \"error_code\": \"{s}\", \"timestamp\": {}}}", .{ error_name, std.time.timestamp() }) catch {
+    const json_response = std.fmt.bufPrint(&buffer, "{{\"error\": \"Internal Server Error\", \"message\": \"An unexpected error occurred\", \"error_code\": \"{s}\", \"timestamp\": {}}}", .{ error_name, timestamp }) catch {
         response.setStatus(.internal_server_error);
         try response.text("Error response too large");
         return;

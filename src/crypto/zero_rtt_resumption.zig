@@ -19,12 +19,14 @@ pub const SessionTicket = struct {
     const Self = @This();
 
     pub fn isValid(self: *const Self) bool {
-        const now = std.time.timestamp();
+        const ts = std.posix.clock_gettime(std.posix.CLOCK.REALTIME) catch unreachable;
+        const now = ts.sec;
         return now >= self.creation_time and now <= self.expiry_time;
     }
 
     pub fn isExpired(self: *const Self) bool {
-        return std.time.timestamp() > self.expiry_time;
+        const ts = std.posix.clock_gettime(std.posix.CLOCK.REALTIME) catch unreachable;
+        return ts.sec > self.expiry_time;
     }
 };
 
@@ -139,10 +141,12 @@ pub const ZeroRttSessionManager = struct {
 
     /// Create new session ticket for resumption
     pub fn createSessionTicket(self: *Self, resumption_secret: [32]u8) !SessionTicket {
+        const ts = try std.posix.clock_gettime(std.posix.CLOCK.REALTIME);
+        const now = ts.sec;
         var ticket = SessionTicket{
             .ticket_id = undefined,
-            .creation_time = std.time.timestamp(),
-            .expiry_time = std.time.timestamp() + self.ticket_lifetime,
+            .creation_time = now,
+            .expiry_time = now + self.ticket_lifetime,
             .resumption_secret = resumption_secret,
             .early_data_cipher = 1, // AES-128-GCM
             .max_early_data = 16384, // 16KB for trading data

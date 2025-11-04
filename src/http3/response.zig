@@ -318,9 +318,14 @@ pub const Response = struct {
 
         // Read and write file content
         const file_size = try file.getEndPos();
-        try self.body.ensureTotalCapacity(self.allocator, file_size);
-        _ = try file.readAll(self.body.items[0..file_size]);
-        self.body.items.len = file_size;
+        try self.body.resize(self.allocator, file_size);
+        var total_read: usize = 0;
+        while (total_read < file_size) {
+            const bytes_read = try file.read(self.body.items[total_read..]);
+            if (bytes_read == 0) break;
+            total_read += bytes_read;
+        }
+        self.body.items.len = total_read;
     }
 
     /// Get response body

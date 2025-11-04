@@ -56,16 +56,21 @@ pub const PathInfo = struct {
             .congestion_window = 10 * 1200, // Initial congestion window
             .bytes_sent = 0,
             .bytes_received = 0,
-            .last_activity = std.time.timestamp(),
+            .last_activity = blk: {
+                const ts = std.posix.clock_gettime(std.posix.CLOCK.REALTIME) catch unreachable;
+                break :blk ts.sec;
+            },
         };
     }
-    
+
     pub fn updateActivity(self: *PathInfo) void {
-        self.last_activity = std.time.timestamp();
+        const ts = std.posix.clock_gettime(std.posix.CLOCK.REALTIME) catch unreachable;
+        self.last_activity = ts.sec;
     }
-    
+
     pub fn isExpired(self: *const PathInfo, timeout_ms: u64) bool {
-        const now = std.time.timestamp();
+        const ts = std.posix.clock_gettime(std.posix.CLOCK.REALTIME) catch unreachable;
+        const now = ts.sec;
         return now - self.last_activity > timeout_ms;
     }
     
@@ -217,25 +222,30 @@ pub const PathValidator = struct {
             return PathValidation{
                 .path_id = path_id,
                 .challenge_data = challenge_data,
-                .start_time = std.time.timestamp(),
+                .start_time = blk: {
+                    const ts = std.posix.clock_gettime(std.posix.CLOCK.REALTIME) catch unreachable;
+                    break :blk ts.sec;
+                },
                 .attempts = 1,
                 .max_attempts = 3,
                 .timeout_ms = 3000,
             };
         }
-        
+
         pub fn isExpired(self: *const PathValidation) bool {
-            const now = std.time.timestamp();
+            const ts = std.posix.clock_gettime(std.posix.CLOCK.REALTIME) catch unreachable;
+            const now = ts.sec;
             return now - self.start_time > self.timeout_ms;
         }
-        
+
         pub fn shouldRetry(self: *const PathValidation) bool {
             return self.attempts < self.max_attempts and !self.isExpired();
         }
-        
+
         pub fn retry(self: *PathValidation) void {
             self.attempts += 1;
-            self.start_time = std.time.timestamp();
+            const ts = std.posix.clock_gettime(std.posix.CLOCK.REALTIME) catch unreachable;
+            self.start_time = ts.sec;
         }
     };
     
@@ -409,7 +419,8 @@ pub const ConnectionMigrator = struct {
     
     fn startMigration(self: *ConnectionMigrator, target_path: *const PathInfo) !void {
         self.migration_state = .migrating;
-        self.migration_start_time = std.time.timestamp();
+        const ts = std.posix.clock_gettime(std.posix.CLOCK.REALTIME) catch unreachable;
+        self.migration_start_time = ts.sec;
         
         // Generate new connection ID for migration
         const new_connection_id = try self.connection_id_manager.generateConnectionId();
@@ -443,7 +454,8 @@ pub const ConnectionMigrator = struct {
     
     pub fn handleMigrationTimeout(self: *ConnectionMigrator) !void {
         if (self.migration_state == .migrating) {
-            const now = std.time.timestamp();
+            const ts = std.posix.clock_gettime(std.posix.CLOCK.REALTIME) catch unreachable;
+            const now = ts.sec;
             if (now - self.migration_start_time > self.migration_timeout_ms) {
                 self.migration_state = .failed;
                 

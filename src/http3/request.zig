@@ -154,12 +154,17 @@ pub const RequestContext = struct {
         return Self{
             .stream_id = stream_id,
             .connection_id = connection_id,
-            .start_time = std.time.microTimestamp(),
+            .start_time = blk: {
+                const ts = std.posix.clock_gettime(std.posix.CLOCK.REALTIME) catch unreachable;
+                break :blk @intCast(@divTrunc((@as(i128, ts.sec) * std.time.ns_per_s + ts.nsec), 1000));
+            },
         };
     }
 
     pub fn elapsedMicros(self: *const Self) i64 {
-        return std.time.microTimestamp() - self.start_time;
+        const ts = std.posix.clock_gettime(std.posix.CLOCK.REALTIME) catch unreachable;
+        const now: i64 = @intCast(@divTrunc((@as(i128, ts.sec) * std.time.ns_per_s + ts.nsec), 1000));
+        return now - self.start_time;
     }
 };
 

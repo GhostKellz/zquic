@@ -440,7 +440,10 @@ pub const SessionTicket = struct {
             .cipher_suite = cipher_suite,
             .max_early_data_size = 0xFFFFFFFF,
             .age_add = 0,
-            .issued_at = std.time.timestamp(),
+            .issued_at = blk: {
+                const ts = try std.posix.clock_gettime(std.posix.CLOCK.REALTIME);
+                break :blk ts.sec;
+            },
             .lifetime = 7 * 24 * 60 * 60, // 7 days
             .allocator = allocator,
         };
@@ -453,12 +456,14 @@ pub const SessionTicket = struct {
     }
 
     pub fn isValid(self: *const Self) bool {
-        const now = std.time.timestamp();
+        const ts = std.posix.clock_gettime(std.posix.CLOCK.REALTIME) catch unreachable;
+        const now = ts.sec;
         return now >= self.issued_at and now < self.issued_at + self.lifetime;
     }
 
     pub fn getAge(self: *const Self) u32 {
-        const now = std.time.timestamp();
+        const ts = std.posix.clock_gettime(std.posix.CLOCK.REALTIME) catch unreachable;
+        const now = ts.sec;
         const age = @as(u32, @intCast(now - self.issued_at));
         return age +% self.age_add;
     }
