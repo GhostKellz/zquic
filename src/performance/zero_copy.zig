@@ -263,7 +263,7 @@ pub const ZeroCopyPool = struct {
 
     pub fn init(allocator: std.mem.Allocator, buffer_size: usize, max_buffers: usize) !ZeroCopyPool {
         return ZeroCopyPool{
-            .buffers = std.ArrayList(ZeroCopyBuffer).init(allocator),
+            .buffers = .{ },
             .available_buffers = std.fifo.LinearFifo(usize, .Dynamic).init(allocator),
             .buffer_size = buffer_size,
             .max_buffers = max_buffers,
@@ -620,8 +620,8 @@ pub const BatchNetworkOps = struct {
 
     pub fn init(allocator: std.mem.Allocator, max_batch_size: usize) BatchNetworkOps {
         return BatchNetworkOps{
-            .send_batch = std.ArrayList(BatchSend).init(allocator),
-            .receive_batch = std.ArrayList(BatchReceive).init(allocator),
+            .send_batch = .{ },
+            .receive_batch = .{ },
             .max_batch_size = max_batch_size,
             .allocator = allocator,
         };
@@ -1109,9 +1109,9 @@ pub const ZeroCopyPacketPool = struct {
 
     pub fn init(allocator: std.mem.Allocator) !ZeroCopyPacketPool {
         return ZeroCopyPacketPool{
-            .large_buffers = std.ArrayList(ZeroCopyBuffer).init(allocator),
-            .medium_buffers = std.ArrayList(ZeroCopyBuffer).init(allocator),
-            .small_buffers = std.ArrayList(ZeroCopyBuffer).init(allocator),
+            .large_buffers = .{ },
+            .medium_buffers = .{ },
+            .small_buffers = .{ },
             .available_large = std.fifo.LinearFifo(usize, .Dynamic).init(allocator),
             .available_medium = std.fifo.LinearFifo(usize, .Dynamic).init(allocator),
             .available_small = std.fifo.LinearFifo(usize, .Dynamic).init(allocator),
@@ -1427,7 +1427,7 @@ pub const ZeroCopyStreamProcessor = struct {
         return Self{
             .allocator = allocator,
             .buffer_pool = try BufferPool.init(allocator),
-            .scatter_gather_buffers = std.ArrayList(ZeroCopyBuffer).init(allocator),
+            .scatter_gather_buffers = .{ },
         };
     }
 

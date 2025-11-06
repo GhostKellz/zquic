@@ -489,9 +489,9 @@ pub const PacketMemoryPool = struct {
     pub fn init(allocator: std.mem.Allocator) PacketMemoryPool {
         return PacketMemoryPool{
             .allocator = allocator,
-            .small_buffers = std.ArrayList([]u8).init(allocator),
-            .medium_buffers = std.ArrayList([]u8).init(allocator),
-            .large_buffers = std.ArrayList([]u8).init(allocator),
+            .small_buffers = .{ },
+            .medium_buffers = .{ },
+            .large_buffers = .{ },
         };
     }
 

@@ -736,7 +736,7 @@ pub const AdaptiveCongestionControl = struct {
             .switch_threshold = 0.1, // 10% improvement threshold
             .measurement_window = 5000000, // 5 seconds
             .last_switch_time = 0,
-            .performance_history = std.ArrayList(PerformanceMetric).init(allocator),
+            .performance_history = .{ },
             .allocator = allocator,
         };
     }

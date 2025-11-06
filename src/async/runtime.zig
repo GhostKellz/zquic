@@ -114,8 +114,8 @@ pub const ConnectionPool = struct {
 
     pub fn init(allocator: std.mem.Allocator, config: PoolConfig) Self {
         return Self{
-            .connections = std.ArrayList(*AsyncConnection).init(allocator),
-            .available_connections = std.ArrayList(*AsyncConnection).init(allocator),
+            .connections = .{ },
+            .available_connections = .{ },
             .config = config,
             .allocator = allocator,
         };
@@ -233,7 +233,7 @@ pub const QuicRuntime = struct {
             .config = config,
             .allocator = allocator,
             .worker_threads = worker_threads,
-            .active_tasks = std.ArrayList(*AsyncConnection).init(allocator),
+            .active_tasks = .{ },
             .task_queue = std.fifo.LinearFifo(*AsyncConnection, .Dynamic).init(allocator),
         };
     }

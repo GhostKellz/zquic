@@ -453,7 +453,7 @@ pub const EnhancedUdpMultiplexer = struct {
         const current_time = std.time.microTimestamp();
         const timeout_us = @as(i64, self.config.connection_timeout_ms) * 1000;
         
-        var expired_connections = std.ArrayList(u64).init(allocator);
+        var expired_connections = .{ };
         defer expired_connections.deinit(allocator);
         
         var iterator = self.connections.iterator();

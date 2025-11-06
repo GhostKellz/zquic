@@ -972,7 +972,7 @@ pub const FrameParser = struct {
     pub fn init(allocator: std.mem.Allocator) FrameParser {
         return FrameParser{
             .allocator = allocator,
-            .buffer = std.ArrayList(u8).init(allocator),
+            .buffer = .{ },
         };
     }
     
@@ -981,7 +981,7 @@ pub const FrameParser = struct {
     }
     
     pub fn parseFrames(self: *FrameParser, data: []const u8) ![]Frame {
-        var frames = std.ArrayList(Frame).init(allocator);
+        var frames = .{ };
         var reader = std.io.fixedBufferStream(data);
         
         while (reader.pos < data.len) {

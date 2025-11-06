@@ -297,8 +297,8 @@ pub const ConnectionPool = struct {
     
     pub fn init(allocator: std.mem.Allocator, max_size: u32) !ConnectionPool {
         return ConnectionPool{
-            .connections = std.ArrayList(PooledConnection).init(allocator),
-            .available_connections = std.ArrayList(usize).init(allocator),
+            .connections = .{ },
+            .available_connections = .{ },
             .max_size = max_size,
             .allocator = allocator,
         };
@@ -452,7 +452,7 @@ pub const LoadBalancer = struct {
     pub fn init(allocator: std.mem.Allocator, algorithm: LoadBalancingAlgorithm) LoadBalancer {
         return LoadBalancer{
             .algorithm = algorithm,
-            .backends = std.ArrayList(BackendServer).init(allocator),
+            .backends = .{ },
             .current_index = 0,
             .hash_ring = null,
             .allocator = allocator,
@@ -589,7 +589,7 @@ pub const LoadBalancer = struct {
     }
     
     fn getHealthyBackends(self: *LoadBalancer) []*BackendServer {
-        var healthy_backends = std.ArrayList(*BackendServer).init(allocator);
+        var healthy_backends = .{ };
         defer healthy_backends.deinit(allocator);
         
         for (self.backends.items) |*backend| {
@@ -654,7 +654,7 @@ pub const ConsistentHashRing = struct {
     pub fn init(allocator: std.mem.Allocator) ConsistentHashRing {
         return ConsistentHashRing{
             .nodes = std.HashMap(u64, []const u8, std.hash_map.AutoContext(u64), std.hash_map.default_max_load_percentage).init(allocator),
-            .sorted_hashes = std.ArrayList(u64).init(allocator),
+            .sorted_hashes = .{ },
             .allocator = allocator,
         };
     }
@@ -680,7 +680,7 @@ pub const ConsistentHashRing = struct {
     }
     
     pub fn removeNode(self: *ConsistentHashRing, node: []const u8) void {
-        var hashes_to_remove = std.ArrayList(u64).init(allocator);
+        var hashes_to_remove = .{ };
         defer hashes_to_remove.deinit(allocator);
         
         var iterator = self.nodes.iterator();
@@ -809,7 +809,7 @@ pub const AdvancedHttp3Server = struct {
             .load_balancer = load_balancer,
             .connections = std.HashMap(u64, *ConnectionContext, std.hash_map.AutoContext(u64), std.hash_map.default_max_load_percentage).init(allocator),
             .router = Routersrc/http3/advanced_server.zig,
-            .middleware_stack = std.ArrayList(Middleware).init(allocator),
+            .middleware_stack = .{ },
             .stats = ServerStats.init(),
             .metrics_collector = MetricsCollectorsrc/http3/advanced_server.zig,
             .health_monitor = HealthMonitorsrc/http3/advanced_server.zig,
@@ -1125,7 +1125,7 @@ pub const MetricsCollector = struct {
     
     pub fn init(allocator: std.mem.Allocator) MetricsCollector {
         return MetricsCollector{
-            .request_durations = std.ArrayList(u64).init(allocator),
+            .request_durations = .{ },
             .status_codes = std.HashMap(u16, u64, std.hash_map.AutoContext(u16), std.hash_map.default_max_load_percentage).init(allocator),
             .allocator = allocator,
         };
@@ -1212,7 +1212,7 @@ pub const Router = struct {
     
     pub fn init(allocator: std.mem.Allocator) Router {
         return Router{
-            .routes = std.ArrayList(Route).init(allocator),
+            .routes = .{ },
             .allocator = allocator,
         };
     }

@@ -225,7 +225,7 @@ pub const ConnectionLoadBalancer = struct {
     
     pub fn init(allocator: std.mem.Allocator, config: LoadBalancerConfig) Self {
         return Self{
-            .backends = std.ArrayList(Backend).init(allocator),
+            .backends = .{ },
             .config = config,
             .allocator = allocator,
             .circuit_breakers = std.HashMap(u64, CircuitBreaker, std.hash_map.AutoContext(u64), std.hash_map.default_max_load_percentage).init(allocator),

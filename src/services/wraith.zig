@@ -131,7 +131,7 @@ pub const BackendPool = struct {
 
     pub fn init(allocator: std.mem.Allocator, algorithm: LoadBalancingAlgorithm) BackendPool {
         return BackendPool{
-            .backends = std.ArrayList(BackendServer).init(allocator),
+            .backends = .{ },
             .algorithm = algorithm,
             .current_index = 0,
             .allocator = allocator,
@@ -815,7 +815,7 @@ fn proxyHandler(req: *Request, res: *Response) !void {
     try res.setHeader("X-Response-Time-Microseconds", time_str);
 
     // Read and forward response body
-    var response_body = std.ArrayList(u8).init(allocator);
+    var response_body = .{ };
     defer response_body.deinit(allocator);
 
     const reader = backend_request.reader();

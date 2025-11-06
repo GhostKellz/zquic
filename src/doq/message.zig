@@ -191,7 +191,7 @@ pub const DnsMessage = struct {
 
     /// Serialize DoQ message for QUIC stream 0 (RFC 9250)
     pub fn serializeToStream(self: *const DnsMessage, allocator: std.mem.Allocator) ![]u8 {
-        var buffer = std.ArrayList(u8).init(allocator);
+        var buffer = .{ };
         defer buffer.deinit(allocator);
         
         const writer = buffer.writer();
@@ -241,7 +241,7 @@ fn encodeDomainName(name: []const u8, _: std.mem.Allocator, writer: anytype) !vo
 
 /// Decode domain name from DNS wire format
 fn decodeDomainName(allocator: std.mem.Allocator, reader: anytype) ![]u8 {
-    var parts = std.ArrayList([]const u8).init(allocator);
+    var parts = .{ };
     defer parts.deinit(allocator);
     
     while (true) {

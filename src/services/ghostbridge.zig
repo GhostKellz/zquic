@@ -231,8 +231,8 @@ pub const GrpcStream = struct {
             .method = method,
             .quic_stream = quic_stream,
             .state = .open,
-            .send_buffer = std.ArrayList(u8).init(allocator),
-            .recv_buffer = std.ArrayList(u8).init(allocator),
+            .send_buffer = .{ },
+            .recv_buffer = .{ },
             .allocator = allocator,
         };
         return stream;

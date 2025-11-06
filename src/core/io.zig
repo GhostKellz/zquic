@@ -240,7 +240,7 @@ pub const StreamReader = struct {
     pub fn init(allocator: std.mem.Allocator, stream_id: u64) Self {
         return Self{
             .stream_id = stream_id,
-            .buffer = std.ArrayList(u8).init(allocator),
+            .buffer = .{ },
             .offset = 0,
             .closed = false,
         };
@@ -313,7 +313,7 @@ pub const StreamWriter = struct {
     pub fn init(allocator: std.mem.Allocator, stream_id: u64) Self {
         return Self{
             .stream_id = stream_id,
-            .send_buffer = std.ArrayList(u8).init(allocator),
+            .send_buffer = .{ },
             .closed = false,
             .allocator = allocator,
         };

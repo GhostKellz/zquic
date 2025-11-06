@@ -710,8 +710,8 @@ const WasmRuntime = struct {
             .gas_limit = gas_limit,
             .gas_used = 0,
             .memory = memory,
-            .stack = std.ArrayList(u64).init(allocator),
-            .locals = std.ArrayList(u64).init(allocator),
+            .stack = .{ },
+            .locals = .{ },
         };
     }
     

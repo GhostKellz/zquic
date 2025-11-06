@@ -285,7 +285,7 @@ pub const StreamPriorityInfo = struct {
             .incremental = false,
             .weight = priority.getWeight(),
             .parent_stream_id = null,
-            .children = std.ArrayList(u64).init(allocator),
+            .children = .{ },
             .bytes_scheduled = 0,
             .last_scheduled = 0,
             .deficit = 0.0,
@@ -364,8 +364,8 @@ pub const StreamScheduler = struct {
         return StreamScheduler{
             .algorithm = algorithm,
             .streams = std.HashMap(u64, StreamPriorityInfo, std.hash_map.AutoContext(u64), std.hash_map.default_max_load_percentage).init(allocator),
-            .ready_streams = std.ArrayList(u64).init(allocator),
-            .blocked_streams = std.ArrayList(u64).init(allocator),
+            .ready_streams = .{ },
+            .blocked_streams = .{ },
             .current_round_robin_index = 0,
             .quantum = 1500.0, // Default quantum size
             .virtual_time = 0.0,
@@ -562,7 +562,7 @@ pub const StreamScheduler = struct {
     }
     
     fn selectFromTree(self: *StreamScheduler, parent_stream_id: ?u64) ?u64 {
-        var candidates = std.ArrayList(u64).init(allocator);
+        var candidates = .{ };
         defer candidates.deinit(allocator);
         
         // Find streams with the specified parent
@@ -751,7 +751,7 @@ pub const FlowControlManager = struct {
     }
     
     pub fn generateFlowControlUpdates(self: *FlowControlManager) ![]Frame {
-        var frames = std.ArrayList(Frame).init(allocator);
+        var frames = .{ };
         defer frames.deinit(allocator);
         
         // Check connection-level flow control
@@ -804,7 +804,7 @@ pub const FlowControlManager = struct {
     }
     
     pub fn getFlowControlStats(self: *const FlowControlManager) FlowControlStats {
-        var stream_stats = std.ArrayList(StreamFlowControlStats).init(allocator);
+        var stream_stats = .{ };
         defer stream_stats.deinit(allocator);
         
         var iterator = self.stream_flow_controls.iterator();

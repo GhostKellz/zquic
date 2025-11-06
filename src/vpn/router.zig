@@ -73,7 +73,7 @@ pub const PacketRouter = struct {
 
     pub fn init(allocator: std.mem.Allocator, config: RoutingConfig) Self {
         return Self{
-            .routes = std.ArrayList(Route).init(allocator),
+            .routes = .{ },
             .interfaces = std.HashMap(u64, VpnInterface, std.hash_map.AutoContext(u64), std.hash_map.default_max_load_percentage).init(allocator),
             .nat_table = std.HashMap(u64, NatEntry, std.hash_map.AutoContext(u64), std.hash_map.default_max_load_percentage).init(allocator),
             .config = config,

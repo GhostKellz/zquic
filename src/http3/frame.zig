@@ -120,9 +120,9 @@ pub const SettingsFrame = struct {
 
     const Self = @This();
 
-    pub fn init(allocator: std.mem.Allocator) Self {
+    pub fn init(_: std.mem.Allocator) Self {
         return Self{
-            .settings = std.ArrayList(struct { id: u64, value: u64 }).init(allocator),
+            .settings = .{ },
         };
     }
 
@@ -195,9 +195,9 @@ pub const FrameParser = struct {
 
     const Self = @This();
 
-    pub fn init(allocator: std.mem.Allocator) Self {
+    pub fn init(_: std.mem.Allocator) Self {
         return Self{
-            .buffer = std.ArrayList(u8).init(allocator),
+            .buffer = .{ },
             .state = .waiting_for_header,
             .current_frame_type = null,
             .current_frame_length = 0,
@@ -213,7 +213,7 @@ pub const FrameParser = struct {
     pub fn processData(self: *Self, data: []const u8, allocator: std.mem.Allocator) Error.ZquicError![]Frame {
         try self.buffer.appendSlice(allocator, data);
 
-        var frames = std.ArrayList(Frame).init(allocator);
+        var frames = .{ };
 
         while (true) {
             switch (self.state) {

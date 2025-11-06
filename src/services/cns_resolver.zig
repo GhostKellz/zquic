@@ -204,10 +204,10 @@ pub const DnsMessage = struct {
     pub fn init(allocator: std.mem.Allocator) DnsMessage {
         return DnsMessage{
             .header = std.mem.zeroes(DnsHeader),
-            .questions = std.ArrayList(DnsQuestion).init(allocator),
-            .answers = std.ArrayList(DnsResourceRecord).init(allocator),
-            .authorities = std.ArrayList(DnsResourceRecord).init(allocator),
-            .additionals = std.ArrayList(DnsResourceRecord).init(allocator),
+            .questions = .{ },
+            .answers = .{ },
+            .authorities = .{ },
+            .additionals = .{ },
             .allocator = allocator,
         };
     }
@@ -356,7 +356,7 @@ pub const CacheEntry = struct {
     pub fn init(allocator: std.mem.Allocator, question: DnsQuestion) CacheEntry {
         return CacheEntry{
             .question = question,
-            .answers = std.ArrayList(DnsResourceRecord).init(allocator),
+            .answers = .{ },
             .expiry_time = 0,
             .hit_count = 0,
         };

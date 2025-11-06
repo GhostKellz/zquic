@@ -282,7 +282,7 @@ pub const CryptoConnectionMultiplexer = struct {
     pub fn init(allocator: std.mem.Allocator, config: CryptoConnectionPoolConfig) Self {
         var multiplexer = Self{
             .config = config,
-            .connections = std.ArrayList(*MultiplexedConnection).init(allocator),
+            .connections = .{ },
             .connection_map = std.HashMap(u64, *MultiplexedConnection, std.hash_map.AutoContext(u64), std.hash_map.default_max_load_percentage).init(allocator),
             .next_connection_id = std.atomic.Atomic(u64).init(1),
             .protocol_pools = std.EnumMap(ProtocolType, std.ArrayList(*MultiplexedConnection)).init(.{}),
@@ -299,14 +299,14 @@ pub const CryptoConnectionMultiplexer = struct {
         // Initialize protocol pools
         var protocol_iter = std.enums.values(ProtocolType);
         while (protocol_iter.next()) |protocol| {
-            multiplexer.protocol_pools.put(protocol, std.ArrayList(*MultiplexedConnection).init(allocator));
+            multiplexer.protocol_pools.put(protocol, .{ });
             multiplexer.protocol_requests.put(protocol, std.atomic.Atomic(u64).init(0));
         }
         
         // Initialize priority queues
         var priority_iter = std.enums.values(ConnectionPriority);
         while (priority_iter.next()) |priority| {
-            multiplexer.priority_queues.put(priority, std.ArrayList(*MultiplexedConnection).init(allocator));
+            multiplexer.priority_queues.put(priority, .{ });
         }
         
         return multiplexer;
@@ -488,7 +488,7 @@ pub const CryptoConnectionMultiplexer = struct {
         defer self.pool_mutex.unlock();
         
         const now = std.time.microTimestamp();
-        var connections_to_remove = std.ArrayList(usize).init(allocator);
+        var connections_to_remove = .{ };
         defer connections_to_remove.deinit(allocator);
         
         // Check each connection

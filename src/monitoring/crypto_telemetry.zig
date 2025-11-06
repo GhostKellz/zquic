@@ -296,10 +296,10 @@ pub const CryptoTelemetrySystem = struct {
         return Self{
             .config = config,
             .current_metrics = CryptoPerformanceMetrics.init(),
-            .metrics_history = std.ArrayList(CryptoPerformanceMetrics).init(allocator),
+            .metrics_history = .{ },
             .latency_histogram = LatencyHistogram.init(),
-            .active_alerts = std.ArrayList(CryptoAlert).init(allocator),
-            .alert_history = std.ArrayList(CryptoAlert).init(allocator),
+            .active_alerts = .{ },
+            .alert_history = .{ },
             .next_alert_id = std.atomic.Atomic(u64).init(1),
             .last_collection_time = std.time.microTimestamp(),
             .collection_counter = 0,
