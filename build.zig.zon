@@ -34,7 +34,7 @@
     .dependencies = .{
         .zcrypto = .{
             .url = "https://github.com/ghostkellz/zcrypto/archive/main.tar.gz",
-            .hash = "zcrypto-0.9.2-rgQAIxyLDQAFwd5ruIR3aUBRGTiEqJyeAb2bDUEMHoUy",
+            .hash = "zcrypto-0.9.3-rgQAIxyLDQAT2_wMuseiU0PXqJDEwuOXrMEpf_l6NLYa",
             .lazy = false,
         },
 
