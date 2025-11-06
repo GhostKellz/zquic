@@ -98,7 +98,7 @@ pub const BackendServer = struct {
 
     pub fn updateHealth(self: *BackendServer, status: HealthStatus) void {
         self.health = status;
-        self.last_health_check = std.time.timestamp();
+        self.last_health_check = (try std.time.Instant.now()).timestamp.sec;
     }
 
     pub fn recordResponseTime(self: *BackendServer, response_time_us: u64) void {
@@ -487,11 +487,11 @@ pub const ResponseCache = struct {
 
         if (self.cache.getPtr(key)) |entry| {
             // Check if expired
-            if (entry.expiry_time < std.time.timestamp()) {
+            if (entry.expiry_time < (try std.time.Instant.now()).timestamp.sec) {
                 return null;
             }
 
-            entry.last_accessed = std.time.timestamp();
+            entry.last_accessed = (try std.time.Instant.now()).timestamp.sec;
             return entry.*;
         }
 
@@ -511,8 +511,8 @@ pub const ResponseCache = struct {
         const entry = CacheEntry{
             .response_data = try self.allocator.dupe(u8, response_data),
             .headers = std.StringHashMap([]const u8).init(self.allocator),
-            .expiry_time = std.time.timestamp() + ttl_seconds,
-            .last_accessed = std.time.timestamp(),
+            .expiry_time = (try std.time.Instant.now()).timestamp.sec + ttl_seconds,
+            .last_accessed = (try std.time.Instant.now()).timestamp.sec,
             .size_bytes = entry_size,
         };
 
@@ -523,7 +523,7 @@ pub const ResponseCache = struct {
     fn evictLRU(self: *ResponseCache) !void {
         // Find least recently used entry
         var oldest_key: ?u64 = null;
-        var oldest_time: i64 = std.time.timestamp();
+        var oldest_time: i64 = (try std.time.Instant.now()).timestamp.sec;
 
         var iterator = self.cache.iterator();
         while (iterator.next()) |entry| {
@@ -584,7 +584,7 @@ pub const WraithProxy = struct {
             .response_cache = ResponseCache.init(allocator, config.cache_size_mb),
             .allocator = allocator,
             .running = false,
-            .stats = .{ .start_time = std.time.timestamp() },
+            .stats = .{ .start_time = (try std.time.Instant.now()).timestamp.sec },
         };
 
         proxy.health_checker = HealthChecker.init(allocator, &proxy.backend_pool, config.health_check_interval_s);
@@ -681,7 +681,7 @@ pub const WraithProxy = struct {
             .cache_hits = self.stats.cache_hits,
             .cache_misses = self.stats.cache_misses,
             .avg_response_time_us = self.stats.avg_response_time_us,
-            .uptime_seconds = @intCast(std.time.timestamp() - self.stats.start_time),
+            .uptime_seconds = @intCast((try std.time.Instant.now()).timestamp.sec - self.stats.start_time),
             .healthy_backends = self.backend_pool.getHealthyBackendCount(),
             .total_load = self.backend_pool.getTotalLoad(),
         };
@@ -749,7 +749,7 @@ fn proxyHandler(req: *Request, res: *Response) !void {
         res.setStatus(.bad_gateway);
         try res.setHeader("Content-Type", "application/json");
         var buffer: [256]u8 = undefined;
-        const json_response = std.fmt.bufPrint(&buffer, "{{\"error\": \"Backend Unavailable\", \"message\": \"Unable to connect to upstream server\", \"backend\": \"{s}\", \"timestamp\": {}}}", .{ backend_host, std.time.timestamp() }) catch "Backend error";
+        const json_response = std.fmt.bufPrint(&buffer, "{{\"error\": \"Backend Unavailable\", \"message\": \"Unable to connect to upstream server\", \"backend\": \"{s}\", \"timestamp\": {}}}", .{ backend_host, (try std.time.Instant.now()).timestamp.sec }) catch "Backend error";
         try res.text(json_response);
         return;
     };
@@ -838,7 +838,7 @@ fn healthHandler(req: *Request, res: *Response) !void {
     try res.json(.{
         .status = "healthy",
         .version = "1.0.0",
-        .timestamp = std.time.timestamp(),
+        .timestamp = (try std.time.Instant.now()).timestamp.sec,
     });
 }
 

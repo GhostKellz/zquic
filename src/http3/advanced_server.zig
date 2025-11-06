@@ -150,7 +150,7 @@ pub const HealthStatus = struct {
     pub fn init() HealthStatus {
         return HealthStatus{
             .is_healthy = true,
-            .last_check = std.time.timestamp(),
+            .last_check = (try std.time.Instant.now()).timestamp.sec,
             .consecutive_failures = 0,
             .consecutive_successes = 0,
         };
@@ -159,13 +159,13 @@ pub const HealthStatus = struct {
     pub fn markSuccess(self: *HealthStatus) void {
         self.consecutive_successes += 1;
         self.consecutive_failures = 0;
-        self.last_check = std.time.timestamp();
+        self.last_check = (try std.time.Instant.now()).timestamp.sec;
     }
     
     pub fn markFailure(self: *HealthStatus) void {
         self.consecutive_failures += 1;
         self.consecutive_successes = 0;
-        self.last_check = std.time.timestamp();
+        self.last_check = (try std.time.Instant.now()).timestamp.sec;
     }
     
     pub fn updateHealthStatus(self: *HealthStatus, config: HealthCheckConfig) void {
@@ -200,7 +200,7 @@ pub const CircuitBreaker = struct {
     pub fn canExecute(self: *CircuitBreaker) bool {
         if (!self.config.enabled) return true;
         
-        const now = std.time.timestamp();
+        const now = (try std.time.Instant.now()).timestamp.sec;
         
         switch (self.state) {
             .closed => return true,
@@ -241,7 +241,7 @@ pub const CircuitBreaker = struct {
         if (!self.config.enabled) return;
         
         self.failure_count += 1;
-        self.last_failure_time = std.time.timestamp();
+        self.last_failure_time = (try std.time.Instant.now()).timestamp.sec;
         
         switch (self.state) {
             .closed => {
@@ -279,7 +279,7 @@ pub const ConnectionPool = struct {
         request_count: u32,
         
         pub fn init() PooledConnection {
-            const now = std.time.timestamp();
+            const now = (try std.time.Instant.now()).timestamp.sec;
             return PooledConnection{
                 .connection = null,
                 .in_use = false,
@@ -290,7 +290,7 @@ pub const ConnectionPool = struct {
         }
         
         pub fn isExpired(self: *const PooledConnection, max_age_ms: u32) bool {
-            const now = std.time.timestamp();
+            const now = (try std.time.Instant.now()).timestamp.sec;
             return now - self.last_used > max_age_ms;
         }
     };
@@ -319,7 +319,7 @@ pub const ConnectionPool = struct {
         if (self.available_connections.popOrNull()) |index| {
             var pooled_conn = &self.connections.items[index];
             pooled_conn.in_use = true;
-            pooled_conn.last_used = std.time.timestamp();
+            pooled_conn.last_used = (try std.time.Instant.now()).timestamp.sec;
             return pooled_conn.connection;
         }
         
@@ -337,7 +337,7 @@ pub const ConnectionPool = struct {
         for (self.connections.items, 0..) |*conn, i| {
             if (conn.connection == connection) {
                 conn.in_use = false;
-                conn.last_used = std.time.timestamp();
+                conn.last_used = (try std.time.Instant.now()).timestamp.sec;
                 conn.request_count += 1;
                 self.available_connections.append(allocator, i) catch {};
                 break;
@@ -1071,7 +1071,7 @@ pub const ConnectionContext = struct {
         return ConnectionContext{
             .connection = connection,
             .active_streams = std.HashMap(u64, *Stream.Stream, std.hash_map.AutoContext(u64), std.hash_map.default_max_load_percentage).init(allocator),
-            .last_activity = std.time.timestamp(),
+            .last_activity = (try std.time.Instant.now()).timestamp.sec,
             .allocator = allocator,
         };
     }
@@ -1081,7 +1081,7 @@ pub const ConnectionContext = struct {
     }
     
     pub fn updateActivity(self: *ConnectionContext) void {
-        self.last_activity = std.time.timestamp();
+        self.last_activity = (try std.time.Instant.now()).timestamp.sec;
     }
 };
 
@@ -1096,7 +1096,7 @@ pub const ServerStats = struct {
     
     pub fn init() ServerStats {
         return ServerStats{
-            .start_time = std.time.timestamp(),
+            .start_time = (try std.time.Instant.now()).timestamp.sec,
         };
     }
     
@@ -1113,7 +1113,7 @@ pub const ServerStats = struct {
     }
     
     pub fn uptime(self: *const ServerStats) i64 {
-        return std.time.timestamp() - self.start_time;
+        return (try std.time.Instant.now()).timestamp.sec - self.start_time;
     }
 };
 

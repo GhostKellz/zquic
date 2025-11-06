@@ -115,7 +115,7 @@ pub const DoQClient = struct {
 
     /// Connect to DoQ server
     pub fn connect(self: *DoQClient) !void {
-        if (self.connection != null and self.isConnectionValid()) {
+        if (self.connection != null and try self.isConnectionValid()) {
             self.stats.connections_reused += 1;
             return;
         }
@@ -139,7 +139,7 @@ pub const DoQClient = struct {
             conn_config,
         );
 
-        self.connection_created_at = std.time.timestamp();
+        self.connection_created_at = @intCast((try std.time.Instant.now()).timestamp.sec);
         self.stats.connections_created += 1;
 
         std.log.info("✅ DoQ: Connected successfully with quantum-safe encryption");
@@ -241,10 +241,11 @@ pub const DoQClient = struct {
         self.stats = DoQClientStats{};
     }
 
-    fn isConnectionValid(self: *const DoQClient) bool {
+    fn isConnectionValid(self: *const DoQClient) !bool {
         if (self.connection == null) return false;
 
-        const age = std.time.timestamp() - self.connection_created_at;
+        const now = @as(i64, @intCast((try std.time.Instant.now()).timestamp.sec));
+        const age = now - self.connection_created_at;
         return age < self.config.keep_alive_seconds and self.connection.?.isActive();
     }
 

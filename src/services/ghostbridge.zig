@@ -197,7 +197,7 @@ pub const ServiceRegistration = struct {
             .endpoint = try allocator.dupe(u8, endpoint),
             .service_type = service_type,
             .health_status = .unknown,
-            .last_heartbeat = std.time.timestamp(),
+            .last_heartbeat = (try std.time.Instant.now()).timestamp.sec,
         };
     }
 
@@ -407,12 +407,12 @@ pub const BridgeStats = struct {
 
     pub fn init() BridgeStats {
         return BridgeStats{
-            .start_time = std.time.timestamp(),
+            .start_time = (try std.time.Instant.now()).timestamp.sec,
         };
     }
 
     pub fn updateUptime(self: *BridgeStats) void {
-        self.uptime_seconds = @intCast(std.time.timestamp() - self.start_time);
+        self.uptime_seconds = @intCast((try std.time.Instant.now()).timestamp.sec - self.start_time);
     }
 };
 
@@ -554,7 +554,7 @@ pub const GhostBridge = struct {
     pub fn checkServiceHealth(self: *GhostBridge, service_name: []const u8) ServiceRegistration.HealthStatus {
         if (self.services.getPtr(service_name)) |service| {
             // Update health based on last heartbeat
-            const now = std.time.timestamp();
+            const now = (try std.time.Instant.now()).timestamp.sec;
             if (now - service.last_heartbeat > 60) { // 60 seconds timeout
                 service.health_status = .unhealthy;
             }

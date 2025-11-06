@@ -70,7 +70,7 @@ const DoQConnection = struct {
             .connection = connection,
             .server = server,
             .allocator = allocator,
-            .connected_at = std.time.timestamp(),
+            .connected_at = (try std.time.Instant.now()).timestamp.sec,
         };
     }
 

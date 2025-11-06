@@ -371,7 +371,7 @@ pub const CacheEntry = struct {
     }
 
     pub fn isExpired(self: *const CacheEntry) bool {
-        return std.time.timestamp() > self.expiry_time;
+        return (try std.time.Instant.now()).timestamp.sec > self.expiry_time;
     }
 };
 
@@ -427,7 +427,7 @@ pub const DnsCache = struct {
             try entry.answers.append(answer);
         }
 
-        entry.expiry_time = std.time.timestamp() + ttl;
+        entry.expiry_time = (try std.time.Instant.now()).timestamp.sec + ttl;
 
         try self.cache.put(key, entry);
     }
@@ -473,7 +473,7 @@ pub const CnsResolver = struct {
             .dns_cache = DnsCache.init(allocator, config.cache_size_mb),
             .allocator = allocator,
             .running = false,
-            .stats = .{ .start_time = std.time.timestamp() },
+            .stats = .{ .start_time = (try std.time.Instant.now()).timestamp.sec },
         };
 
         return resolver;
@@ -637,7 +637,7 @@ pub const CnsResolver = struct {
             .cache_misses = self.stats.cache_misses,
             .blockchain_queries = self.stats.blockchain_queries,
             .avg_response_time_us = self.stats.avg_response_time_us,
-            .uptime_seconds = @intCast(std.time.timestamp() - self.stats.start_time),
+            .uptime_seconds = @intCast((try std.time.Instant.now()).timestamp.sec - self.stats.start_time),
             .cache_hit_rate = if (self.stats.total_queries > 0)
                 @as(f64, @floatFromInt(self.stats.cache_hits)) / @as(f64, @floatFromInt(self.stats.total_queries))
             else

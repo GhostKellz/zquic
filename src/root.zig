@@ -1,4 +1,4 @@
-//! ZQUIC — Modular QUIC/HTTP3 Library for Zig v0.9.0
+//! ZQUIC — Modular QUIC/HTTP3 Library for Zig v0.9.2
 //!
 //! zquic is a high-performance, modular QUIC (HTTP/3 transport layer)
 //! implementation written in pure Zig. Designed for flexibility:
