@@ -37,7 +37,7 @@
             .hash = "zsync-0.7.1-KAuhef8qIQApcisOPygXIeE9pC8qzdQL2Jp96JbNQyRm",
         },
         .zcrypto = .{
-            .url = "https://github.com/ghostkellz/zcrypto/archive/main.tar.gz",
+            .url = "https://github.com/ghostkellz/zcrypto/archive/refs/heads/main.tar.gz",
             .hash = "zcrypto-0.9.4-rgQAI0CSDQAPhfJx3mKzh19-Byj2dr8l_J9XRNSaosQj",
         },
     },
