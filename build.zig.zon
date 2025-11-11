@@ -38,7 +38,7 @@
         },
         .zcrypto = .{
             .url = "https://github.com/ghostkellz/zcrypto/archive/main.tar.gz",
-            .hash = "zcrypto-0.9.4-rgQAI0CSDQAPhfJx3mKzh19-Byj2dr8l_J9XRNSaosQj",
+            .hash = "zcrypto-0.9.5-rgQAI3PeDgA1dH2EkpB70WX6v_6pTWV9B2PXpWXGmm74",
         },
     },
     // Specifies the set of files and directories that are included in this package.
