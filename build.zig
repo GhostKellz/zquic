@@ -148,10 +148,10 @@ pub fn build(b: *std.Build) !void {
 
         // VPN examples (only if VPN is enabled)
         if (enable_vpn) {
-            const ghostmesh_exe = b.addExecutable(.{
-                .name = "ghostmesh-vpn",
+            const vpn_server_demo = b.addExecutable(.{
+                .name = "quic-vpn-server-demo",
                 .root_module = b.createModule(.{
-                    .root_source_file = b.path("examples/ghostmesh_vpn.zig"),
+                    .root_source_file = b.path("examples/quic_vpn_server.zig"),
                     .target = target,
                     .optimize = optimize,
                     .imports = &.{
@@ -159,12 +159,12 @@ pub fn build(b: *std.Build) !void {
                     },
                 }),
             });
-            b.installArtifact(ghostmesh_exe);
+            b.installArtifact(vpn_server_demo);
 
-            const ghostscale_exe = b.addExecutable(.{
-                .name = "ghostscale-vpn",
+            const vpn_client_demo = b.addExecutable(.{
+                .name = "quic-vpn-client-demo",
                 .root_module = b.createModule(.{
-                    .root_source_file = b.path("examples/ghostscale_vpn.zig"),
+                    .root_source_file = b.path("examples/quic_vpn_client.zig"),
                     .target = target,
                     .optimize = optimize,
                     .imports = &.{
@@ -172,7 +172,7 @@ pub fn build(b: *std.Build) !void {
                     },
                 }),
             });
-            b.installArtifact(ghostscale_exe);
+            b.installArtifact(vpn_client_demo);
         }
 
         // Post-Quantum demo (only if PQ is enabled)

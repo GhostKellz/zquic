@@ -15,6 +15,7 @@ const NextFn = @import("router.zig").NextFn;
 const Middleware = @import("middleware.zig");
 const Connection = @import("../core/connection.zig").Connection;
 const Stream = @import("../core/stream.zig");
+const PrometheusMetrics = @import("../monitoring/prometheus_exporter.zig").PrometheusMetrics;
 
 /// Server configuration for high performance
 pub const SuperServerConfig = struct {
@@ -229,6 +230,7 @@ pub const Http3Server = struct {
     connections: std.StringHashMapUnmanaged(*ConnectionContext),
     middleware_stack: std.ArrayListUnmanaged(Middleware.MiddlewareFn),
     running: bool = false,
+    metrics: ?*PrometheusMetrics = null,
 
     const Self = @This();
 
@@ -241,6 +243,7 @@ pub const Http3Server = struct {
             .stats = SuperServerStats.init(),
             .connections = .{},
             .middleware_stack = .{},
+            .metrics = null,
         };
 
         // Setup default middleware
@@ -312,6 +315,10 @@ pub const Http3Server = struct {
         std.log.info("HTTP/3 server started with {} middleware(s)", .{self.middleware_stack.items.len});
     }
 
+    pub fn attachPrometheus(self: *Self, metrics: *PrometheusMetrics) void {
+        self.metrics = metrics;
+    }
+
     /// Stop the server
     pub fn stop(self: *Self) void {
         self.running = false;
@@ -327,6 +334,9 @@ pub const Http3Server = struct {
         try self.connections.put(self.allocator, conn_id, context);
         _ = self.stats.connections_active.fetchAdd(1, .acq_rel);
         _ = self.stats.connections_total.fetchAdd(1, .acq_rel);
+        if (self.metrics) |metrics| {
+            metrics.recordHttp3ConnectionOpened();
+        }
 
         std.log.info("Registered HTTP/3 connection: {any}", .{conn_id});
         return conn_id;
@@ -339,6 +349,9 @@ pub const Http3Server = struct {
             self.allocator.destroy(entry.value);
             self.allocator.free(entry.key);
             _ = self.stats.connections_active.fetchSub(1, .acq_rel);
+            if (self.metrics) |metrics| {
+                metrics.recordHttp3ConnectionClosed();
+            }
         }
     }
 
@@ -454,6 +467,8 @@ pub const Http3Server = struct {
             active_request.request.path,
             active_request.duration(),
         });
+
+        self.recordPrometheusSample(active_request);
     }
 
     fn sendFrameToConnection(self: *Self, connection: *Connection, stream_id: u64, frame: Frame.Frame) !void {
@@ -565,6 +580,16 @@ pub const Http3Server = struct {
     /// Health check endpoint
     pub fn healthCheck(self: *const Self) bool {
         return self.running and self.stats.connections_active.load(.acquire) < self.config.max_connections;
+    }
+
+    fn recordPrometheusSample(self: *Self, active_request: *ActiveRequest) void {
+        if (self.metrics) |metrics| {
+            const req_size = active_request.request.getBody().len;
+            const resp_size = active_request.response.getBodySize();
+            const status_code = @intFromEnum(active_request.response.status);
+            const success = status_code < 500;
+            metrics.recordHttp3Request(req_size, resp_size, active_request.duration(), success);
+        }
     }
 };
 

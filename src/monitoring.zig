@@ -7,6 +7,8 @@ const std = @import("std");
 const zquic_core = @import("zquic_core");
 const zcrypto = @import("zcrypto");
 
+pub const PrometheusMetrics = @import("monitoring/prometheus_exporter.zig").PrometheusMetrics;
+
 // Re-export monitoring functionality
 pub const CryptoTelemetry = @import("monitoring/crypto_telemetry.zig").CryptoTelemetry;
 
@@ -48,6 +50,10 @@ pub const MonitoringUtils = struct {
         _ = collector;
         // Implementation would format metrics for Prometheus
         return undefined;
+    }
+
+    pub fn snapshotPrometheus(metrics: *PrometheusMetrics, allocator: std.mem.Allocator) ![]u8 {
+        return metrics.render(allocator);
     }
 
     /// Get current performance snapshot

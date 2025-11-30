@@ -7,6 +7,7 @@ const zquic_core = @import("zquic_core");
 const message = @import("message.zig");
 const Error = @import("../utils/error.zig");
 const Time = @import("../utils/time.zig");
+const PrometheusMetrics = @import("../monitoring/prometheus_exporter.zig").PrometheusMetrics;
 
 // Type aliases for cleaner code
 const DnsMessage = message.DnsMessage;
@@ -76,7 +77,16 @@ const DoQConnection = struct {
     }
 
     pub fn handleStream(self: *DoQConnection, stream: *Stream) !void {
-        defer self.server.stats.active_connections -= 1;
+        self.server.stats.active_connections += 1;
+        if (self.server.metrics) |metrics| {
+            metrics.recordDoqConnectionOpened();
+        }
+        defer {
+            self.server.stats.active_connections -= 1;
+            if (self.server.metrics) |metrics| {
+                metrics.recordDoqConnectionClosed();
+            }
+        }
 
         // RFC 9250: DoQ uses stream 0 for DNS messages
         if (stream.id != 0) {
@@ -93,6 +103,14 @@ const DoQConnection = struct {
         self.server.stats.bytes_received += bytes_read;
         self.server.stats.queries_received += 1;
         self.query_count += 1;
+        const request_bytes = bytes_read;
+        var response_bytes: usize = 0;
+        var query_success = false;
+        defer {
+            if (self.server.metrics) |metrics| {
+                metrics.recordDoqQuery(request_bytes, response_bytes, query_success);
+            }
+        }
 
         // Parse DNS message
         var query = DnsMessage.parseFromStream(self.allocator, buffer[0..bytes_read]) catch |err| {
@@ -107,6 +125,7 @@ const DoQConnection = struct {
             handler(&query, self.allocator) catch |err| blk: {
                 std.log.err("DoQ: Handler failed: {}", .{err});
                 self.server.stats.queries_failed += 1;
+                query_success = false;
                 break :blk try self.createErrorResponse(&query, message.DnsResponseCode.ServFail);
             }
         else
@@ -123,6 +142,8 @@ const DoQConnection = struct {
 
         self.server.stats.bytes_sent += response_data.len;
         self.server.stats.queries_processed += 1;
+        response_bytes = response_data.len;
+        query_success = true;
 
         std.log.info("DoQ: Processed query for '{s}' (type: {}) - {} bytes response", .{
             if (query.questions.len > 0) query.questions[0].name else "unknown",
@@ -216,6 +237,7 @@ pub const DoQServer = struct {
     pending_queries: std.ArrayListUnmanaged(PendingQuery),
     is_running: bool = false,
     start_time: i64,
+    metrics: ?*PrometheusMetrics = null,
 
     pub fn init(allocator: std.mem.Allocator, config: DoQServerConfig) !DoQServer {
         if (config.cert_path.len == 0 or config.key_path.len == 0) {
@@ -229,6 +251,7 @@ pub const DoQServer = struct {
             .allocator = allocator,
             .pending_queries = .{},
             .start_time = ts.sec,
+            .metrics = null,
         };
     }
 
@@ -271,6 +294,11 @@ pub const DoQServer = struct {
     /// Set custom DNS handler
     pub fn setHandler(self: *DoQServer, handler: DnsHandlerFn) void {
         self.config.handler = handler;
+    }
+
+    /// Attach Prometheus metrics exporter for observability
+    pub fn attachPrometheus(self: *DoQServer, metrics: *PrometheusMetrics) void {
+        self.metrics = metrics;
     }
 
     /// Get server statistics

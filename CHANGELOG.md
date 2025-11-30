@@ -5,6 +5,9 @@
 - Expanded HTTP/3 integration coverage for middleware ordering, short-circuiting, error handlers, and static file serving.
 - DNS-over-QUIC integration tests (`tests/doq_integration_test.zig`) now run via `zig build test`/`integration-tests`, gating CI.
 - Literal QPACK encoder/decoder implementation with regression tests and HEADERS frames now carrying real payloads.
+- Prometheus exporter (`src/monitoring/prometheus_exporter.zig`) with helper tests, plus attachment points in HTTP/3, DoQ, and VPN modules.
+- QUIC VPN concept docs (`docs/features/quic_vpn.md`), integrations guides, and runnable demos (`examples/quic_vpn_{server,client}.zig`) with a `dev/vpn_smoke.sh` helper.
+- New documentation landing pages for features, Prometheus, zcrypto integrations, and the async runtime internals.
 
 ### Changed
 - Static middleware honors `SuperServerConfig.static_files_root` so serving from custom directories works in tests and production.
@@ -12,6 +15,7 @@
 - HTTP/3, DoQ, and QUIC frame modules were migrated to Zig 0.16's `std.Io.Reader/Writer` plus the new `std.testing.tmpDir`/`Dir.writeFile` APIs, unblocking the toolchain upgrade without deprecation warnings.
 - `docs/getting-started/quick-start.md` documents middleware usage and highlights Zig 0.16 migration requirements (see `archive/ZIG_API_CHANGES.md`).
 - `CHANGELOG.md` now tracks ongoing v0.9.3 work ahead of the next release.
+- HTTP/3 and DoQ servers now emit Prometheus metrics for requests, latency, bytes, and connection lifecycle; the VPN router keeps route/interface gauges up to date.
 
 # Changelog
 

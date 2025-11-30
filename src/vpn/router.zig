@@ -5,6 +5,7 @@
 const std = @import("std");
 const Error = @import("../utils/error.zig");
 const Packet = @import("../core/packet.zig");
+const PrometheusMetrics = @import("../monitoring/prometheus_exporter.zig").PrometheusMetrics;
 
 /// VPN route entry
 pub const Route = struct {
@@ -64,6 +65,7 @@ pub const PacketRouter = struct {
     nat_table: std.HashMap(u64, NatEntry, std.hash_map.AutoContext(u64), std.hash_map.default_max_load_percentage),
     config: RoutingConfig,
     allocator: std.mem.Allocator,
+    metrics: ?*PrometheusMetrics = null,
 
     // Default route
     default_gateway: ?std.net.Address = null,
@@ -78,6 +80,7 @@ pub const PacketRouter = struct {
             .nat_table = std.HashMap(u64, NatEntry, std.hash_map.AutoContext(u64), std.hash_map.default_max_load_percentage).init(allocator),
             .config = config,
             .allocator = allocator,
+            .metrics = null,
         };
     }
 
@@ -110,6 +113,7 @@ pub const PacketRouter = struct {
 
         const interface_hash = std.hash_map.hashString(name);
         self.interfaces.put(interface_hash, interface) catch return Error.ZquicError.OutOfMemory;
+        self.publishVpnSnapshot();
     }
 
     /// Remove a VPN interface
@@ -118,6 +122,7 @@ pub const PacketRouter = struct {
         if (self.interfaces.fetchRemove(interface_hash)) |entry| {
             self.allocator.free(entry.value.name);
         }
+        self.publishVpnSnapshot();
     }
 
     /// Add a route to the routing table
@@ -141,6 +146,7 @@ pub const PacketRouter = struct {
         };
 
         self.routes.append(route) catch return Error.ZquicError.OutOfMemory;
+        self.publishVpnSnapshot();
     }
 
     /// Remove a route from the routing table
@@ -149,6 +155,7 @@ pub const PacketRouter = struct {
             if (addressEqual(route.destination, destination)) {
                 const removed_route = self.routes.swapRemove(i);
                 self.allocator.free(removed_route.interface);
+                self.publishVpnSnapshot();
                 return true;
             }
         }
@@ -225,6 +232,10 @@ pub const PacketRouter = struct {
             const nat_result = try self.applyNat(source, destination, routing_result.connection_id orelse return Error.ZquicError.InvalidArgument);
             source_addr = nat_result.external_source;
             dest_addr = nat_result.external_destination;
+        }
+
+        if (self.metrics) |metrics| {
+            metrics.recordVpnForward(packet_data.len);
         }
 
         return ForwardingResult{
@@ -305,6 +316,10 @@ pub const PacketRouter = struct {
             cleaned_count += 1;
         }
 
+        if (cleaned_count > 0) {
+            self.publishVpnSnapshot();
+        }
+
         return cleaned_count;
     }
 
@@ -367,6 +382,18 @@ pub const PacketRouter = struct {
         hasher.update(bytes1);
         hasher.update(bytes2);
         return hasher.final();
+    }
+
+    pub fn attachPrometheus(self: *Self, metrics: *PrometheusMetrics) void {
+        self.metrics = metrics;
+        self.publishVpnSnapshot();
+    }
+
+    fn publishVpnSnapshot(self: *Self) void {
+        if (self.metrics) |metrics| {
+            const stats = self.getStats();
+            metrics.recordVpnSnapshot(stats.route_count, stats.interface_count, stats.nat_entry_count);
+        }
     }
 };
 

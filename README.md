@@ -57,6 +57,7 @@ zig build
 - **Connection pooling**: high-performance multiplexing for crypto protocols
 - **HTTP/3 server**: production-ready with advanced middleware
 - **Consistent middleware execution**: router fallback invokes global middleware (logging, static assets, auth) even when no route matches, so 404s still pass through your filters.
+- **QUIC-over-UDP VPN (experimental)**: `docs/features/quic_vpn.md` + new demos show how to tunnel mesh traffic as a concept alternative to Tailscale/NetBird.
 - **Zero-copy packet processing**: optimized for 100K+ TPS
 - **IPv6-first networking**: dual-stack with modern internet protocols
 
@@ -69,7 +70,7 @@ zig build
 
 ### 📊 **Production Monitoring & Telemetry (v0.8.4)**
 - **Real-time metrics**: performance monitoring and analytics
-- **Prometheus integration**: production-grade metrics export
+- **Prometheus integration**: dedicated exporter surfaces HTTP/3, DoQ, and VPN metrics ready for `/metrics`
 - **Alerting system**: configurable thresholds for high-throughput workloads
 - **Connection health**: advanced diagnostics for network infrastructure
 - **Protocol analytics**: detailed breakdown of DoQ/HTTP3/gRPC usage
@@ -87,7 +88,11 @@ zig build
 - **`docs/getting-started/quick-start.md`** – bootstrap instructions
 - **`docs/getting-started/build-config.md`** – flag reference kept in sync with `build.zig`
 - **`docs/architecture/overview.md`** – async runtime + protocol layering notes
+- **`docs/architecture/async-runtime.md`** – explains the in-tree async runtime that replaced zsync
 - **`docs/examples/`** – walkthroughs mirroring the binaries prepared by `zig build`
+- **`docs/features/README.md` & `docs/features/quic_vpn.md`** – catalogue of major modules plus the experimental QUIC VPN deep dive
+- **`docs/integrations/prometheus.md`** – how to attach the exporter and what metrics to expect
+- **`docs/integrations/zcrypto.md`** – tuning notes for PQ TLS + VPN helpers
 - **`examples/*.zig`** – runnable samples that match the documentation
 
 ## 🔍 Why Zig?
@@ -126,6 +131,8 @@ Keep the dependency metadata intact (`build.zig.zon` pins `zcrypto` 0.9.5) and b
 
 # Smoke test HTTP/3 or DoQ locally
 ./dev/smoke_test.sh
+# QUIC VPN routing smoke (experimental)
+./dev/vpn_smoke.sh
 ```
 
 Prefer individual commands? Run `zig build integration-tests` for handshake coverage or `zig build fuzz-tests` for the packet parser harness.
