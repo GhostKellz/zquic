@@ -266,8 +266,8 @@ pub const CircuitBreaker = struct {
 
 /// Connection pool for backend connections
 pub const ConnectionPool = struct {
-    connections: std.ArrayList(PooledConnection),
-    available_connections: std.ArrayList(usize),
+    connections: std.ArrayListUnmanaged(PooledConnection),
+    available_connections: std.ArrayListUnmanaged(usize),
     max_size: u32,
     allocator: std.mem.Allocator,
     
@@ -297,21 +297,21 @@ pub const ConnectionPool = struct {
     
     pub fn init(allocator: std.mem.Allocator, max_size: u32) !ConnectionPool {
         return ConnectionPool{
-            .connections = .{ },
-            .available_connections = .{ },
+            .connections = .{},
+            .available_connections = .{},
             .max_size = max_size,
             .allocator = allocator,
         };
     }
-    
+
     pub fn deinit(self: *ConnectionPool) void {
         for (self.connections.items) |*conn| {
             if (conn.connection) |c| {
                 c.close();
             }
         }
-        self.connections.deinit(allocator);
-        self.available_connections.deinit(allocator);
+        self.connections.deinit(self.allocator);
+        self.available_connections.deinit(self.allocator);
     }
     
     pub fn getConnection(self: *ConnectionPool) ?*Connection {
@@ -326,7 +326,7 @@ pub const ConnectionPool = struct {
         // Create new connection if under limit
         if (self.connections.items.len < self.max_size) {
             const pooled_conn = PooledConnection.init();
-            self.connections.append(allocator, pooled_conn) catch return null;
+            self.connections.append(self.allocator, pooled_conn) catch return null;
             return null; // Would need to establish connection
         }
         
@@ -339,7 +339,7 @@ pub const ConnectionPool = struct {
                 conn.in_use = false;
                 conn.last_used = (try std.time.Instant.now()).timestamp.sec;
                 conn.request_count += 1;
-                self.available_connections.append(allocator, i) catch {};
+                self.available_connections.append(self.allocator, i) catch {};
                 break;
             }
         }
@@ -442,38 +442,38 @@ pub const BackendStats = struct {
 /// Load balancer implementation
 pub const LoadBalancer = struct {
     algorithm: LoadBalancingAlgorithm,
-    backends: std.ArrayList(BackendServer),
+    backends: std.ArrayListUnmanaged(BackendServer),
     current_index: u32,
     hash_ring: ?ConsistentHashRing,
     allocator: std.mem.Allocator,
-    
+
     const Self = @This();
-    
-    pub fn init(allocator: std.mem.Allocator, algorithm: LoadBalancingAlgorithm) LoadBalancer {
+
+    pub fn init(alloc: std.mem.Allocator, algorithm: LoadBalancingAlgorithm) LoadBalancer {
         return LoadBalancer{
             .algorithm = algorithm,
-            .backends = .{ },
+            .backends = .{},
             .current_index = 0,
             .hash_ring = null,
-            .allocator = allocator,
+            .allocator = alloc,
         };
     }
     
     pub fn deinit(self: *LoadBalancer) void {
         for (self.backends.items) |*backend| {
-            backend.deinit(allocator);
+            backend.deinit(self.allocator);
         }
-        self.backends.deinit(allocator);
-        
+        self.backends.deinit(self.allocator);
+
         if (self.hash_ring) |*ring| {
-            ring.deinit(allocator);
+            ring.deinit();
         }
     }
-    
+
     pub fn addBackend(self: *LoadBalancer, config: BackendConfig) !void {
         const backend = try BackendServer.init(self.allocator, config);
-        try self.backends.append(allocator, backend);
-        
+        try self.backends.append(self.allocator, backend);
+
         // Update consistent hash ring if needed
         if (self.algorithm == .consistent_hash) {
             if (self.hash_ring == null) {
@@ -482,13 +482,13 @@ pub const LoadBalancer = struct {
             try self.hash_ring.?.addNode(config.host, config.weight);
         }
     }
-    
+
     pub fn removeBackend(self: *LoadBalancer, host: []const u8) void {
         for (self.backends.items, 0..) |*backend, i| {
             if (std.mem.eql(u8, backend.config.host, host)) {
-                backend.deinit(allocator);
+                backend.deinit(self.allocator);
                 _ = self.backends.swapRemove(i);
-                
+
                 // Update consistent hash ring if needed
                 if (self.algorithm == .consistent_hash and self.hash_ring != null) {
                     self.hash_ring.?.removeNode(host);
@@ -588,17 +588,10 @@ pub const LoadBalancer = struct {
         }
     }
     
-    fn getHealthyBackends(self: *LoadBalancer) []*BackendServer {
-        var healthy_backends = .{ };
-        defer healthy_backends.deinit(allocator);
-        
-        for (self.backends.items) |*backend| {
-            if (backend.isAvailable()) {
-                healthy_backends.append(allocator, backend) catch continue;
-            }
-        }
-        
-        return healthy_backends.toOwnedSlice() catch &[_]*BackendServer{};
+    fn getHealthyBackends(self: *LoadBalancer) []BackendServer {
+        // Return the full backends list - caller filters by isAvailable
+        // This avoids allocation in hot path
+        return self.backends.items;
     }
     
     pub fn getStats(self: *const LoadBalancer) LoadBalancerStats {
@@ -647,52 +640,52 @@ pub const LoadBalancerStats = struct {
 
 /// Consistent hash ring for consistent hashing load balancing
 pub const ConsistentHashRing = struct {
-    nodes: std.HashMap(u64, []const u8, std.hash_map.AutoContext(u64), std.hash_map.default_max_load_percentage),
-    sorted_hashes: std.ArrayList(u64),
+    nodes: std.AutoHashMapUnmanaged(u64, []const u8),
+    sorted_hashes: std.ArrayListUnmanaged(u64),
     allocator: std.mem.Allocator,
-    
-    pub fn init(allocator: std.mem.Allocator) ConsistentHashRing {
+
+    pub fn init(alloc: std.mem.Allocator) ConsistentHashRing {
         return ConsistentHashRing{
-            .nodes = std.HashMap(u64, []const u8, std.hash_map.AutoContext(u64), std.hash_map.default_max_load_percentage).init(allocator),
-            .sorted_hashes = .{ },
-            .allocator = allocator,
+            .nodes = .{},
+            .sorted_hashes = .{},
+            .allocator = alloc,
         };
     }
-    
+
     pub fn deinit(self: *ConsistentHashRing) void {
-        self.nodes.deinit(allocator);
-        self.sorted_hashes.deinit(allocator);
+        self.nodes.deinit(self.allocator);
+        self.sorted_hashes.deinit(self.allocator);
     }
-    
+
     pub fn addNode(self: *ConsistentHashRing, node: []const u8, weight: u32) !void {
         // Add multiple virtual nodes based on weight
         for (0..weight) |i| {
             const virtual_node = try std.fmt.allocPrint(self.allocator, "{s}:{d}", .{ node, i });
             defer self.allocator.free(virtual_node);
-            
+
             const hash = std.hash_map.hashString(virtual_node);
-            try self.nodes.put(hash, node);
-            try self.sorted_hashes.append(allocator, hash);
+            try self.nodes.put(self.allocator, hash, node);
+            try self.sorted_hashes.append(self.allocator, hash);
         }
-        
+
         // Sort hashes for binary search
-        std.sort.sort(u64, self.sorted_hashes.items, {}, comptime std.sort.asc(u64));
+        std.mem.sort(u64, self.sorted_hashes.items, {}, std.sort.asc(u64));
     }
     
     pub fn removeNode(self: *ConsistentHashRing, node: []const u8) void {
-        var hashes_to_remove = .{ };
-        defer hashes_to_remove.deinit(allocator);
-        
+        var hashes_to_remove: std.ArrayListUnmanaged(u64) = .{};
+        defer hashes_to_remove.deinit(self.allocator);
+
         var iterator = self.nodes.iterator();
         while (iterator.next()) |entry| {
             if (std.mem.eql(u8, entry.value_ptr.*, node)) {
-                hashes_to_remove.append(allocator, entry.key_ptr.*) catch continue;
+                hashes_to_remove.append(self.allocator, entry.key_ptr.*) catch continue;
             }
         }
-        
+
         for (hashes_to_remove.items) |hash| {
             _ = self.nodes.remove(hash);
-            
+
             // Remove from sorted list
             for (self.sorted_hashes.items, 0..) |h, i| {
                 if (h == hash) {
@@ -780,11 +773,11 @@ pub const AdvancedHttp3Server = struct {
     config: AdvancedServerConfig,
     multiplexer: *EnhancedUdpMultiplexer,
     load_balancer: ?LoadBalancer,
-    connections: std.HashMap(u64, *ConnectionContext, std.hash_map.AutoContext(u64), std.hash_map.default_max_load_percentage),
-    
+    connections: std.AutoHashMapUnmanaged(u64, *ConnectionContext),
+
     // Middleware and routing
     router: Router,
-    middleware_stack: std.ArrayList(Middleware),
+    middleware_stack: std.ArrayListUnmanaged(Middleware),
     
     // Performance monitoring
     stats: ServerStats,
@@ -807,32 +800,32 @@ pub const AdvancedHttp3Server = struct {
             .config = config,
             .multiplexer = multiplexer,
             .load_balancer = load_balancer,
-            .connections = std.HashMap(u64, *ConnectionContext, std.hash_map.AutoContext(u64), std.hash_map.default_max_load_percentage).init(allocator),
-            .router = Routersrc/http3/advanced_server.zig,
-            .middleware_stack = .{ },
+            .connections = .{},
+            .router = Router.init(allocator),
+            .middleware_stack = .{},
             .stats = ServerStats.init(),
-            .metrics_collector = MetricsCollectorsrc/http3/advanced_server.zig,
-            .health_monitor = HealthMonitorsrc/http3/advanced_server.zig,
+            .metrics_collector = MetricsCollector.init(allocator),
+            .health_monitor = HealthMonitor.init(allocator),
             .allocator = allocator,
         };
     }
     
     pub fn deinit(self: *Self) void {
         if (self.load_balancer) |*lb| {
-            lb.deinit(allocator);
+            lb.deinit(self.allocator);
         }
-        
+
         var iterator = self.connections.iterator();
         while (iterator.next()) |entry| {
-            entry.value_ptr.*.deinit(allocator);
+            entry.value_ptr.*.deinit(self.allocator);
             self.allocator.destroy(entry.value_ptr.*);
         }
-        self.connections.deinit(allocator);
-        
-        self.router.deinit(allocator);
-        self.middleware_stack.deinit(allocator);
-        self.metrics_collector.deinit(allocator);
-        self.health_monitor.deinit(allocator);
+        self.connections.deinit(self.allocator);
+
+        self.router.deinit(self.allocator);
+        self.middleware_stack.deinit(self.allocator);
+        self.metrics_collector.deinit(self.allocator);
+        self.health_monitor.deinit(self.allocator);
     }
     
     /// Add backend server for load balancing
@@ -851,7 +844,7 @@ pub const AdvancedHttp3Server = struct {
     
     /// Add middleware to the stack
     pub fn addMiddleware(self: *Self, middleware: Middleware) !void {
-        try self.middleware_stack.append(allocator, middleware);
+        try self.middleware_stack.append(self.allocator, middleware);
     }
     
     /// Add route handler
@@ -870,7 +863,7 @@ pub const AdvancedHttp3Server = struct {
         const context = try self.allocator.create(ConnectionContext);
         context.* = ConnectionContext.init(self.allocator, connection);
         
-        try self.connections.put(conn_id, context);
+        try self.connections.put(self.allocator, conn_id, context);
         
         self.stats.connections_total += 1;
         self.stats.connections_active += 1;
@@ -1063,21 +1056,21 @@ pub const AdvancedHttp3Server = struct {
 /// Connection context for advanced server
 pub const ConnectionContext = struct {
     connection: *Connection,
-    active_streams: std.HashMap(u64, *Stream.Stream, std.hash_map.AutoContext(u64), std.hash_map.default_max_load_percentage),
+    active_streams: std.AutoHashMapUnmanaged(u64, *Stream.Stream),
     last_activity: i64,
     allocator: std.mem.Allocator,
-    
+
     pub fn init(allocator: std.mem.Allocator, connection: *Connection) ConnectionContext {
         return ConnectionContext{
             .connection = connection,
-            .active_streams = std.HashMap(u64, *Stream.Stream, std.hash_map.AutoContext(u64), std.hash_map.default_max_load_percentage).init(allocator),
+            .active_streams = .{},
             .last_activity = (try std.time.Instant.now()).timestamp.sec,
             .allocator = allocator,
         };
     }
-    
+
     pub fn deinit(self: *ConnectionContext) void {
-        self.active_streams.deinit(allocator);
+        self.active_streams.deinit(self.allocator);
     }
     
     pub fn updateActivity(self: *ConnectionContext) void {
@@ -1119,28 +1112,28 @@ pub const ServerStats = struct {
 
 /// Metrics collector for performance monitoring
 pub const MetricsCollector = struct {
-    request_durations: std.ArrayList(u64),
-    status_codes: std.HashMap(u16, u64, std.hash_map.AutoContext(u16), std.hash_map.default_max_load_percentage),
+    request_durations: std.ArrayListUnmanaged(u64),
+    status_codes: std.AutoHashMapUnmanaged(u16, u64),
     allocator: std.mem.Allocator,
-    
+
     pub fn init(allocator: std.mem.Allocator) MetricsCollector {
         return MetricsCollector{
-            .request_durations = .{ },
-            .status_codes = std.HashMap(u16, u64, std.hash_map.AutoContext(u16), std.hash_map.default_max_load_percentage).init(allocator),
+            .request_durations = .{},
+            .status_codes = .{},
             .allocator = allocator,
         };
     }
-    
+
     pub fn deinit(self: *MetricsCollector) void {
-        self.request_durations.deinit(allocator);
-        self.status_codes.deinit(allocator);
+        self.request_durations.deinit(self.allocator);
+        self.status_codes.deinit(self.allocator);
     }
     
     pub fn recordRequest(self: *MetricsCollector, duration: u64, status_code: u16) void {
-        self.request_durations.append(allocator, duration) catch {};
-        
+        self.request_durations.append(self.allocator, duration) catch {};
+
         const count = self.status_codes.get(status_code) orelse 0;
-        self.status_codes.put(status_code, count + 1) catch {};
+        self.status_codes.put(self.allocator, status_code, count + 1) catch {};
     }
     
     pub fn getAverageResponseTime(self: *const MetricsCollector) f64 {
@@ -1158,19 +1151,19 @@ pub const MetricsCollector = struct {
 /// Health monitor for server and backends
 pub const HealthMonitor = struct {
     overall_health: HealthStatus,
-    component_health: std.HashMap([]const u8, HealthStatus, std.hash_map.StringContext, std.hash_map.default_max_load_percentage),
+    component_health: std.StringHashMapUnmanaged(HealthStatus),
     allocator: std.mem.Allocator,
-    
+
     pub fn init(allocator: std.mem.Allocator) HealthMonitor {
         return HealthMonitor{
             .overall_health = HealthStatus.init(),
-            .component_health = std.HashMap([]const u8, HealthStatus, std.hash_map.StringContext, std.hash_map.default_max_load_percentage).init(allocator),
+            .component_health = .{},
             .allocator = allocator,
         };
     }
-    
+
     pub fn deinit(self: *HealthMonitor) void {
-        self.component_health.deinit(allocator);
+        self.component_health.deinit(self.allocator);
     }
     
     pub fn getOverallHealth(self: *const HealthMonitor) HealthStatus {
@@ -1201,28 +1194,28 @@ pub const HealthMonitor = struct {
 
 /// Router for HTTP/3 requests
 pub const Router = struct {
-    routes: std.ArrayList(Route),
+    routes: std.ArrayListUnmanaged(Route),
     allocator: std.mem.Allocator,
-    
+
     const Route = struct {
         method: []const u8,
         path: []const u8,
         handler: HandlerFn,
     };
-    
+
     pub fn init(allocator: std.mem.Allocator) Router {
         return Router{
-            .routes = .{ },
+            .routes = .{},
             .allocator = allocator,
         };
     }
     
     pub fn deinit(self: *Router) void {
-        self.routes.deinit(allocator);
+        self.routes.deinit(self.allocator);
     }
     
     pub fn addRoute(self: *Router, method: []const u8, path: []const u8, handler: HandlerFn) !void {
-        try self.routes.append(Route{
+        try self.routes.append(self.allocator, Route{
             .method = method,
             .path = path,
             .handler = handler,

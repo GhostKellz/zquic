@@ -57,14 +57,14 @@ pub const Version = enum {
 
 /// HTTP request headers
 pub const Headers = struct {
-    fields: std.ArrayList(HeaderField),
+    fields: std.ArrayListUnmanaged(HeaderField),
     allocator: std.mem.Allocator,
 
     const Self = @This();
 
     pub fn init(allocator: std.mem.Allocator) Self {
         return Self{
-            .fields = std.ArrayList(HeaderField){},
+            .fields = .{},
             .allocator = allocator,
         };
     }
@@ -146,6 +146,7 @@ pub const RequestContext = struct {
     stream_id: u64,
     connection_id: []const u8,
     user_data: ?*anyopaque = null,
+    router_state: ?*anyopaque = null,
     start_time: i64,
 
     const Self = @This();
@@ -177,7 +178,7 @@ pub const Request = struct {
     version: Version,
     headers: Headers,
     query_params: QueryParams,
-    body: std.ArrayList(u8),
+    body: std.ArrayListUnmanaged(u8),
     context: RequestContext,
     allocator: std.mem.Allocator,
 
@@ -192,7 +193,7 @@ pub const Request = struct {
             .version = .HTTP3,
             .headers = Headers.init(allocator),
             .query_params = QueryParams.init(allocator),
-            .body = std.ArrayList(u8){},
+            .body = .{},
             .context = RequestContext.init(stream_id, connection_id),
             .allocator = allocator,
         };

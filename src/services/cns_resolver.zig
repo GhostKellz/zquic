@@ -3,13 +3,14 @@
 //! Post-quantum DNS resolver for decentralized naming (.ghost, .zns, .eth domains)
 
 const std = @import("std");
-const zquic_core = @import("zquic_core");
+const zquic_core = @import("../core.zig");
 const zcrypto = @import("zcrypto");
 const build_options = @import("build_options");
 const Error = @import("../utils/error.zig");
+const Time = @import("../utils/time.zig");
 
 /// Conditionally import HTTP/3 if enabled
-const http3 = if (build_options.enable_http3) @import("http3") else struct {};
+const http3 = if (build_options.enable_http3) @import("../http3.zig") else struct {};
 
 const Http3Server = if (build_options.enable_http3) http3.Http3Server else void;
 const ServerConfig = if (build_options.enable_http3) http3.ServerConfig else void;
@@ -195,19 +196,19 @@ pub const DnsResourceRecord = struct {
 /// DNS message
 pub const DnsMessage = struct {
     header: DnsHeader,
-    questions: std.ArrayList(DnsQuestion),
-    answers: std.ArrayList(DnsResourceRecord),
-    authorities: std.ArrayList(DnsResourceRecord),
-    additionals: std.ArrayList(DnsResourceRecord),
+    questions: std.ArrayListUnmanaged(DnsQuestion),
+    answers: std.ArrayListUnmanaged(DnsResourceRecord),
+    authorities: std.ArrayListUnmanaged(DnsResourceRecord),
+    additionals: std.ArrayListUnmanaged(DnsResourceRecord),
     allocator: std.mem.Allocator,
 
     pub fn init(allocator: std.mem.Allocator) DnsMessage {
         return DnsMessage{
             .header = std.mem.zeroes(DnsHeader),
-            .questions = .{ },
-            .answers = .{ },
-            .authorities = .{ },
-            .additionals = .{ },
+            .questions = .{},
+            .answers = .{},
+            .authorities = .{},
+            .additionals = .{},
             .allocator = allocator,
         };
     }
@@ -226,15 +227,15 @@ pub const DnsMessage = struct {
             additional.deinit(self.allocator);
         }
 
-        self.questions.deinit();
-        self.answers.deinit();
-        self.authorities.deinit();
-        self.additionals.deinit();
+        self.questions.deinit(self.allocator);
+        self.answers.deinit(self.allocator);
+        self.authorities.deinit(self.allocator);
+        self.additionals.deinit(self.allocator);
     }
 
     pub fn serialize(self: *const DnsMessage) ![]u8 {
-        var buffer = std.ArrayList(u8).init(self.allocator);
-        defer buffer.deinit();
+        var buffer: std.ArrayListUnmanaged(u8) = .{};
+        defer buffer.deinit(self.allocator);
 
         const writer = buffer.writer();
 
@@ -349,14 +350,15 @@ pub const BlockchainResolver = struct {
 /// DNS cache entry
 pub const CacheEntry = struct {
     question: DnsQuestion,
-    answers: std.ArrayList(DnsResourceRecord),
+    answers: std.ArrayListUnmanaged(DnsResourceRecord),
     expiry_time: i64,
     hit_count: u32,
 
     pub fn init(allocator: std.mem.Allocator, question: DnsQuestion) CacheEntry {
+        _ = allocator;
         return CacheEntry{
             .question = question,
-            .answers = .{ },
+            .answers = .{},
             .expiry_time = 0,
             .hit_count = 0,
         };
@@ -371,13 +373,13 @@ pub const CacheEntry = struct {
     }
 
     pub fn isExpired(self: *const CacheEntry) bool {
-        return (try std.time.Instant.now()).timestamp.sec > self.expiry_time;
+        return Time.nowSeconds() > self.expiry_time;
     }
 };
 
 /// DNS cache
 pub const DnsCache = struct {
-    cache: std.HashMap(u64, CacheEntry, std.hash_map.DefaultContext(u64), std.hash_map.default_max_load_percentage),
+    cache: std.AutoHashMapUnmanaged(u64, CacheEntry),
     max_size_mb: u32,
     current_size: u32,
     allocator: std.mem.Allocator,
@@ -385,7 +387,7 @@ pub const DnsCache = struct {
 
     pub fn init(allocator: std.mem.Allocator, max_size_mb: u32) DnsCache {
         return DnsCache{
-            .cache = std.HashMap(u64, CacheEntry, std.hash_map.DefaultContext(u64), std.hash_map.default_max_load_percentage).init(allocator),
+            .cache = .{},
             .max_size_mb = max_size_mb,
             .current_size = 0,
             .allocator = allocator,
@@ -398,7 +400,7 @@ pub const DnsCache = struct {
         while (iterator.next()) |entry| {
             entry.value_ptr.deinit(self.allocator);
         }
-        self.cache.deinit();
+        self.cache.deinit(self.allocator);
     }
 
     pub fn get(self: *DnsCache, question: *const DnsQuestion) ?[]const DnsResourceRecord {
@@ -424,10 +426,10 @@ pub const DnsCache = struct {
         var entry = CacheEntry.init(self.allocator, question);
 
         for (answers) |answer| {
-            try entry.answers.append(answer);
+            try entry.answers.append(self.allocator, answer);
         }
 
-        entry.expiry_time = (try std.time.Instant.now()).timestamp.sec + ttl;
+        entry.expiry_time = Time.nowSeconds() + ttl;
 
         try self.cache.put(key, entry);
     }
@@ -473,7 +475,7 @@ pub const CnsResolver = struct {
             .dns_cache = DnsCache.init(allocator, config.cache_size_mb),
             .allocator = allocator,
             .running = false,
-            .stats = .{ .start_time = (try std.time.Instant.now()).timestamp.sec },
+            .stats = .{ .start_time = Time.nowSeconds() },
         };
 
         return resolver;
@@ -618,11 +620,11 @@ pub const CnsResolver = struct {
         response.header.ancount = @intCast(answers.len);
 
         // Add question
-        try response.questions.append(question.*);
+        try response.questions.append(self.allocator, question.*);
 
         // Add answers
         for (answers) |answer| {
-            try response.answers.append(answer);
+            try response.answers.append(self.allocator, answer);
         }
 
         return response;
@@ -637,7 +639,7 @@ pub const CnsResolver = struct {
             .cache_misses = self.stats.cache_misses,
             .blockchain_queries = self.stats.blockchain_queries,
             .avg_response_time_us = self.stats.avg_response_time_us,
-            .uptime_seconds = @intCast((try std.time.Instant.now()).timestamp.sec - self.stats.start_time),
+            .uptime_seconds = @intCast(Time.nowSeconds() - self.stats.start_time),
             .cache_hit_rate = if (self.stats.total_queries > 0)
                 @as(f64, @floatFromInt(self.stats.cache_hits)) / @as(f64, @floatFromInt(self.stats.total_queries))
             else

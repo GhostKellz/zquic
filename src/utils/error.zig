@@ -1,6 +1,7 @@
 //! Error definitions for ZQUIC library
 
 const std = @import("std");
+const builtin = @import("builtin");
 
 /// ZQUIC-specific error types
 pub const ZquicError = error{
@@ -33,7 +34,7 @@ pub const ZquicError = error{
     ConnectionReset,
     PacketTooLarge,
     WouldBlock,
-    
+
     // VPN and multiplexing errors
     UnknownConnection,
     ConnectionLimitReached,
@@ -134,7 +135,7 @@ pub const ErrorContext = struct {
     line: u32,
     message: ?[]const u8 = null,
     cause: ?ZquicError = null,
-    
+
     pub fn init(file: []const u8, function: []const u8, line: u32) ErrorContext {
         return ErrorContext{
             .file = file,
@@ -142,13 +143,13 @@ pub const ErrorContext = struct {
             .line = line,
         };
     }
-    
+
     pub fn withMessage(self: ErrorContext, message: []const u8) ErrorContext {
         var result = self;
         result.message = message;
         return result;
     }
-    
+
     pub fn withCause(self: ErrorContext, cause: ZquicError) ErrorContext {
         var result = self;
         result.cause = cause;
@@ -177,7 +178,7 @@ pub const ErrorHandling = struct {
             else => ZquicError.InternalError,
         };
     }
-    
+
     /// Map crypto-specific errors
     pub fn mapCryptoError(err: anyerror) ZquicError {
         return switch (err) {
@@ -190,10 +191,12 @@ pub const ErrorHandling = struct {
             else => mapStdError(err),
         };
     }
-    
+
     /// Map network operation errors with context
     pub fn mapNetworkError(err: anyerror, operation: []const u8) ZquicError {
-        std.log.warn("Network operation '{s}' failed: {}", .{ operation, err });
+        if (!builtin.is_test) {
+            std.log.warn("Network operation '{s}' failed: {}", .{ operation, err });
+        }
         return switch (err) {
             error.SocketNotConnected => ZquicError.ConnectionClosed,
             error.MessageTooBig => ZquicError.PacketTooLarge,
@@ -203,18 +206,16 @@ pub const ErrorHandling = struct {
             else => mapStdError(err),
         };
     }
-    
+
     /// Log error with context
     pub fn logError(err: ZquicError, context: ErrorContext) void {
         const message = context.message orelse "No message";
-        std.log.err("Error in {}:{s}:{d} - {}: {s}", .{ 
-            context.file, context.function, context.line, err, message 
-        });
+        std.log.err("Error in {}:{s}:{d} - {}: {s}", .{ context.file, context.function, context.line, err, message });
         if (context.cause) |cause| {
             std.log.err("  Caused by: {}", .{cause});
         }
     }
-    
+
     /// Convert error to user-friendly string
     pub fn errorToString(err: ZquicError) []const u8 {
         return switch (err) {
@@ -265,7 +266,7 @@ pub const ErrorHandling = struct {
             .InternalError => "Internal error",
         };
     }
-    
+
     /// Check if error is recoverable
     pub fn isRecoverable(err: ZquicError) bool {
         return switch (err) {
@@ -274,7 +275,7 @@ pub const ErrorHandling = struct {
             else => true,
         };
     }
-    
+
     /// Get error severity level
     pub fn getSeverity(err: ZquicError) enum { low, medium, high, critical } {
         return switch (err) {
@@ -314,13 +315,13 @@ test "error code conversions" {
 test "error mapping utilities" {
     const std_err = ErrorHandling.mapStdError(error.OutOfMemory);
     try std.testing.expect(std_err == ZquicError.OutOfMemory);
-    
+
     const net_err = ErrorHandling.mapNetworkError(error.ConnectionRefused, "connect");
     try std.testing.expect(net_err == ZquicError.ConnectionRefused);
-    
+
     try std.testing.expect(ErrorHandling.isRecoverable(ZquicError.WouldBlock));
     try std.testing.expect(!ErrorHandling.isRecoverable(ZquicError.InternalError));
-    
+
     try std.testing.expect(ErrorHandling.getSeverity(ZquicError.InternalError) == .critical);
     try std.testing.expect(ErrorHandling.getSeverity(ZquicError.WouldBlock) == .low);
 }

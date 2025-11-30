@@ -15,12 +15,13 @@ pub const Response = @import("http3/response.zig").Response;
 pub const Router = @import("http3/router.zig").Router;
 pub const Middleware = @import("http3/middleware.zig");
 pub const ServerConfig = @import("http3/server.zig").ServerConfig;
+pub const NextFn = @import("http3/router.zig").NextFn;
 
 // HTTP/3 specific types and utilities
 pub const StatusCode = @import("http3/response.zig").StatusCode;
 pub const HeaderField = @import("http3/qpack.zig").HeaderField;
 pub const QpackDecoder = @import("http3/qpack.zig").QpackDecoder;
-pub const QpackEncoder = @import("http3/server.zig").QpackEncoder;
+pub const QpackEncoder = @import("http3/qpack.zig").QpackEncoder;
 pub const Frame = @import("http3/frame.zig").Frame;
 pub const FrameType = @import("http3/frame.zig").FrameType;
 

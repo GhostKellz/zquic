@@ -10,11 +10,14 @@ const Router = @import("router.zig");
 const NextFn = Router.NextFn;
 pub const MiddlewareFn = Router.MiddlewareFn;
 
+var static_root_dir: []const u8 = "./public";
+var static_cache_control: []const u8 = "public, max-age=3600";
+
 /// CORS (Cross-Origin Resource Sharing) middleware
 pub const CorsMiddleware = struct {
-    allowed_origins: std.ArrayList([]const u8),
-    allowed_methods: std.ArrayList([]const u8),
-    allowed_headers: std.ArrayList([]const u8),
+    allowed_origins: std.ArrayListUnmanaged([]const u8),
+    allowed_methods: std.ArrayListUnmanaged([]const u8),
+    allowed_headers: std.ArrayListUnmanaged([]const u8),
     allow_credentials: bool,
     max_age: ?u32,
     allocator: std.mem.Allocator,
@@ -23,9 +26,9 @@ pub const CorsMiddleware = struct {
 
     pub fn init(allocator: std.mem.Allocator) Self {
         var cors_middleware = Self{
-            .allowed_origins = std.ArrayList([]const u8){},
-            .allowed_methods = std.ArrayList([]const u8){},
-            .allowed_headers = std.ArrayList([]const u8){},
+            .allowed_origins = .{},
+            .allowed_methods = .{},
+            .allowed_headers = .{},
             .allow_credentials = false,
             .max_age = null,
             .allocator = allocator,
@@ -184,7 +187,7 @@ pub const LoggingMiddleware = struct {
 pub const RateLimitMiddleware = struct {
     max_requests: u32,
     window_seconds: u32,
-    client_requests: std.HashMap(u64, RequestWindow, std.hash_map.AutoContext(u64), std.hash_map.default_max_load_percentage),
+    client_requests: std.AutoHashMapUnmanaged(u64, RequestWindow),
     allocator: std.mem.Allocator,
 
     const RequestWindow = struct {
@@ -198,13 +201,13 @@ pub const RateLimitMiddleware = struct {
         return Self{
             .max_requests = max_requests,
             .window_seconds = window_seconds,
-            .client_requests = std.HashMap(u64, RequestWindow, std.hash_map.AutoContext(u64), std.hash_map.default_max_load_percentage).init(allocator),
+            .client_requests = .{},
             .allocator = allocator,
         };
     }
 
     pub fn deinit(self: *Self) void {
-        self.client_requests.deinit();
+        self.client_requests.deinit(self.allocator);
     }
 
     pub fn middleware(_: *Self) MiddlewareFn {
@@ -335,7 +338,8 @@ pub const StaticMiddleware = struct {
     }
 
     pub fn middleware(self: *const Self) MiddlewareFn {
-        _ = self;
+        static_root_dir = self.root_dir;
+        static_cache_control = self.cache_control;
 
         return struct {
             fn handle(request: *Request, response: *Response, next: NextFn) Error.ZquicError!void {
@@ -345,9 +349,8 @@ pub const StaticMiddleware = struct {
                     return;
                 }
 
-                // Construct file path (simplified - would use self.root_dir)
                 var path_buffer: [512]u8 = undefined;
-                const file_path = std.fmt.bufPrint(&path_buffer, "./public{s}", .{request.path}) catch {
+                const file_path = buildStaticFilePath(&path_buffer, static_root_dir, request.path) catch {
                     try next(request, response);
                     return;
                 };
@@ -366,11 +369,32 @@ pub const StaticMiddleware = struct {
                 };
 
                 // Set cache headers
-                try response.setHeader("Cache-Control", "public, max-age=3600");
+                try response.setHeader("Cache-Control", static_cache_control);
             }
         }.handle;
     }
 };
+
+fn buildStaticFilePath(buffer: []u8, root_dir: []const u8, request_path: []const u8) Error.ZquicError![]const u8 {
+    var used: usize = 0;
+
+    if (root_dir.len > buffer.len) return Error.ZquicError.BufferTooSmall;
+    @memcpy(buffer[0..root_dir.len], root_dir);
+    used += root_dir.len;
+
+    if (root_dir.len == 0 or root_dir[root_dir.len - 1] != '/') {
+        if (used >= buffer.len) return Error.ZquicError.BufferTooSmall;
+        buffer[used] = '/';
+        used += 1;
+    }
+
+    const trimmed = if (request_path.len > 0 and request_path[0] == '/') request_path[1..] else request_path;
+    if (used + trimmed.len > buffer.len) return Error.ZquicError.BufferTooSmall;
+    @memcpy(buffer[used .. used + trimmed.len], trimmed);
+    used += trimmed.len;
+
+    return buffer[0..used];
+}
 
 test "cors middleware creation" {
     var cors = CorsMiddleware.init(std.testing.allocator);

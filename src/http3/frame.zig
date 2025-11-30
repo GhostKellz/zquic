@@ -3,6 +3,7 @@
 //! Implements HTTP/3 frame parsing and serialization according to RFC 9114
 
 const std = @import("std");
+const Io = std.Io;
 const Error = @import("../utils/error.zig");
 
 /// HTTP/3 frame types
@@ -116,13 +117,13 @@ pub const HeadersFrame = struct {
 
 /// HTTP/3 SETTINGS frame
 pub const SettingsFrame = struct {
-    settings: std.ArrayList(struct { id: u64, value: u64 }),
+    settings: std.ArrayListUnmanaged(struct { id: u64, value: u64 }),
 
     const Self = @This();
 
     pub fn init(_: std.mem.Allocator) Self {
         return Self{
-            .settings = .{ },
+            .settings = .{},
         };
     }
 
@@ -130,8 +131,8 @@ pub const SettingsFrame = struct {
         self.settings.deinit(allocator);
     }
 
-    pub fn addSetting(self: *Self, id: u64, value: u64) !void {
-        try self.settings.append(.{ .id = id, .value = value });
+    pub fn addSetting(self: *Self, allocator: std.mem.Allocator, id: u64, value: u64) !void {
+        try self.settings.append(allocator, .{ .id = id, .value = value });
     }
 
     pub fn serialize(self: *const Self, writer: anytype, allocator: std.mem.Allocator) !void {
@@ -173,7 +174,7 @@ pub const SettingsFrame = struct {
             const value_result = parseVarintFrom(data, offset);
             offset += value_result.consumed;
 
-            try settings.addSetting(id_result.value, value_result.value);
+            try settings.addSetting(allocator, id_result.value, value_result.value);
         }
 
         return settings;
@@ -182,7 +183,7 @@ pub const SettingsFrame = struct {
 
 /// HTTP/3 frame parser
 pub const FrameParser = struct {
-    buffer: std.ArrayList(u8),
+    buffer: std.ArrayListUnmanaged(u8),
     state: ParserState,
     current_frame_type: ?FrameType,
     current_frame_length: u64,
@@ -197,7 +198,7 @@ pub const FrameParser = struct {
 
     pub fn init(_: std.mem.Allocator) Self {
         return Self{
-            .buffer = .{ },
+            .buffer = .{},
             .state = .waiting_for_header,
             .current_frame_type = null,
             .current_frame_length = 0,
@@ -213,7 +214,7 @@ pub const FrameParser = struct {
     pub fn processData(self: *Self, data: []const u8, allocator: std.mem.Allocator) Error.ZquicError![]Frame {
         try self.buffer.appendSlice(allocator, data);
 
-        var frames = .{ };
+        var frames: std.ArrayListUnmanaged(Frame) = .{};
 
         while (true) {
             switch (self.state) {
@@ -261,7 +262,7 @@ pub const FrameParser = struct {
             }
         }
 
-        return frames.toOwnedSlice();
+        return frames.toOwnedSlice(allocator);
     }
 };
 
@@ -336,16 +337,17 @@ fn varintLength(value: u64) usize {
 
 test "frame header parsing and serialization" {
     var buffer: [16]u8 = undefined;
-    var stream = std.io.fixedBufferStream(&buffer);
+    var writer = Io.Writer.fixed(&buffer);
 
     const header = FrameHeader{
         .frame_type = .data,
         .length = 100,
     };
 
-    try header.serialize(stream.writer());
+    try header.serialize(&writer);
 
-    const parse_result = try FrameHeader.parse(stream.getWritten());
+    const written = Io.Writer.buffered(&writer);
+    const parse_result = try FrameHeader.parse(written);
     try std.testing.expect(parse_result.header.frame_type == .data);
     try std.testing.expect(parse_result.header.length == 100);
 }
@@ -354,12 +356,74 @@ test "settings frame" {
     var settings = SettingsFrame.init(std.testing.allocator);
     defer settings.deinit(std.testing.allocator);
 
-    try settings.addSetting(1, 1000);
-    try settings.addSetting(6, 4096);
+    try settings.addSetting(std.testing.allocator, 1, 1000);
+    try settings.addSetting(std.testing.allocator, 6, 4096);
 
     var buffer: [256]u8 = undefined;
-    var stream = std.io.fixedBufferStream(&buffer);
+    var writer = Io.Writer.fixed(&buffer);
 
-    try settings.serialize(stream.writer(), std.testing.allocator);
-    try std.testing.expect(stream.pos > 0);
+    try settings.serialize(&writer, std.testing.allocator);
+    try std.testing.expect(Io.Writer.buffered(&writer).len > 0);
+}
+
+test "settings frame parse roundtrip" {
+    var settings = SettingsFrame.init(std.testing.allocator);
+    defer settings.deinit(std.testing.allocator);
+
+    try settings.addSetting(std.testing.allocator, 1, 1234);
+    try settings.addSetting(std.testing.allocator, 6, 4096);
+
+    var buf: [256]u8 = undefined;
+    var writer = Io.Writer.fixed(&buf);
+    try settings.serialize(&writer, std.testing.allocator);
+
+    const written = Io.Writer.buffered(&writer);
+    const header_parse = try FrameHeader.parse(written);
+    try std.testing.expect(header_parse.header.frame_type == .settings);
+
+    const payload_start = header_parse.consumed;
+    const payload_len: usize = @intCast(header_parse.header.length);
+    const payload_end = payload_start + payload_len;
+    const payload = written[payload_start..payload_end];
+
+    var parsed = try SettingsFrame.parse(payload, std.testing.allocator);
+    defer parsed.deinit(std.testing.allocator);
+
+    try std.testing.expect(parsed.settings.items.len == 2);
+    try std.testing.expect(parsed.settings.items[0].id == 1);
+    try std.testing.expect(parsed.settings.items[0].value == 1234);
+    try std.testing.expect(parsed.settings.items[1].id == 6);
+    try std.testing.expect(parsed.settings.items[1].value == 4096);
+}
+
+test "frame parser incremental data frame" {
+    var parser = FrameParser.init(std.testing.allocator);
+    defer parser.deinit(std.testing.allocator);
+
+    var out = std.ArrayList(u8).init(std.testing.allocator);
+    defer out.deinit();
+
+    const payload = "hello";
+    const frame = DataFrame.init(payload);
+    try frame.serialize(out.writer());
+
+    const bytes = out.items;
+    const split = bytes.len / 2;
+
+    const first = bytes[0..split];
+    const second = bytes[split..];
+
+    var frames_chunk1 = try parser.processData(first, std.testing.allocator);
+    defer {
+        for (frames_chunk1) |f| f.deinit(std.testing.allocator);
+    }
+    try std.testing.expect(frames_chunk1.len == 0);
+
+    var frames_chunk2 = try parser.processData(second, std.testing.allocator);
+    defer {
+        for (frames_chunk2) |f| f.deinit(std.testing.allocator);
+    }
+    try std.testing.expect(frames_chunk2.len == 1);
+    try std.testing.expect(frames_chunk2[0].frame_type == .data);
+    try std.testing.expect(std.mem.eql(u8, frames_chunk2[0].payload, payload));
 }

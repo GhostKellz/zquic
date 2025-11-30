@@ -1,3 +1,18 @@
+## [0.9.3] - 2025-11-30
+
+### Added
+- Router middleware chaining API (`Router.addRouteWithMiddleware`, `addRouteMiddleware`) plus `Http3Server.use` now wires middleware into every request.
+- Expanded HTTP/3 integration coverage for middleware ordering, short-circuiting, error handlers, and static file serving.
+- DNS-over-QUIC integration tests (`tests/doq_integration_test.zig`) now run via `zig build test`/`integration-tests`, gating CI.
+- Literal QPACK encoder/decoder implementation with regression tests and HEADERS frames now carrying real payloads.
+
+### Changed
+- Static middleware honors `SuperServerConfig.static_files_root` so serving from custom directories works in tests and production.
+- Router fallback path now runs the global middleware stack (including static handlers and loggers) before emitting 404 responses, so middleware behavior stays consistent even when no route matches.
+- HTTP/3, DoQ, and QUIC frame modules were migrated to Zig 0.16's `std.Io.Reader/Writer` plus the new `std.testing.tmpDir`/`Dir.writeFile` APIs, unblocking the toolchain upgrade without deprecation warnings.
+- `docs/getting-started/quick-start.md` documents middleware usage and highlights Zig 0.16 migration requirements (see `archive/ZIG_API_CHANGES.md`).
+- `CHANGELOG.md` now tracks ongoing v0.9.3 work ahead of the next release.
+
 # Changelog
 
 All notable changes to the zQUIC library will be documented in this file.
@@ -5,48 +20,11 @@ All notable changes to the zQUIC library will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.9.0-RC1] - 2025-09-24
+## [0.9.0] - 2025-09-24
 
 ### 🎯 **Release Candidate 1 - Production Ready**
 
 **ZQUIC v0.9.0** - Zero compilation errors, comprehensive documentation, and full CI/CD automation. This build represents the culmination of feedback from the community.
-
-### Added
-
-#### 📚 **Comprehensive Documentation Overhaul**
-- **Restructured docs/**: Complete reorganization from monolithic DOCS.md
-  - `docs/README.md`: Central documentation hub with clear navigation
-  - `docs/getting-started/`: Step-by-step guides for new developers
-  - `docs/architecture/overview.md`: High-level system architecture
-  - `docs/api/core.md`: Complete API reference documentation
-- **Updated README.md**: Fixed badges, streamlined content, emphasized zero compilation errors
-- **Knowledge transfer completion**: Updated all technical handoff documentation
-  - `knowledge-transfer/PROJECT.md`: All goals marked ACHIEVED ✅
-  - `knowledge-transfer/INTERNALS.md`: Production readiness documented
-  - `knowledge-transfer/API_GUIDE.md`: Comprehensive developer onboarding
-
-#### 🚀 **Production CI/CD Pipeline**
-- **GitHub Actions workflows**: Complete automation for nv-palladium self-hosted runner
-  - `ci.yml`: Simple, reliable build and test pipeline (15-minute timeout)
-  - `crypto-validation.yml`: Post-quantum crypto validation workflow
-- **nv-palladium integration**: Optimized for NVIDIA GPU-accelerated builds
-  - Ubuntu 24.04 LTS with Zig 0.16.0-dev
-  - Matrix builds: Minimal, Web Server, Enterprise, Debug configurations
-  - GPU-accelerated crypto benchmarks and performance testing
-- **Artifact management**: Automated binary packaging and GitHub releases
-
-#### 🛡️ **Enhanced Security & Quality**
-- **Zero compilation errors**: Clean build across all configurations
-- **Memory safety**: Comprehensive valgrind integration
-- **Crypto compliance**: NIST post-quantum algorithm validation
-- **Side-channel analysis**: Timing attack resistance verification
-
-#### 🔧 **Critical Build Fixes**
-- **Fixed CI/CD test failures**: Resolved Zig 0.16.0-dev compilation errors
-  - Fixed array concatenation syntax in `getEnabledFeatures()` function
-  - Added proper error handling with `try` for test assertions
-  - Resolved comptime vs runtime function call issues
-- **Verified build stability**: All binaries compile successfully across platforms
 
 ### Changed
 

@@ -492,7 +492,7 @@ test "post-quantum key exchange" {
 
     // Initialize PQ key exchange
     var key_exchange = try PQKeyExchange.init(allocator, .ml_kem_768_x25519_sha256);
-    defer key_exchange.deinit(allocator);
+    defer key_exchange.deinit();
 
     // Generate keypair
     try key_exchange.generateKeypair();

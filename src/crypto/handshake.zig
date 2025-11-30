@@ -9,7 +9,7 @@ const Tls = @import("tls.zig");
 /// Handshake manager that coordinates QUIC and TLS
 pub const HandshakeManager = struct {
     tls_context: Tls.TlsContext,
-    crypto_buffer: std.ArrayList(u8),
+    crypto_buffer: std.ArrayListUnmanaged(u8),
     handshake_complete: bool,
     allocator: std.mem.Allocator,
 
@@ -18,7 +18,7 @@ pub const HandshakeManager = struct {
     pub fn init(allocator: std.mem.Allocator, is_server: bool) Self {
         return Self{
             .tls_context = Tls.TlsContext.init(allocator, is_server),
-            .crypto_buffer = std.ArrayList(u8){},
+            .crypto_buffer = .{},
             .handshake_complete = false,
             .allocator = allocator,
         };
@@ -47,6 +47,10 @@ pub const HandshakeManager = struct {
 
         // Check if we need to generate response
         if (self.tls_context.state == .wait_server_hello and self.tls_context.is_server) {
+            const crypto_data = try self.tls_context.generateCryptoData(self.allocator);
+            defer self.allocator.free(crypto_data);
+            try self.crypto_buffer.appendSlice(self.allocator, crypto_data);
+        } else if (self.tls_context.state == .wait_finished and !self.tls_context.is_server) {
             const crypto_data = try self.tls_context.generateCryptoData(self.allocator);
             defer self.allocator.free(crypto_data);
             try self.crypto_buffer.appendSlice(self.allocator, crypto_data);

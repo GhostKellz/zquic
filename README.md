@@ -1,56 +1,44 @@
-<div align="center">
-  <img src="assets/icons/zquic.png" alt="ZQUIC Logo" width="200"/>
-</div>
-
-# ZQUIC — Production-Ready QUIC Transport for Zig v0.9.0-RC1
+# ZQUIC — Production-Ready QUIC Transport for Zig v0.9.3
 
 [![Built with Zig](https://img.shields.io/badge/Built%20with-Zig-yellow.svg?logo=zig)](https://ziglang.org/)
 [![Zig Version](https://img.shields.io/badge/Zig-v0.16.0--dev-orange.svg)](https://ziglang.org/)
-[![CI/CD Pipeline](https://github.com/ghostkellz/zquic/actions/workflows/ci.yml/badge.svg)](https://github.com/ghostkellz/zquic/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
-[![Post-Quantum](https://img.shields.io/badge/crypto-post--quantum-green.svg)](#)
-[![QUIC](https://img.shields.io/badge/QUIC-v1-blue.svg)](#)
-[![HTTP/3](https://img.shields.io/badge/HTTP%2F3-enabled-blue.svg)](#)
-[![ZCrypto](https://img.shields.io/badge/zcrypto-v0.9.0-purple.svg)](https://github.com/ghostkellz/zcrypto)
-[![Version](https://img.shields.io/badge/version-v0.9.0--RC1-brightgreen.svg)](#)
+[![Post-Quantum](https://img.shields.io/badge/crypto-post--quantum-green.svg)](https://github.com/ghostkellz/zcrypto)
+[![QUIC](https://img.shields.io/badge/QUIC-v1-blue.svg)](#feature-highlights)
+[![HTTP/3](https://img.shields.io/badge/HTTP%2F3-enabled-blue.svg)](#feature-highlights)
 
-**ZQUIC v0.9.0-RC1 is PRODUCTION READY!** 🚀
+ZQUIC 0.9.3 is a **modular, high-performance QUIC transport stack** built entirely in Zig 0.16.0-dev. It ships with a native async runtime (no external deps), hybrid post-quantum TLS via `zcrypto` 0.9.5, and a suite of HTTP/3, DoQ, VPN, and service layers tuned for Ghost production workloads.
 
-A **modular, high-performance QUIC transport library** written in Zig, featuring complete post-quantum cryptography, asynchronous processing, and zero-compilation-error architecture. Designed for Ghost ecosystem deployment with proven reliability from minimal embedded clients (~1MB) to full-featured enterprise servers (~6MB).
+> ✅ Builds cleanly with Zig 0.16.0-dev.1484+ on Linux/macOS/Windows and passes the `dev/test.sh` suite.
 
 ## 🎯 Purpose & Vision
 
-**ZQUIC provides modular, quantum-safe networking foundation for modern Zig applications:**
+**ZQUIC provides a quantum-safe networking foundation for Zig applications:**
 
-- 🧩 **Modular architecture**: Include only what you need - from 1MB to 6MB builds
-- 🛡️ **Post-quantum security**: Hybrid ML-KEM-768 + X25519 via zcrypto v0.9.0
-- ⚡ **Ultra-high performance**: 100K+ TPS transport with <1ms latency
-- 🌉 **Service integration**: gRPC-over-QUIC for seamless interoperability
-- 🌐 **Complete stack**: HTTP/3 server, DNS-over-QUIC, and reverse proxy
-- 🔗 **Production ready**: From IoT devices to enterprise infrastructure
-- 🚀 **Future-proof**: Designed for the post-quantum computing era
+- 🧩 **Pick-your-build**: Core QUIC only for embedded targets or full HTTP/3 + services for servers
+- 🛡️ **Post-quantum security**: Hybrid ML-KEM-768 + X25519 and SLH-DSA signatures via `zcrypto`
+- ⚡ **Native async runtime**: Poll-based event loop, timer wheel, and connection pool in-tree
+- 🌐 **Complete stack**: QUIC core, HTTP/3 server, DNS-over-QUIC, Ghost services, and VPN layers
+- 📊 **Operational insight**: Built-in monitoring hooks and Prometheus-friendly metrics emitters
+- 📦 **Clean tooling**: Straightforward `zig build` targets plus `dev/` scripts for local workflows
 
 ## 🧩 Modular Build System
 
-**Choose your features at build time for optimal size and performance:**
-
-| Build Type | Size | Features | Use Cases |
-|------------|------|----------|-----------|
-| **Minimal** | ~1.5MB | Core QUIC + zsync | Embedded, IoT, minimal clients |
-| **Web** | ~3.5MB | + HTTP/3 + DoQ + PQ | Web servers, CDNs, proxies |
-| **Enterprise** | ~5.5MB | + Services + VPN + All | Production servers, services |
-
-**Real size savings come from zcrypto modularity:**
+| Build Type | Key Flags | Typical Size | Notes |
+|------------|-----------|--------------|-------|
+| **Minimal Core** | `-Dhttp3=false -Ddoq=false -Dservices=false -Dvpn=false -Dpost-quantum=false` | ~1.3 MB | Event loop + core QUIC only |
+| **Web Stack** | `-Dhttp3=true -Ddoq=true -Dpost-quantum=true` | ~3.5 MB | HTTP/3 server, DoQ resolver |
+| **Enterprise** | *(defaults)* | ~5.5 MB | Adds services, VPN, PQ, monitoring |
 
 ```bash
-# Minimal zcrypto features (disable PQ crypto)
-zig build -Dpost-quantum=false -Dservices=false -Dvpn=false
+# Minimal embedded target (no PQ, services, or VPN)
+zig build -Dhttp3=false -Ddoq=false -Dservices=false -Dvpn=false -Dpost-quantum=false -Doptimize=ReleaseSmall
 
-# Web server optimized
-zig build -Dhttp3=true -Ddoq=true -Dpost-quantum=true
+# HTTP/3 + DoQ server with PQ crypto
+zig build -Dhttp3=true -Ddoq=true -Dpost-quantum=true -Dservices=false -Dvpn=false -Doptimize=ReleaseFast
 
-# Full enterprise build with all zcrypto features
-zig build # All features enabled by default
+# Full enterprise feature set (default flags)
+zig build
 ```
 
 ## ✨ Core Features
@@ -68,6 +56,7 @@ zig build # All features enabled by default
 - **BBR/CUBIC congestion control**: crypto-optimized for trading workloads
 - **Connection pooling**: high-performance multiplexing for crypto protocols
 - **HTTP/3 server**: production-ready with advanced middleware
+- **Consistent middleware execution**: router fallback invokes global middleware (logging, static assets, auth) even when no route matches, so 404s still pass through your filters.
 - **Zero-copy packet processing**: optimized for 100K+ TPS
 - **IPv6-first networking**: dual-stack with modern internet protocols
 
@@ -93,17 +82,13 @@ zig build # All features enabled by default
 - **Deterministic memory management** with predictable allocation patterns
 - **Advanced congestion control** optimized for high-throughput networking
 
-## 📚 Comprehensive Documentation
+## 📚 Documentation
 
-ZQUIC v0.9.0 includes extensive documentation covering all aspects of the modular system:
-
-- **[Getting Started](docs/getting-started/)** - Quick setup and basic usage
-- **[Build Configuration](docs/getting-started/build-config.md)** - Complete guide to feature flags
-- **[Build Configs](docs/build-configs/)** - Pre-configured builds for common use cases
-- **[API Reference](docs/api/)** - Complete API documentation by module
-- **[Features Guide](docs/features/)** - Deep dive into each feature module
-- **[Examples](docs/examples/)** - Code examples and integration guides
-- **[Architecture](docs/architecture/)** - Design decisions and performance characteristics
+- **`docs/getting-started/quick-start.md`** – bootstrap instructions
+- **`docs/getting-started/build-config.md`** – flag reference kept in sync with `build.zig`
+- **`docs/architecture/overview.md`** – async runtime + protocol layering notes
+- **`docs/examples/`** – walkthroughs mirroring the binaries prepared by `zig build`
+- **`examples/*.zig`** – runnable samples that match the documentation
 
 ## 🔍 Why Zig?
 
@@ -115,76 +100,62 @@ ZQUIC v0.9.0 includes extensive documentation covering all aspects of the modula
 
 ## 🚀 Quick Start
 
+### Zig Integration
+```bash
+zig fetch --save https://github.com/ghostkellz/zquic/archive/main.tar.gz
+```
+
 ### Installation
 
-**Recommended**: Add ZQUIC to your project with Zig's package manager:
-
 ```bash
-# Add ZQUIC as a dependency to your project
-zig fetch --save https://github.com/ghostkellz/zquic/archive/refs/heads/main.tar.gz
-```
-
-**Alternative**: Clone the repository for development or standalone use:
-
-```bash
-# Clone the repository
 git clone https://github.com/ghostkellz/zquic
 cd zquic
+zig build        # produces all enabled binaries under zig-out/bin/
 ```
 
-### Building (Zero Errors Guaranteed)
+Keep the dependency metadata intact (`build.zig.zon` pins `zcrypto` 0.9.5) and build with the latest Zig 0.16.0-dev toolchain. Use `zig build -Dtarget=<triple>` for cross compilation.
 
-**ZQUIC v0.9.0-RC1 compiles cleanly with ZERO compilation errors!**
+### Local Development Loop
 
 ```bash
-# Build all working binaries (100% success rate)
-zig build
+# Format and lint quickly
+./dev/fmt.sh
 
-# Working binaries ready for production:
-./zig-out/bin/client              # QUIC client with post-quantum TLS
-./zig-out/bin/server              # QUIC server with async processing
-./zig-out/bin/doq_echo_server     # DNS-over-QUIC echo server
-./zig-out/bin/http3_server        # HTTP/3 server with QPACK
-./zig-out/bin/crypto_trading_demo # High-frequency trading demo
-./zig-out/bin/pq_quic_demo       # Post-quantum cryptography demo
+# Full build + test sweep (unit + integration + fuzz)
+./dev/test.sh
 
-# Run comprehensive tests
-zig build test
-
-# Optional: Install for system-wide access
-zig build install
+# Smoke test HTTP/3 or DoQ locally
+./dev/smoke_test.sh
 ```
+
+Prefer individual commands? Run `zig build integration-tests` for handshake coverage or `zig build fuzz-tests` for the packet parser harness.
+
+The `dev/` scripts wrap the raw `zig` commands and provide the configuration we use in CI (re-enabling CI workflows is tracked separately).
 
 ## 🎯 Production Readiness Status
 
-**ZQUIC v0.9.0-RC1 is PRODUCTION READY for Ghost ecosystem deployment!**
 
-### ✅ RC1 Completion Checklist
+### ✅ 0.9.3 Checklist
 
-| Component | Status | Details |
-|-----------|--------|---------|
-| **Core QUIC** | ✅ **READY** | Full v1 compliance, modular architecture |
-| **Post-Quantum Crypto** | ✅ **READY** | ML-KEM-768 + X25519 hybrid TLS |
-| **HTTP/3 Server** | ✅ **READY** | QPACK encoding, middleware support |
-| **DNS-over-QUIC** | ✅ **READY** | Echo server, production patterns |
-| **Async Processing** | ✅ **READY** | zsync integration, worker pools |
-| **TLS 1.3 Suite** | ✅ **READY** | Zero compilation errors |
-| **Memory Management** | ✅ **READY** | Explicit allocators, zero leaks |
-| **Error Handling** | ✅ **READY** | Comprehensive error propagation |
+| Component | Status | Notes |
+|-----------|--------|-------|
+| Core QUIC | ✅ | Streams, flow control, congestion modules covered by unit tests |
+| Post-Quantum Crypto | ✅ | Hybrid ML-KEM-768 + X25519 and SLH-DSA via `zcrypto` 0.9.5 |
+| HTTP/3 & DoQ | ✅ | Examples compile by default, exercised via `dev/smoke_test.sh` |
+| Async Runtime | ✅ | Native event loop + timer wheel; no zsync dependency |
+| Monitoring Hooks | ✅ | Metrics surfaces in `src/monitoring/*` wired into runtime |
+| Dev Tooling | ✅ | `dev/*.sh` scripts for build, fmt, smoke, and validation |
 
 ### 🚀 Key Achievements
-- **6 Working Binaries** ready for deployment
-- **Zero Compilation Errors** across all modules  
-- **Complete Modular Architecture** implemented
-- **Post-Quantum Security** via zcrypto v0.9.0
-- **Production Memory Management** with explicit cleanup
-- **High-Performance Async** via zsync v0.5.4
+- 6 shipping binaries under `zig-out/bin/`
+- Clean Zig 0.16.0-dev builds across Linux/macOS/Windows
+- Internal async runtime + connection pool validated via new tests
+- Documentation refreshed to match current feature flags
 
-### 📈 Performance Verified
-- **100K+ TPS** transport capability tested
-- **<1ms latency** for Zero-RTT operations
-- **Modular builds** from 1MB to 6MB optimized
-- **Enterprise-grade** error handling and recovery
+### 📈 Performance Targets
+- ReleaseFast builds target 100K+ TPS workloads
+- <1 ms Zero-RTT handshakes when PQ is enabled
+- Deterministic memory behavior verified through integration tests and leak checks
 
 ### Basic Usage (Zig)
 
@@ -227,7 +198,7 @@ pub fn main() !void {
 }
 
 fn homeHandler(req: *zquic.Http3.Request, res: *zquic.Http3.Response) !void {
-    try res.json(.{ .status = "online", .quantum_safe = true, .version = "v0.8.4" });
+    try res.json(.{ .status = "online", .quantum_safe = true, .version = "v0.9.3" });
 }
 
 fn getDataHandler(req: *zquic.Http3.Request, res: *zquic.Http3.Response) !void {
@@ -237,210 +208,31 @@ fn getDataHandler(req: *zquic.Http3.Request, res: *zquic.Http3.Response) !void {
 }
 ```
 
-### Rust Integration (Cross-Language Projects)
+## 🏗️ Architecture Snapshot
 
-```rust
-use zquic_sys::*;
-use std::ffi::CString;
+- **`src/async/`** – native event loop, timer wheel, and runtime orchestration
+- **`src/core/`** – QUIC transport (connection, stream, packet, recovery, flow control)
+- **`src/crypto/`** – TLS 1.3 + PQ handshake glue over `zcrypto` 0.9.5
+- **`src/http3/`** – frame parsing, router, middleware, and advanced server
+- **`src/doq/`** – DNS-over-QUIC client/server implementations
+- **`src/services/`** – GhostBridge, Wraith, CNS resolver, and VPN adapters
+- **`src/monitoring/`** – metrics hooks for Prometheus/exporters
+- **`examples/`** – runnable demos built during `zig build`
 
-#[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // Configure ZQUIC for high-performance application
-    let config = ZQuicConfig {
-        address: CString::new("0.0.0.0")?.into_raw(),
-        port: 8080,
-        max_connections: 10000,  // High-throughput applications
-        timeout_ms: 30000,
-        enable_post_quantum: true,  // Always use PQ crypto
-        cert_path: CString::new("/etc/ssl/certs/server.pem")?.into_raw(),
-        key_path: CString::new("/etc/ssl/private/server.key")?.into_raw(),
-    };
+## 🔧 Local Development Workflow
 
-    // Initialize ZQUIC context for networking
-    let ctx = unsafe { zquic_init(&config) };
-    if ctx.is_null() {
-        return Err("Failed to initialize ZQUIC".into());
-    }
-
-    // Initialize QUIC Bridge for service communication
-    let bridge_config = QuicBridgeConfig {
-        address: CString::new("0.0.0.0")?.into_raw(),
-        port: 8081,
-        max_connections: 5000,
-        enable_post_quantum: true,
-        enable_compression: true,
-        cert_path: std::ptr::null(),
-        key_path: std::ptr::null(),
-    };
-
-    let bridge = unsafe { quicbridge_init(&bridge_config) };
-
-    println!("🚀 Application running with post-quantum QUIC transport");
-    println!("🌉 QUIC Bridge relay active for service communication");
-
-    // Start high-performance networking over QUIC
-    // ... application operations ...
-
-    Ok(())
-}
-```
-
-## 🏗️ Architecture
-
-```
-┌─────────────────────────────────────────────────────────────┐
-│                    ZIG APPLICATION LAYER                   │
-├─────────────────┬─────────────────┬─────────────────────────┤
-│   QUIC Bridge   │   QUIC Proxy    │     DNS-over-QUIC       │
-│ (gRPC-over-QUIC)│  (Reverse Proxy)│      (Resolver)         │
-├─────────────────┼─────────────────┼─────────────────────────┤
-│            ZQUIC HTTP/3 Layer + Services                   │
-│          (Enhanced server, routing, middleware)            │
-├─────────────────────────────────────────────────────────────┤
-│                   QUIC Core Transport                      │
-│     (connection.zig, packet.zig, stream.zig)              │
-├─────────────────────────────────────────────────────────────┤
-│              Post-Quantum Crypto (zcrypto v0.6.0)         │
-│   ML-KEM-768, SLH-DSA, Ed25519, Secp256k1, Blake3, SHA256  │
-├─────────────────────────────────────────────────────────────┤
-│                 Networking Foundation                      │
-│        (udp.zig, socket.zig, ipv6.zig, async.zig)         │
-├─────────────────────────────────────────────────────────────┤
-│                    FFI Integration Layer                   │
-│           (Cross-language bindings)                       │
-└─────────────────────────────────────────────────────────────┘
-```
-
-### Module Overview
-
-#### **Core ZQUIC Implementation**
-- **`src/core/`** - QUIC v1 protocol implementation with post-quantum crypto
-- **`src/crypto/`** - Post-quantum TLS 1.3 via zcrypto v0.6.0 integration
-- **`src/http3/`** - HTTP/3 frame handling and enhanced server implementation
-- **`src/net/`** - High-performance UDP networking with IPv6-first design
-
-#### **High-Level Services**
-- **`src/services/quic_bridge.zig`** - gRPC-over-QUIC relay for service communication
-- **`src/services/quic_proxy.zig`** - Post-quantum reverse proxy and load balancer
-- **`src/services/dns_resolver.zig`** - DNS-over-QUIC for modern applications
-- **`src/core/packet_crypto.zig`** - Zero-copy packet encryption with zcrypto
-
-#### **Integration & FFI**
-- **`src/ffi/`** - Complete C ABI exports for cross-language integration
-- **`bindings/rust/`** - Production Rust bindings (zquic-sys + zquic-rs)
-- **`include/`** - Generated C headers for cross-language compatibility
-
-#### **Documentation & Examples**
-- **`examples/`** - Integration examples and demos for Zig projects
-- **`TODO.md`** - Current development priorities and status
-
-## 🚀 Real-World Applications
-
-### **🔗 Crypto & Blockchain**
-- **Blockchain node networking**: Ultra-fast synchronization and consensus
-- **High-frequency trading**: Sub-millisecond transaction relay between exchanges
-- **Cross-chain bridges**: Secure communication between different networks
-- **DeFi protocol transport**: Real-time price feeds and liquidation systems
-
-### **🏢 Enterprise & Infrastructure**
-- **Quantum-safe VPN**: Post-quantum secure tunneling for enterprise networks
-- **Edge computing**: Ultra-low latency for IoT and real-time applications
-- **Microservices mesh**: gRPC-over-QUIC for cloud-native architectures
-- **CDN and caching**: High-performance content delivery with HTTP/3
-
-### **🌐 Modern Applications**
-- **Web3 naming services**: DNS-over-QUIC for modern domain resolution
-- **Decentralized storage**: IPFS and distributed file system transport
-- **Gaming & real-time**: Ultra-low latency for real-time multiplayer
-- **Streaming & media**: High-bandwidth, low-latency video and audio
-
-### **🛡️ Security & Privacy**
-- **Post-quantum messaging**: Quantum-safe encrypted communication
-- **Identity verification**: Secure authentication with SLH-DSA signatures
-- **Zero-knowledge proofs**: Privacy-preserving validation systems
-- **Secure multi-party computation**: Cryptographic protocol coordination
-
-## 📊 Development Status & Roadmap
-
-### **✅ COMPLETED (Production Ready)**
-- **Post-quantum cryptography**: Complete zcrypto v0.6.0 integration (ML-KEM-768, SLH-DSA)
-- **Core QUIC transport**: Full QUIC v1 protocol with post-quantum TLS 1.3
-- **HTTP/3 server**: Production-ready with advanced routing and middleware
-- **QUIC Bridge service**: Complete gRPC-over-QUIC relay implementation
-- **QUIC Proxy**: Post-quantum reverse proxy with load balancing
-- **DNS-over-QUIC resolver**: Secure DNS resolution for modern applications
-- **FFI integration**: Complete cross-language bindings
-- **Packet encryption**: Zero-copy post-quantum packet processing
-- **Cross-language testing**: Validated multi-language interoperability
-
-### **🔧 IN PROGRESS (Q3 2025)**
-- **WASM runtime integration**: Application execution over QUIC transport
-- **Assembly optimizations**: AVX2/NEON acceleration for crypto operations
-- **Performance testing**: 100K+ TPS validation and optimization
-- **Security auditing**: Third-party post-quantum crypto validation
-
-### **📋 PLANNED (Q4 2025)**
-- **P2P networking**: Decentralized networking with NAT traversal
-- **Advanced routing**: Enhanced routing and load balancing features
-- **Production deployment**: Multi-region infrastructure templates
-- **Developer tools**: SDK, documentation, and integration guides
-
-### **🎯 Key Metrics Achieved**
-- **Security**: Post-quantum ready with ML-KEM-768 + SLH-DSA
-- **Performance**: Designed for 100K+ TPS high-throughput workloads
-- **Reliability**: Zero-copy operations with deterministic memory
-- **Integration**: Complete cross-language ecosystem compatibility
-- **Standards**: QUIC v1 + HTTP/3 + TLS 1.3 compliance
-
-## 📚 Documentation & Resources
-
-### **📖 Core Documentation**
-- **[TODO.md](TODO.md)** - Current development priorities and status
-- **[CHANGELOG.md](CHANGELOG.md)** - Version history and release notes
-
-### **🔧 Developer Resources**
-- **[bindings/rust/](bindings/rust/)** - Complete cross-language bindings
-- **[examples/](examples/)** - Integration examples for Zig projects
-- **[include/](include/)** - Generated C headers for cross-language compatibility
-
-### **🌐 External Dependencies**
-- **[ZCrypto v0.6.0](https://github.com/ghostkellz/zcrypto)** - Post-quantum cryptography library
-- **[Zig 0.16](https://ziglang.org/)** - Systems programming language
-
-### **🚀 Getting Started**
-1. **Quick Start**: Follow the building instructions above
-2. **Cross-language Integration**: See `bindings/` for language-specific examples
-3. **Service Development**: Check `src/services/` for high-level service examples
-4. **Post-quantum Crypto**: Review `src/crypto/pq_quic.zig` for ML-KEM implementation
+1. `./dev/deps.sh` – ensure Zig toolchain + deps are ready
+2. `./dev/build_all.sh` – compile every target with current feature flags
+3. `./dev/test.sh` – runs `zig build test`, `zig build integration-tests`, and `zig build fuzz-tests` (network-dependent tests emit warnings)
+4. `./dev/smoke_test.sh` – launch sample client/server pairs for manual validation
+5. `zig fmt src/ docs/ examples/` – formatting gate before opening PRs
 
 ## 🤝 Contributing
 
-Contributions are welcome! Please see our contributing guidelines and ensure all tests pass before submitting a PR.
-
-```bash
-# Run all tests
-zig build test
-
-# Check formatting
-zig fmt --check src/
-```
+Please read `CONTRIBUTING.md` for coding standards, testing expectations, and PR workflow. At a minimum run `./dev/test.sh` and ensure new code paths include unit or integration coverage.
 
 ## 📄 License
 
-Apache 2.0 — Built to power the post-quantum future with modern Zig applications.
-
----
-
-## 🌟 Why ZQUIC?
-
-**ZQUIC isn't just another QUIC implementation — it's the foundation for a quantum-safe future.**
-
-- 🛡️ **Quantum-Safe by Design**: Built from day one with post-quantum cryptography
-- ⚡ **High-Performance**: Engineered for 100K+ TPS with <1ms latency
-- 🌉 **Cross-Language Integration**: Seamless interoperability across programming languages
-- 🚀 **Production Ready**: Complete services, documentation, and real-world testing
-- 🔮 **Future-Proof**: Ready for the quantum computing era
-
-**Build the quantum-safe future with ZQUIC.**
+Apache 2.0 — built to power the post-quantum future with modern Zig applications.
 
 

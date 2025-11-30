@@ -1,11 +1,9 @@
-/zig-cache/
-/zig-out/
+.zig-cache/
+zig-out/
 *.o
 *.exe
-.zig-cache/
-knowledge-transfer/ 
 archive/
-CLAUDE.md 
-CRYPTO-PROJECTS.md 
+.claude/
+.vscode/
 TODO.md 
-WORKFLOW.md 
+

@@ -1,0 +1,69 @@
+name: Nightly Sanity Sweep
+
+on:
+  schedule:
+    - cron: '30 7 * * *'
+  workflow_dispatch:
+
+env:
+  ZIG_VERSION: 0.16.0-dev.1484+d0ba6642b
+
+jobs:
+  nightly:
+    name: "Nightly validation"
+    runs-on: [self-hosted, Linux, X64, nvidia, gpu, zig, nv-osmium]
+    timeout-minutes: 35
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Cache zig artifacts
+        uses: actions/cache@v4
+        with:
+          path: |
+            zig-cache
+            zig-out
+          key: ${{ runner.os }}-zig-nightly-${{ hashFiles('build.zig', 'build.zig.zon', 'src/**/*.zig', 'tests/**/*.zig', 'examples/**/*.zig') }}
+
+      - name: Verify Zig toolchain
+        run: |
+          set -euo pipefail
+          INSTALLED=$(zig version)
+          echo "Using Zig ${INSTALLED}"
+          if [ "$INSTALLED" != "$ZIG_VERSION" ]; then
+            echo "::error::Expected Zig $ZIG_VERSION but found $INSTALLED"
+            exit 1
+          fi
+
+      - name: Full test sweep
+        run: |
+          set -euo pipefail
+          ./dev/test.sh
+
+      - name: HTTP/3 & DoQ focused tests
+        run: |
+          set -euo pipefail
+          zig build integration-tests -Dhttp3=true -Ddoq=true
+
+      - name: Leak check (valgrind)
+        run: |
+          set -euo pipefail
+          if command -v valgrind >/dev/null 2>&1; then
+            if [ ! -x "zig-out/bin/zquic" ]; then
+              echo "zquic binary not built; rerunning zig build"
+              zig build
+            fi
+            valgrind --leak-check=full --error-exitcode=42 zig-out/bin/zquic >/dev/null
+          else
+            echo "valgrind not installed on runner; skipping leak check"
+          fi
+
+      - name: Example server sanity
+        run: |
+          set -euo pipefail
+          if [ -x "zig-out/bin/zquic-http3-server" ]; then
+            timeout 5s zig-out/bin/zquic-http3-server --help >/dev/null 2>&1 || true
+          fi
+          if [ -x "zig-out/bin/zquic-doq-server" ]; then
+            timeout 5s zig-out/bin/zquic-doq-server --help >/dev/null 2>&1 || true
+          fi

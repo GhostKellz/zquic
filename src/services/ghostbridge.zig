@@ -4,12 +4,13 @@
 //! Enables ghostd ↔ walletd ↔ edge nodes communication over post-quantum QUIC
 
 const std = @import("std");
-const zquic_core = @import("zquic_core");
+const zquic_core = @import("../core.zig");
 const zcrypto = @import("zcrypto");
 const build_options = @import("build_options");
+const Time = @import("../utils/time.zig");
 
 // Conditionally import HTTP/3 if enabled
-const http3 = if (build_options.enable_http3) @import("http3") else struct {};
+const http3 = if (build_options.enable_http3) @import("../http3.zig") else struct {};
 
 const QuicConnection = zquic_core.Connection.Connection;
 const QuicStream = zquic_core.Stream.Stream;
@@ -197,7 +198,7 @@ pub const ServiceRegistration = struct {
             .endpoint = try allocator.dupe(u8, endpoint),
             .service_type = service_type,
             .health_status = .unknown,
-            .last_heartbeat = (try std.time.Instant.now()).timestamp.sec,
+            .last_heartbeat = Time.nowSeconds(),
         };
     }
 
@@ -213,8 +214,8 @@ pub const GrpcStream = struct {
     method: GrpcMethod,
     quic_stream: *QuicStream,
     state: StreamState,
-    send_buffer: std.ArrayList(u8),
-    recv_buffer: std.ArrayList(u8),
+    send_buffer: std.ArrayListUnmanaged(u8),
+    recv_buffer: std.ArrayListUnmanaged(u8),
     allocator: std.mem.Allocator,
 
     const StreamState = enum {
@@ -231,8 +232,8 @@ pub const GrpcStream = struct {
             .method = method,
             .quic_stream = quic_stream,
             .state = .open,
-            .send_buffer = .{ },
-            .recv_buffer = .{ },
+            .send_buffer = .{},
+            .recv_buffer = .{},
             .allocator = allocator,
         };
         return stream;
@@ -240,8 +241,8 @@ pub const GrpcStream = struct {
 
     pub fn deinit(self: *GrpcStream) void {
         self.method.deinit(self.allocator);
-        self.send_buffer.deinit();
-        self.recv_buffer.deinit();
+        self.send_buffer.deinit(self.allocator);
+        self.recv_buffer.deinit(self.allocator);
         self.allocator.destroy(self);
     }
 
@@ -256,8 +257,8 @@ pub const GrpcStream = struct {
 
         // Serialize header
         const header_bytes = std.mem.asBytes(&header);
-        try self.send_buffer.appendSlice(header_bytes);
-        try self.send_buffer.appendSlice(data);
+        try self.send_buffer.appendSlice(self.allocator, header_bytes);
+        try self.send_buffer.appendSlice(self.allocator, data);
 
         // Send via QUIC stream
         try self.quic_stream.send(self.send_buffer.items);
@@ -274,7 +275,7 @@ pub const GrpcStream = struct {
 
         if (bytes_received == 0) return null;
 
-        try self.recv_buffer.appendSlice(temp_buffer[0..bytes_received]);
+        try self.recv_buffer.appendSlice(self.allocator, temp_buffer[0..bytes_received]);
 
         // Check if we have a complete message
         if (self.recv_buffer.items.len < @sizeOf(GrpcFrameHeader)) return null;
@@ -323,7 +324,7 @@ pub const GrpcMessage = struct {
 pub const GrpcConnection = struct {
     connection_id: u64,
     quic_connection: *QuicConnection,
-    streams: std.HashMap(u64, *GrpcStream, std.hash_map.DefaultContext(u64), std.hash_map.default_max_load_percentage),
+    streams: std.AutoHashMapUnmanaged(u64, *GrpcStream),
     next_stream_id: u64,
     allocator: std.mem.Allocator,
 
@@ -332,7 +333,7 @@ pub const GrpcConnection = struct {
         conn.* = GrpcConnection{
             .connection_id = connection_id,
             .quic_connection = quic_connection,
-            .streams = std.HashMap(u64, *GrpcStream, std.hash_map.DefaultContext(u64), std.hash_map.default_max_load_percentage).init(allocator),
+            .streams = .{},
             .next_stream_id = 1,
             .allocator = allocator,
         };
@@ -344,7 +345,7 @@ pub const GrpcConnection = struct {
         while (iterator.next()) |entry| {
             entry.value_ptr.*.deinit();
         }
-        self.streams.deinit();
+        self.streams.deinit(self.allocator);
         self.allocator.destroy(self);
     }
 
@@ -387,7 +388,7 @@ pub const GrpcConnection = struct {
                     return GrpcResponse.init(self.allocator, 0, message.data, stream.stream_id);
                 }
             }
-            std.time.sleep(1000000); // 1ms sleep
+            Time.sleep(1_000_000); // 1ms sleep
         }
 
         return Error.ZquicError.NetworkError;
@@ -407,12 +408,12 @@ pub const BridgeStats = struct {
 
     pub fn init() BridgeStats {
         return BridgeStats{
-            .start_time = (try std.time.Instant.now()).timestamp.sec,
+            .start_time = Time.nowSeconds(),
         };
     }
 
     pub fn updateUptime(self: *BridgeStats) void {
-        self.uptime_seconds = @intCast((try std.time.Instant.now()).timestamp.sec - self.start_time);
+        self.uptime_seconds = @intCast(Time.nowSeconds() - self.start_time);
     }
 };
 
@@ -420,8 +421,8 @@ pub const BridgeStats = struct {
 pub const GhostBridge = struct {
     config: GhostBridgeConfig,
     server: ?*Http3Server,
-    services: std.StringHashMap(ServiceRegistration),
-    connections: std.HashMap(u64, *GrpcConnection, std.hash_map.DefaultContext(u64), std.hash_map.default_max_load_percentage),
+    services: std.StringHashMapUnmanaged(ServiceRegistration),
+    connections: std.AutoHashMapUnmanaged(u64, *GrpcConnection),
     next_connection_id: u64,
     stats: BridgeStats,
     allocator: std.mem.Allocator,
@@ -432,8 +433,8 @@ pub const GhostBridge = struct {
         bridge.* = GhostBridge{
             .config = config,
             .server = null,
-            .services = std.StringHashMap(ServiceRegistration).init(allocator),
-            .connections = std.HashMap(u64, *GrpcConnection, std.hash_map.DefaultContext(u64), std.hash_map.default_max_load_percentage).init(allocator),
+            .services = .{},
+            .connections = .{},
             .next_connection_id = 1,
             .stats = BridgeStats.init(),
             .allocator = allocator,
@@ -451,14 +452,14 @@ pub const GhostBridge = struct {
             entry.value_ptr.deinit(self.allocator);
             self.allocator.free(entry.key_ptr.*);
         }
-        self.services.deinit();
+        self.services.deinit(self.allocator);
 
         // Clean up connections
         var conn_iterator = self.connections.iterator();
         while (conn_iterator.next()) |entry| {
             entry.value_ptr.*.deinit();
         }
-        self.connections.deinit();
+        self.connections.deinit(self.allocator);
 
         self.allocator.destroy(self);
     }
@@ -503,7 +504,7 @@ pub const GhostBridge = struct {
     pub fn registerService(self: *GhostBridge, name: []const u8, endpoint: []const u8, service_type: ServiceRegistration.ServiceType) !void {
         const service = try ServiceRegistration.init(self.allocator, name, endpoint, service_type);
         const owned_name = try self.allocator.dupe(u8, name);
-        try self.services.put(owned_name, service);
+        try self.services.put(self.allocator, owned_name, service);
 
         std.log.info("Registered service '{s}' at {s}", .{ name, endpoint });
     }
@@ -530,7 +531,7 @@ pub const GhostBridge = struct {
         self.next_connection_id += 1;
 
         const grpc_connection = try GrpcConnection.init(self.allocator, connection_id, quic_connection);
-        try self.connections.put(connection_id, grpc_connection);
+        try self.connections.put(self.allocator, connection_id, grpc_connection);
 
         self.stats.total_connections += 1;
         self.stats.active_connections += 1;
@@ -554,7 +555,7 @@ pub const GhostBridge = struct {
     pub fn checkServiceHealth(self: *GhostBridge, service_name: []const u8) ServiceRegistration.HealthStatus {
         if (self.services.getPtr(service_name)) |service| {
             // Update health based on last heartbeat
-            const now = (try std.time.Instant.now()).timestamp.sec;
+            const now = Time.nowSeconds();
             if (now - service.last_heartbeat > 60) { // 60 seconds timeout
                 service.health_status = .unhealthy;
             }

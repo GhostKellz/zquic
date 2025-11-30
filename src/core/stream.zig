@@ -1,17 +1,9 @@
-//! Supercharged QUIC stream with zero-copy async I/O
+//! QUIC Stream with async I/O support
 //!
-//! ZQUIC v0.8.0 - Zero-copy streaming with zsync channels
+//! ZQUIC v0.9.3 - Stream management without external dependencies
 
 const std = @import("std");
-const zsync = @import("zsync");
 const Error = @import("../utils/error.zig");
-
-// Fallback Io when zsync is not available
-const FallbackIo = struct {
-    pub fn init() FallbackIo {
-        return FallbackIo{};
-    }
-};
 
 /// Stream ID and direction utilities
 pub const StreamId = struct {
@@ -95,22 +87,16 @@ pub const DataChunk = struct {
     }
 };
 
-/// Supercharged stream with zero-copy async I/O
+/// QUIC stream with internal async I/O
 pub const SuperStream = struct {
     id: u64,
     stream_type: StreamType,
     state: std.atomic.Value(StreamState),
     allocator: std.mem.Allocator,
 
-    // Zero-copy data channels - will be initialized in init
-    read_data: ?*anyopaque,
-    write_data: ?*anyopaque,
-
-    // Flow control channels for optimal throughput
-    flow_control: ?*anyopaque,
-
-    // Async I/O context for cooperative multitasking
-    io: if (@hasDecl(zsync, "GreenThreadsIo")) zsync.GreenThreadsIo else FallbackIo,
+    // Data buffers
+    read_buffer: std.ArrayListUnmanaged(u8),
+    write_buffer: std.ArrayListUnmanaged(u8),
 
     // Flow control state (atomic for lock-free access)
     send_window: std.atomic.Value(u64),
@@ -131,15 +117,9 @@ pub const SuperStream = struct {
             .state = std.atomic.Value(StreamState).init(.idle),
             .allocator = allocator,
 
-            // Initialize high-performance channels
-            .read_data = undefined, // TODO: Replace with zsync.bounded(DataChunk, allocator, 256) when zsync compatibility fixed
-            .write_data = undefined, // TODO: Replace with zsync.bounded(DataChunk, allocator, 256) when zsync compatibility fixed
-            .flow_control = undefined, // TODO: Replace with zsync.bounded(FlowControlEvent, allocator, 64) when zsync compatibility fixed
-
-            .io = if (@hasDecl(zsync, "GreenThreadsIo"))
-                zsync.GreenThreadsIo.init(allocator, .{}) catch @panic("GreenThreadsIo init failed")
-            else
-                FallbackIo.init(),
+            // Initialize buffers
+            .read_buffer = .{},
+            .write_buffer = .{},
 
             // Initialize flow control (generous initial windows for high throughput)
             .send_window = std.atomic.Value(u64).init(1_048_576), // 1MB
@@ -157,150 +137,74 @@ pub const SuperStream = struct {
 
     pub fn deinit(self: *Self) void {
         self.state.store(.closed, .release);
+        self.read_buffer.deinit(self.allocator);
+        self.write_buffer.deinit(self.allocator);
     }
 
-    /// Legacy read method for compatibility
+    /// Read data from stream
     pub fn read(self: *Self, buffer: []u8) !usize {
-        const data_chunk = try self.readAsync();
-        const copy_len = @min(buffer.len, data_chunk.data.len);
-        @memcpy(buffer[0..copy_len], data_chunk.data[0..copy_len]);
+        if (self.read_buffer.items.len == 0) {
+            return 0;
+        }
+
+        const copy_len = @min(buffer.len, self.read_buffer.items.len);
+        @memcpy(buffer[0..copy_len], self.read_buffer.items[0..copy_len]);
+
+        // Remove read data from buffer
+        if (copy_len < self.read_buffer.items.len) {
+            const remaining = self.read_buffer.items.len - copy_len;
+            @memcpy(self.read_buffer.items[0..remaining], self.read_buffer.items[copy_len..]);
+            self.read_buffer.shrinkRetainingCapacity(remaining);
+        } else {
+            self.read_buffer.clearRetainingCapacity();
+        }
+
+        _ = self.bytes_received.fetchAdd(copy_len, .acq_rel);
+        try self.updateActivityTimestamp();
+
         return copy_len;
     }
 
-    /// Legacy write method for compatibility
+    /// Write data to stream
     pub fn write(self: *Self, data: []const u8, fin: bool) !usize {
-        try self.writeAsync(data, fin);
+        _ = fin;
+
+        try self.write_buffer.appendSlice(self.allocator, data);
+        _ = self.bytes_sent.fetchAdd(data.len, .acq_rel);
+        try self.updateActivityTimestamp();
+
         return data.len;
     }
 
     /// Zero-copy async read - returns reference to data, no copying
     pub fn readAsync(self: *Self) !DataChunk {
-        // TODO: Fix channel implementation
-        _ = self;
-        return DataChunk.init(&[_]u8{}, 0, false);
+        const offset = self.bytes_received.load(.acquire);
+        if (self.read_buffer.items.len > 0) {
+            return DataChunk.init(self.read_buffer.items, offset, false);
+        }
+        return DataChunk.init(&[_]u8{}, offset, false);
     }
 
     /// Zero-copy async write - takes ownership of data reference
     pub fn writeAsync(self: *Self, data: []const u8, fin: bool) !void {
-        // TODO: Fix channel implementation
-        _ = self;
-        _ = data;
-        _ = fin;
+        _ = try self.write(data, fin);
     }
 
-    /// High-performance stream processor - handles all async operations
-    pub fn runStreamProcessor(self: *Self) !void {
-        // Spawn concurrent async tasks for maximum throughput
-        _ = try self.io.spawn(handleReads, .{self});
-        _ = try self.io.spawn(handleWrites, .{self});
-        _ = try self.io.spawn(handleFlowControl, .{self});
-
-        // Main stream loop
-        while (self.state.load(.acquire) != .closed) {
-            try self.processStreamEvents();
-            try zsync.yieldNow(); // Cooperative yielding
-        }
-    }
-
-    /// Handle incoming data asynchronously
+    /// Handle incoming data
     pub fn handleIncomingData(self: *Self, data: []const u8) !void {
-        const current_offset = self.bytes_received.load(.acquire);
-        const data_chunk = DataChunk.init(data, current_offset, false);
-
-        // TODO: Restore channel usage once zsync compatibility is fully fixed
-        _ = data_chunk;
-        // try self.read_data.send(data_chunk);
+        try self.read_buffer.appendSlice(self.allocator, data);
+        try self.updateActivityTimestamp();
     }
 
     /// Update flow control windows
     pub fn updateFlowControl(self: *Self, credits: u64) !void {
-        self.send_window.fetchAdd(credits, .acq_rel);
-        // TODO: Restore channel usage once zsync compatibility is fully fixed
-        // try self.flow_control.send(.{ .window_update = credits });
+        _ = self.send_window.fetchAdd(credits, .acq_rel);
     }
 
     /// Process stream asynchronously
     pub fn processAsync(self: *Self) !void {
-        // Non-blocking stream processing
         try self.checkFlowControl();
         try self.updateActivityTimestamp();
-    }
-
-    // Private async handlers
-    fn handleReads(self: *Self) !void {
-        while (self.state.load(.acquire) != .closed) {
-            // Process read operations
-            // TODO: Restore channel usage once zsync compatibility is fully fixed
-            // const chunk = self.read_data.recv() catch continue;
-            // try self.processReadChunk(chunk);
-
-            // Cooperative yield for now
-            try self.io.yieldNow();
-        }
-    }
-
-    fn handleWrites(self: *Self) !void {
-        while (self.state.load(.acquire) != .closed) {
-            // Process write operations
-            // TODO: Restore channel usage once zsync compatibility is fully fixed
-            // const chunk = self.write_data.recv() catch continue;
-            // try self.processWriteChunk(chunk);
-
-            // Cooperative yield for now
-            try self.io.yieldNow();
-        }
-    }
-
-    fn handleFlowControl(self: *Self) !void {
-        while (self.state.load(.acquire) != .closed) {
-            // TODO: Restore channel usage once zsync compatibility is fully fixed
-            // const event = self.flow_control.recv() catch continue;
-            // try self.processFlowControlEvent(event);
-
-            // Cooperative yield for now
-            try self.io.yieldNow();
-        }
-    }
-
-    fn processStreamEvents(self: *Self) !void {
-        // Handle any pending stream events
-        _ = self;
-        // TODO: Implement stream event processing
-    }
-
-    fn processReadChunk(self: *Self, chunk: DataChunk) !void {
-        // Handle read chunk processing
-        _ = self;
-        _ = chunk;
-        // TODO: Implement read chunk processing
-    }
-
-    fn processWriteChunk(self: *Self, chunk: DataChunk) !void {
-        // Handle write chunk processing
-        _ = self;
-        _ = chunk;
-        // TODO: Implement write chunk processing
-    }
-
-    fn processFlowControlEvent(self: *Self, event: FlowControlEvent) !void {
-        _ = self; // TODO: Implement full flow control processing
-        switch (event) {
-            .bytes_written => |bytes| {
-                // Update send window
-                _ = bytes;
-            },
-            .bytes_read => |bytes| {
-                // Update receive window
-                _ = bytes;
-            },
-            .window_update => |credits| {
-                // Add credits to send window
-                _ = credits;
-            },
-            .blocked => {
-                // Handle flow control blocking
-            },
-        }
     }
 
     fn checkFlowControl(self: *Self) !void {
@@ -311,6 +215,11 @@ pub const SuperStream = struct {
     fn updateActivityTimestamp(self: *Self) !void {
         const ts = try std.posix.clock_gettime(std.posix.CLOCK.REALTIME);
         self.last_activity.store(ts.sec, .release);
+    }
+
+    /// Close the stream
+    pub fn close(self: *Self) !void {
+        self.state.store(.closed, .release);
     }
 
     /// Get stream statistics
@@ -338,3 +247,27 @@ pub const StreamStats = struct {
 
 /// Legacy stream for compatibility
 pub const Stream = SuperStream;
+
+test "stream initialization" {
+    var stream = try SuperStream.init(std.testing.allocator, 0, .client_bidirectional);
+    defer stream.deinit();
+
+    try std.testing.expect(stream.state.load(.acquire) == .idle);
+    try std.testing.expect(stream.id == 0);
+}
+
+test "stream read write" {
+    var stream = try SuperStream.init(std.testing.allocator, 0, .client_bidirectional);
+    defer stream.deinit();
+
+    const data = "Hello, QUIC!";
+    const written = try stream.write(data, false);
+    try std.testing.expect(written == data.len);
+
+    // Add data to read buffer
+    try stream.handleIncomingData("Test data");
+
+    var buffer: [32]u8 = undefined;
+    const read_len = try stream.read(&buffer);
+    try std.testing.expect(read_len == 9);
+}

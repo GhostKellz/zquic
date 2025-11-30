@@ -5,6 +5,7 @@
 
 const std = @import("std");
 const Error = @import("../utils/error.zig");
+const Time = @import("../utils/time.zig");
 const Connection = @import("../core/connection.zig").Connection;
 const Stream = @import("../core/stream.zig").Stream;
 
@@ -26,115 +27,115 @@ pub const WasmExecutionRequest = struct {
     timeout_ms: u32,
     /// Caller's address (for authentication)
     caller_address: []const u8,
-    
+
     pub fn serialize(self: *const WasmExecutionRequest, allocator: std.mem.Allocator) ![]u8 {
         // Simple serialization format:
         // [request_id: 8][module_len: 4][module_bytecode: var][function_name_len: 2][function_name: var]
         // [args_len: 4][arguments: var][gas_limit: 8][memory_limit: 4][timeout_ms: 4]
         // [caller_addr_len: 2][caller_address: var]
-        
+
         const total_size = 8 + 4 + self.module_bytecode.len + 2 + self.function_name.len +
-                          4 + self.arguments.len + 8 + 4 + 4 + 2 + self.caller_address.len;
-        
+            4 + self.arguments.len + 8 + 4 + 4 + 2 + self.caller_address.len;
+
         const buffer = try allocator.alloc(u8, total_size);
         var offset: usize = 0;
-        
+
         // Request ID
-        std.mem.writeInt(u64, buffer[offset..offset + 8], self.request_id, .big);
+        std.mem.writeInt(u64, buffer[offset .. offset + 8], self.request_id, .big);
         offset += 8;
-        
+
         // Module bytecode
-        std.mem.writeInt(u32, buffer[offset..offset + 4], @intCast(self.module_bytecode.len), .big);
+        std.mem.writeInt(u32, buffer[offset .. offset + 4], @intCast(self.module_bytecode.len), .big);
         offset += 4;
-        @memcpy(buffer[offset..offset + self.module_bytecode.len], self.module_bytecode);
+        @memcpy(buffer[offset .. offset + self.module_bytecode.len], self.module_bytecode);
         offset += self.module_bytecode.len;
-        
+
         // Function name
-        std.mem.writeInt(u16, buffer[offset..offset + 2], @intCast(self.function_name.len), .big);
+        std.mem.writeInt(u16, buffer[offset .. offset + 2], @intCast(self.function_name.len), .big);
         offset += 2;
-        @memcpy(buffer[offset..offset + self.function_name.len], self.function_name);
+        @memcpy(buffer[offset .. offset + self.function_name.len], self.function_name);
         offset += self.function_name.len;
-        
+
         // Arguments
-        std.mem.writeInt(u32, buffer[offset..offset + 4], @intCast(self.arguments.len), .big);
+        std.mem.writeInt(u32, buffer[offset .. offset + 4], @intCast(self.arguments.len), .big);
         offset += 4;
-        @memcpy(buffer[offset..offset + self.arguments.len], self.arguments);
+        @memcpy(buffer[offset .. offset + self.arguments.len], self.arguments);
         offset += self.arguments.len;
-        
+
         // Gas limit
-        std.mem.writeInt(u64, buffer[offset..offset + 8], self.gas_limit, .big);
+        std.mem.writeInt(u64, buffer[offset .. offset + 8], self.gas_limit, .big);
         offset += 8;
-        
+
         // Memory limit
-        std.mem.writeInt(u32, buffer[offset..offset + 4], self.memory_limit, .big);
+        std.mem.writeInt(u32, buffer[offset .. offset + 4], self.memory_limit, .big);
         offset += 4;
-        
+
         // Timeout
-        std.mem.writeInt(u32, buffer[offset..offset + 4], self.timeout_ms, .big);
+        std.mem.writeInt(u32, buffer[offset .. offset + 4], self.timeout_ms, .big);
         offset += 4;
-        
+
         // Caller address
-        std.mem.writeInt(u16, buffer[offset..offset + 2], @intCast(self.caller_address.len), .big);
+        std.mem.writeInt(u16, buffer[offset .. offset + 2], @intCast(self.caller_address.len), .big);
         offset += 2;
-        @memcpy(buffer[offset..offset + self.caller_address.len], self.caller_address);
-        
+        @memcpy(buffer[offset .. offset + self.caller_address.len], self.caller_address);
+
         return buffer;
     }
-    
+
     pub fn deserialize(data: []const u8, allocator: std.mem.Allocator) !WasmExecutionRequest {
         if (data.len < 28) return Error.ZquicError.InvalidData; // Minimum size check
-        
+
         var offset: usize = 0;
-        
+
         // Request ID
-        const request_id = std.mem.readInt(u64, data[offset..offset + 8], .big);
+        const request_id = std.mem.readInt(u64, data[offset .. offset + 8], .big);
         offset += 8;
-        
+
         // Module bytecode
-        const module_len = std.mem.readInt(u32, data[offset..offset + 4], .big);
+        const module_len = std.mem.readInt(u32, data[offset .. offset + 4], .big);
         offset += 4;
         if (offset + module_len > data.len) return Error.ZquicError.InvalidData;
-        const module_bytecode = try allocator.dupe(u8, data[offset..offset + module_len]);
+        const module_bytecode = try allocator.dupe(u8, data[offset .. offset + module_len]);
         offset += module_len;
-        
+
         // Function name
         if (offset + 2 > data.len) return Error.ZquicError.InvalidData;
-        const function_name_len = std.mem.readInt(u16, data[offset..offset + 2], .big);
+        const function_name_len = std.mem.readInt(u16, data[offset .. offset + 2], .big);
         offset += 2;
         if (offset + function_name_len > data.len) return Error.ZquicError.InvalidData;
-        const function_name = try allocator.dupe(u8, data[offset..offset + function_name_len]);
+        const function_name = try allocator.dupe(u8, data[offset .. offset + function_name_len]);
         offset += function_name_len;
-        
+
         // Arguments
         if (offset + 4 > data.len) return Error.ZquicError.InvalidData;
-        const args_len = std.mem.readInt(u32, data[offset..offset + 4], .big);
+        const args_len = std.mem.readInt(u32, data[offset .. offset + 4], .big);
         offset += 4;
         if (offset + args_len > data.len) return Error.ZquicError.InvalidData;
-        const arguments = try allocator.dupe(u8, data[offset..offset + args_len]);
+        const arguments = try allocator.dupe(u8, data[offset .. offset + args_len]);
         offset += args_len;
-        
+
         // Gas limit
         if (offset + 8 > data.len) return Error.ZquicError.InvalidData;
-        const gas_limit = std.mem.readInt(u64, data[offset..offset + 8], .big);
+        const gas_limit = std.mem.readInt(u64, data[offset .. offset + 8], .big);
         offset += 8;
-        
+
         // Memory limit
         if (offset + 4 > data.len) return Error.ZquicError.InvalidData;
-        const memory_limit = std.mem.readInt(u32, data[offset..offset + 4], .big);
+        const memory_limit = std.mem.readInt(u32, data[offset .. offset + 4], .big);
         offset += 4;
-        
+
         // Timeout
         if (offset + 4 > data.len) return Error.ZquicError.InvalidData;
-        const timeout_ms = std.mem.readInt(u32, data[offset..offset + 4], .big);
+        const timeout_ms = std.mem.readInt(u32, data[offset .. offset + 4], .big);
         offset += 4;
-        
+
         // Caller address
         if (offset + 2 > data.len) return Error.ZquicError.InvalidData;
-        const caller_addr_len = std.mem.readInt(u16, data[offset..offset + 2], .big);
+        const caller_addr_len = std.mem.readInt(u16, data[offset .. offset + 2], .big);
         offset += 2;
         if (offset + caller_addr_len > data.len) return Error.ZquicError.InvalidData;
-        const caller_address = try allocator.dupe(u8, data[offset..offset + caller_addr_len]);
-        
+        const caller_address = try allocator.dupe(u8, data[offset .. offset + caller_addr_len]);
+
         return WasmExecutionRequest{
             .request_id = request_id,
             .module_bytecode = module_bytecode,
@@ -146,7 +147,7 @@ pub const WasmExecutionRequest = struct {
             .caller_address = caller_address,
         };
     }
-    
+
     pub fn deinit(self: *WasmExecutionRequest, allocator: std.mem.Allocator) void {
         allocator.free(self.module_bytecode);
         allocator.free(self.function_name);
@@ -171,7 +172,7 @@ pub const WasmExecutionResult = struct {
     error_message: []const u8,
     /// Modified state (if any)
     modified_state: []const u8,
-    
+
     pub const ExecutionStatus = enum(u8) {
         success = 0,
         out_of_gas = 1,
@@ -182,95 +183,95 @@ pub const WasmExecutionResult = struct {
         invalid_module = 6,
         authentication_failed = 7,
     };
-    
+
     pub fn serialize(self: *const WasmExecutionResult, allocator: std.mem.Allocator) ![]u8 {
-        const total_size = 8 + 1 + 4 + self.return_value.len + 8 + 8 + 
-                          4 + self.error_message.len + 4 + self.modified_state.len;
-        
+        const total_size = 8 + 1 + 4 + self.return_value.len + 8 + 8 +
+            4 + self.error_message.len + 4 + self.modified_state.len;
+
         const buffer = try allocator.alloc(u8, total_size);
         var offset: usize = 0;
-        
+
         // Request ID
-        std.mem.writeInt(u64, buffer[offset..offset + 8], self.request_id, .big);
+        std.mem.writeInt(u64, buffer[offset .. offset + 8], self.request_id, .big);
         offset += 8;
-        
+
         // Status
         buffer[offset] = @intFromEnum(self.status);
         offset += 1;
-        
+
         // Return value
-        std.mem.writeInt(u32, buffer[offset..offset + 4], @intCast(self.return_value.len), .big);
+        std.mem.writeInt(u32, buffer[offset .. offset + 4], @intCast(self.return_value.len), .big);
         offset += 4;
-        @memcpy(buffer[offset..offset + self.return_value.len], self.return_value);
+        @memcpy(buffer[offset .. offset + self.return_value.len], self.return_value);
         offset += self.return_value.len;
-        
+
         // Gas consumed
-        std.mem.writeInt(u64, buffer[offset..offset + 8], self.gas_consumed, .big);
+        std.mem.writeInt(u64, buffer[offset .. offset + 8], self.gas_consumed, .big);
         offset += 8;
-        
+
         // Execution time
-        std.mem.writeInt(u64, buffer[offset..offset + 8], self.execution_time_us, .big);
+        std.mem.writeInt(u64, buffer[offset .. offset + 8], self.execution_time_us, .big);
         offset += 8;
-        
+
         // Error message
-        std.mem.writeInt(u32, buffer[offset..offset + 4], @intCast(self.error_message.len), .big);
+        std.mem.writeInt(u32, buffer[offset .. offset + 4], @intCast(self.error_message.len), .big);
         offset += 4;
-        @memcpy(buffer[offset..offset + self.error_message.len], self.error_message);
+        @memcpy(buffer[offset .. offset + self.error_message.len], self.error_message);
         offset += self.error_message.len;
-        
+
         // Modified state
-        std.mem.writeInt(u32, buffer[offset..offset + 4], @intCast(self.modified_state.len), .big);
+        std.mem.writeInt(u32, buffer[offset .. offset + 4], @intCast(self.modified_state.len), .big);
         offset += 4;
-        @memcpy(buffer[offset..offset + self.modified_state.len], self.modified_state);
-        
+        @memcpy(buffer[offset .. offset + self.modified_state.len], self.modified_state);
+
         return buffer;
     }
-    
+
     pub fn deserialize(data: []const u8, allocator: std.mem.Allocator) !WasmExecutionResult {
         if (data.len < 33) return Error.ZquicError.InvalidData; // Minimum size
-        
+
         var offset: usize = 0;
-        
+
         // Request ID
-        const request_id = std.mem.readInt(u64, data[offset..offset + 8], .big);
+        const request_id = std.mem.readInt(u64, data[offset .. offset + 8], .big);
         offset += 8;
-        
+
         // Status
         const status = @as(ExecutionStatus, @enumFromInt(data[offset]));
         offset += 1;
-        
+
         // Return value
-        const return_value_len = std.mem.readInt(u32, data[offset..offset + 4], .big);
+        const return_value_len = std.mem.readInt(u32, data[offset .. offset + 4], .big);
         offset += 4;
         if (offset + return_value_len > data.len) return Error.ZquicError.InvalidData;
-        const return_value = try allocator.dupe(u8, data[offset..offset + return_value_len]);
+        const return_value = try allocator.dupe(u8, data[offset .. offset + return_value_len]);
         offset += return_value_len;
-        
+
         // Gas consumed
         if (offset + 8 > data.len) return Error.ZquicError.InvalidData;
-        const gas_consumed = std.mem.readInt(u64, data[offset..offset + 8], .big);
+        const gas_consumed = std.mem.readInt(u64, data[offset .. offset + 8], .big);
         offset += 8;
-        
+
         // Execution time
         if (offset + 8 > data.len) return Error.ZquicError.InvalidData;
-        const execution_time_us = std.mem.readInt(u64, data[offset..offset + 8], .big);
+        const execution_time_us = std.mem.readInt(u64, data[offset .. offset + 8], .big);
         offset += 8;
-        
+
         // Error message
         if (offset + 4 > data.len) return Error.ZquicError.InvalidData;
-        const error_msg_len = std.mem.readInt(u32, data[offset..offset + 4], .big);
+        const error_msg_len = std.mem.readInt(u32, data[offset .. offset + 4], .big);
         offset += 4;
         if (offset + error_msg_len > data.len) return Error.ZquicError.InvalidData;
-        const error_message = try allocator.dupe(u8, data[offset..offset + error_msg_len]);
+        const error_message = try allocator.dupe(u8, data[offset .. offset + error_msg_len]);
         offset += error_msg_len;
-        
+
         // Modified state
         if (offset + 4 > data.len) return Error.ZquicError.InvalidData;
-        const state_len = std.mem.readInt(u32, data[offset..offset + 4], .big);
+        const state_len = std.mem.readInt(u32, data[offset .. offset + 4], .big);
         offset += 4;
         if (offset + state_len > data.len) return Error.ZquicError.InvalidData;
-        const modified_state = try allocator.dupe(u8, data[offset..offset + state_len]);
-        
+        const modified_state = try allocator.dupe(u8, data[offset .. offset + state_len]);
+
         return WasmExecutionResult{
             .request_id = request_id,
             .status = status,
@@ -281,7 +282,7 @@ pub const WasmExecutionResult = struct {
             .modified_state = modified_state,
         };
     }
-    
+
     pub fn deinit(self: *WasmExecutionResult, allocator: std.mem.Allocator) void {
         allocator.free(self.return_value);
         allocator.free(self.error_message);
@@ -299,13 +300,13 @@ pub const ZvmQuicServer = struct {
     default_gas_limit: u64,
     default_memory_limit: u32,
     default_timeout_ms: u32,
-    
+
     const ActiveExecution = struct {
         request: WasmExecutionRequest,
-        start_time: i64,
+        start_time_us: i64,
         thread_handle: ?std.Thread,
     };
-    
+
     pub fn init(allocator: std.mem.Allocator, connection: *Connection) !ZvmQuicServer {
         return ZvmQuicServer{
             .allocator = allocator,
@@ -318,7 +319,7 @@ pub const ZvmQuicServer = struct {
             .default_timeout_ms = 30_000, // 30 seconds
         };
     }
-    
+
     pub fn deinit(self: *ZvmQuicServer) void {
         // Wait for all active executions to complete
         var iterator = self.active_executions.iterator();
@@ -329,10 +330,10 @@ pub const ZvmQuicServer = struct {
             entry.value_ptr.*.request.deinit(self.allocator);
             self.allocator.destroy(entry.value_ptr.*);
         }
-        
+
         self.active_executions.deinit();
     }
-    
+
     /// Start the ZVM QUIC server
     pub fn start(self: *ZvmQuicServer) !void {
         std.debug.print("🚀 ZVM QUIC Server starting...\n", .{});
@@ -340,19 +341,19 @@ pub const ZvmQuicServer = struct {
         std.debug.print("  Default gas limit: {}\n", .{self.default_gas_limit});
         std.debug.print("  Default memory limit: {} MB\n", .{self.default_memory_limit / (1024 * 1024)});
         std.debug.print("  Default timeout: {} ms\n", .{self.default_timeout_ms});
-        
+
         // Main server loop
         while (true) {
             // Wait for incoming WASM execution requests
             const request_data = try self.receiveRequest();
             defer self.allocator.free(request_data);
-            
+
             // Parse the request
             var request = WasmExecutionRequest.deserialize(request_data, self.allocator) catch |err| {
                 std.debug.print("Failed to parse WASM execution request: {}\n", .{err});
                 continue;
             };
-            
+
             // Check if we can accept more executions
             if (self.active_executions.count() >= self.max_concurrent_executions) {
                 // Send busy response
@@ -365,31 +366,31 @@ pub const ZvmQuicServer = struct {
                     .error_message = "Server busy, try again later",
                     .modified_state = "",
                 };
-                
+
                 try self.sendResult(busy_result);
                 request.deinit(self.allocator);
                 continue;
             }
-            
+
             // Create active execution entry
             const active_execution = try self.allocator.create(ActiveExecution);
             active_execution.* = ActiveExecution{
                 .request = request,
-                .start_time = std.time.milliTimestamp(),
+                .start_time_us = Time.nowMicros(),
                 .thread_handle = null,
             };
-            
+
             // Store the execution
             try self.active_executions.put(request.request_id, active_execution);
-            
+
             // Start execution in a separate thread for async processing
             const thread = try std.Thread.spawn(.{}, executeWasmAsync, .{ self, request.request_id });
             active_execution.thread_handle = thread;
-            
+
             std.debug.print("Started WASM execution {} (function: {s})\n", .{ request.request_id, request.function_name });
         }
     }
-    
+
     /// Execute a WASM module asynchronously
     fn executeWasmAsync(self: *ZvmQuicServer, request_id: u64) void {
         defer {
@@ -400,12 +401,12 @@ pub const ZvmQuicServer = struct {
                 _ = self.active_executions.remove(request_id);
             }
         }
-        
+
         const active_execution = self.active_executions.get(request_id) orelse return;
         const request = active_execution.request;
-        
+
         const start_time = std.time.microTimestamp();
-        
+
         // Execute the WASM module (placeholder implementation)
         const result = self.executeWasmModule(request) catch |err| {
             const error_msg = switch (err) {
@@ -414,7 +415,7 @@ pub const ZvmQuicServer = struct {
                 Error.ZquicError.InvalidData => "Invalid WASM module",
                 else => "Unknown execution error",
             };
-            
+
             WasmExecutionResult{
                 .request_id = request_id,
                 .status = .runtime_error,
@@ -425,44 +426,44 @@ pub const ZvmQuicServer = struct {
                 .modified_state = "",
             };
         };
-        
+
         // Send the result back
         self.sendResult(result) catch |err| {
             std.debug.print("Failed to send WASM execution result: {}\n", .{err});
         };
-        
+
         std.debug.print("Completed WASM execution {} in {} μs\n", .{ request_id, result.execution_time_us });
     }
-    
+
     /// Execute a WASM module (real implementation)
     fn executeWasmModule(self: *ZvmQuicServer, request: WasmExecutionRequest) !WasmExecutionResult {
         const start_time = std.time.microTimestamp();
-        
+
         // Initialize WASM runtime context
         var wasm_runtime = try WasmRuntime.init(self.allocator, request.gas_limit);
         defer wasm_runtime.deinit();
-        
+
         // Validate WASM module
         try self.validateWasmModule(request.wasm_code);
-        
+
         // Load module into runtime
         try wasm_runtime.loadModule(request.wasm_code);
-        
+
         // Execute the specified function
         const execution_result = try wasm_runtime.executeFunction(
             request.function_name,
             request.arguments,
             request.gas_limit,
         );
-        
+
         // Monitor execution time and gas consumption
         const end_time = std.time.microTimestamp();
         const execution_time = @as(u64, @intCast(end_time - start_time));
-        
+
         std.debug.print("Successfully executed WASM function: {s}\n", .{request.function_name});
         std.debug.print("  Gas consumed: {}/{}\n", .{ execution_result.gas_used, request.gas_limit });
         std.debug.print("  Execution time: {} μs\n", .{execution_time});
-        
+
         return WasmExecutionResult{
             .request_id = request.request_id,
             .status = if (execution_result.success) .success else .runtime_error,
@@ -473,79 +474,83 @@ pub const ZvmQuicServer = struct {
             .modified_state = execution_result.modified_state,
         };
     }
-    
+
     /// Validate a WASM module before execution
     fn validateWasmModule(self: *ZvmQuicServer, wasm_code: []const u8) !void {
         _ = self;
-        
+
         // Basic validation using the WasmValidator
         if (!try WasmValidator.validateModule(wasm_code)) {
             return Error.ZquicError.InvalidData;
         }
-        
+
         // Additional security checks could go here:
         // - Check for dangerous imports
         // - Validate function signatures
         // - Ensure memory limits are respected
         // - Check for infinite loops or excessive computation
-        
+
         std.debug.print("WASM module validation passed ({} bytes)\n", .{wasm_code.len});
     }
-    
+
     /// Receive a WASM execution request over QUIC
     fn receiveRequest(self: *ZvmQuicServer) ![]u8 {
         // Placeholder implementation
         // In a real implementation, this would read from a QUIC stream
-        
+
         // For testing, create a dummy request
         const dummy_request = WasmExecutionRequest{
             .request_id = 1,
-            .module_bytecode = &[_]u8{0x00, 0x61, 0x73, 0x6d}, // WASM magic number
+            .module_bytecode = &[_]u8{ 0x00, 0x61, 0x73, 0x6d }, // WASM magic number
             .function_name = "main",
-            .arguments = &[_]u8{0x01, 0x02, 0x03},
+            .arguments = &[_]u8{ 0x01, 0x02, 0x03 },
             .gas_limit = 1_000_000,
             .memory_limit = 1024 * 1024,
             .timeout_ms = 5000,
-            .caller_address = &[_]u8{0xde, 0xad, 0xbe, 0xef},
+            .caller_address = &[_]u8{ 0xde, 0xad, 0xbe, 0xef },
         };
-        
+
         return try dummy_request.serialize(self.allocator);
     }
-    
+
     /// Send a WASM execution result over QUIC
     fn sendResult(self: *ZvmQuicServer, result: WasmExecutionResult) !void {
         // Placeholder implementation
         // In a real implementation, this would send over a QUIC stream
-        
+
         const serialized = try result.serialize(self.allocator);
         defer self.allocator.free(serialized);
-        
+
         std.debug.print("Sending WASM execution result {} ({} bytes)\n", .{ result.request_id, serialized.len });
     }
-    
+
     /// Get statistics about active executions
     pub fn getStats(self: *ZvmQuicServer) ExecutionStats {
-        var total_gas_consumed: u64 = 0;
-        var oldest_execution_time: i64 = std.time.milliTimestamp();
-        
+        var oldest_age_ms: u64 = 0;
+        const now_us = Time.nowMicros();
+
         var iterator = self.active_executions.iterator();
         while (iterator.next()) |entry| {
             const execution = entry.value_ptr.*;
-            if (execution.start_time < oldest_execution_time) {
-                oldest_execution_time = execution.start_time;
+            const delta_us = now_us - execution.start_time_us;
+            const age_ms: u64 = if (delta_us > 0)
+                @intCast(delta_us / std.time.us_per_ms)
+            else
+                0;
+            if (age_ms > oldest_age_ms) {
+                oldest_age_ms = age_ms;
             }
-            total_gas_consumed += execution.gas_consumed;
+            // Note: gas_consumed tracking would need to be added to ActiveExecution
         }
-        
+
         return ExecutionStats{
             .active_executions = @intCast(self.active_executions.count()),
             .total_executions_started = self.next_execution_id - 1,
-            .total_gas_consumed = total_gas_consumed,
-            .oldest_execution_age_ms = if (self.active_executions.count() > 0) 
-                @intCast(std.time.milliTimestamp() - oldest_execution_time) else 0,
+            .total_gas_consumed = 0, // Would need gas tracking in ActiveExecution
+            .oldest_execution_age_ms = oldest_age_ms,
         };
     }
-    
+
     pub const ExecutionStats = struct {
         active_executions: u32,
         total_executions_started: u64,
@@ -559,7 +564,7 @@ pub const ZvmQuicClient = struct {
     allocator: std.mem.Allocator,
     connection: *Connection,
     next_request_id: u64,
-    
+
     pub fn init(allocator: std.mem.Allocator, connection: *Connection) ZvmQuicClient {
         return ZvmQuicClient{
             .allocator = allocator,
@@ -567,7 +572,7 @@ pub const ZvmQuicClient = struct {
             .next_request_id = 1,
         };
     }
-    
+
     /// Execute a WASM function remotely over QUIC
     pub fn executeFunction(
         self: *ZvmQuicClient,
@@ -578,7 +583,7 @@ pub const ZvmQuicClient = struct {
     ) !WasmExecutionResult {
         const request_id = self.next_request_id;
         self.next_request_id += 1;
-        
+
         const request = WasmExecutionRequest{
             .request_id = request_id,
             .module_bytecode = module_bytecode,
@@ -589,20 +594,20 @@ pub const ZvmQuicClient = struct {
             .timeout_ms = options.timeout_ms,
             .caller_address = options.caller_address,
         };
-        
+
         // Serialize and send the request
         const serialized_request = try request.serialize(self.allocator);
         defer self.allocator.free(serialized_request);
-        
+
         try self.sendRequest(serialized_request);
-        
+
         // Wait for the result
         const result_data = try self.receiveResult(request_id, options.timeout_ms);
         defer self.allocator.free(result_data);
-        
+
         return try WasmExecutionResult.deserialize(result_data, self.allocator);
     }
-    
+
     /// Deploy a WASM module and execute its constructor
     pub fn deployModule(
         self: *ZvmQuicClient,
@@ -612,21 +617,21 @@ pub const ZvmQuicClient = struct {
     ) !WasmExecutionResult {
         return self.executeFunction(module_bytecode, "_constructor", constructor_args, options);
     }
-    
+
     /// Send a request over QUIC
     fn sendRequest(_: *ZvmQuicClient, data: []const u8) !void {
         // Placeholder implementation
         // In a real implementation, this would send over a QUIC stream
-        
+
         std.debug.print("Sending WASM execution request ({} bytes)\n", .{data.len});
     }
-    
+
     /// Receive a result over QUIC
     fn receiveResult(self: *ZvmQuicClient, request_id: u64, timeout_ms: u32) ![]u8 {
         // Placeholder implementation
         // In a real implementation, this would read from a QUIC stream with timeout
         _ = timeout_ms;
-        
+
         // Create a dummy successful result
         const dummy_result = WasmExecutionResult{
             .request_id = request_id,
@@ -637,10 +642,10 @@ pub const ZvmQuicClient = struct {
             .error_message = "",
             .modified_state = "",
         };
-        
+
         return try dummy_result.serialize(self.allocator);
     }
-    
+
     pub const ExecutionOptions = struct {
         gas_limit: u64 = 1_000_000,
         memory_limit: u32 = 64 * 1024 * 1024, // 64MB
@@ -654,38 +659,38 @@ pub const WasmValidator = struct {
     pub fn validateModule(module_bytecode: []const u8) !bool {
         // Check WASM magic number
         if (module_bytecode.len < 4) return false;
-        
+
         const magic = std.mem.readInt(u32, module_bytecode[0..4], .little);
         if (magic != 0x6d736100) return false; // "\0asm"
-        
+
         // Check version
         if (module_bytecode.len < 8) return false;
         const version = std.mem.readInt(u32, module_bytecode[4..8], .little);
         if (version != 1) return false; // WASM version 1
-        
+
         return true;
     }
-    
+
     pub fn estimateGasUsage(module_bytecode: []const u8, function_name: []const u8) !u64 {
         _ = function_name;
-        
+
         // Simple heuristic: gas usage roughly proportional to module size
         const base_gas = 10000;
         const gas_per_byte = 10;
-        
+
         return base_gas + (module_bytecode.len * gas_per_byte);
     }
-    
+
     pub fn checkSecurityConstraints(module_bytecode: []const u8) !bool {
         // Basic security checks
         if (module_bytecode.len > 10 * 1024 * 1024) return false; // Max 10MB
-        
+
         // TODO: Add more sophisticated security checks:
         // - No imports to dangerous host functions
         // - No infinite loops
         // - Memory access bounds checking
         // - etc.
-        
+
         return true;
     }
 };
@@ -693,60 +698,60 @@ pub const WasmValidator = struct {
 /// WASM Runtime for executing modules
 const WasmRuntime = struct {
     const Self = @This();
-    
+
     allocator: std.mem.Allocator,
     gas_limit: u64,
     gas_used: u64,
     memory: []u8,
     stack: std.ArrayList(u64),
     locals: std.ArrayList(u64),
-    
+
     pub fn init(allocator: std.mem.Allocator, gas_limit: u64) !Self {
         const initial_memory_size = 64 * 1024; // 64KB initial memory
         const memory = try allocator.alloc(u8, initial_memory_size);
-        
+
         return Self{
             .allocator = allocator,
             .gas_limit = gas_limit,
             .gas_used = 0,
             .memory = memory,
-            .stack = .{ },
-            .locals = .{ },
+            .stack = .{},
+            .locals = .{},
         };
     }
-    
+
     pub fn deinit(self: *Self) void {
         self.allocator.free(self.memory);
         self.stack.deinit();
         self.locals.deinit();
     }
-    
+
     pub fn loadModule(self: *Self, wasm_code: []const u8) !void {
         // Validate the WASM module
         if (!try WasmValidator.validateModule(wasm_code)) {
             return Error.ZquicError.InvalidData;
         }
-        
+
         // In a real implementation, this would parse the WASM module
         // and set up function tables, imports, etc.
-        
+
         // For now, just consume some gas for module loading
         self.consumeGas(1000) catch return Error.ZquicError.Timeout;
     }
-    
+
     pub fn executeFunction(self: *Self, function_name: []const u8, arguments: []const u8, gas_limit: u64) !ExecutionResult {
         // Set the gas limit for this execution
         self.gas_limit = gas_limit;
         self.gas_used = 0;
-        
+
         // Clear the stack and locals
         self.stack.clearRetainingCapacity();
         self.locals.clearRetainingCapacity();
-        
+
         // Simulate function execution
         std.debug.print("Executing WASM function: {s}\n", .{function_name});
         std.debug.print("  Arguments: {} bytes\n", .{arguments.len});
-        
+
         // Simulate different execution paths based on function name
         if (std.mem.eql(u8, function_name, "add")) {
             try self.executeAddFunction(arguments);
@@ -758,13 +763,13 @@ const WasmRuntime = struct {
             // Default execution
             try self.executeDefaultFunction(arguments);
         }
-        
+
         // Create a result string
-        const result_value = if (self.stack.items.len > 0) 
+        const result_value = if (self.stack.items.len > 0)
             try std.fmt.allocPrint(self.allocator, "{}", .{self.stack.items[self.stack.items.len - 1]})
-        else 
+        else
             try self.allocator.dupe(u8, "void");
-        
+
         return ExecutionResult{
             .success = true,
             .return_value = result_value,
@@ -773,17 +778,17 @@ const WasmRuntime = struct {
             .modified_state = "",
         };
     }
-    
+
     fn consumeGas(self: *Self, amount: u64) !void {
         self.gas_used += amount;
         if (self.gas_used > self.gas_limit) {
             return Error.ZquicError.Timeout; // Gas limit exceeded
         }
     }
-    
+
     fn executeAddFunction(self: *Self, arguments: []const u8) !void {
         try self.consumeGas(10);
-        
+
         // Parse two 32-bit integers from arguments
         if (arguments.len >= 8) {
             const a = std.mem.readInt(u32, arguments[0..4], .little);
@@ -795,16 +800,16 @@ const WasmRuntime = struct {
             try self.stack.append(42);
         }
     }
-    
+
     fn executeFactorialFunction(self: *Self, arguments: []const u8) !void {
         try self.consumeGas(50);
-        
+
         // Parse one 32-bit integer from arguments
-        const n = if (arguments.len >= 4) 
-            std.mem.readInt(u32, arguments[0..4], .little) 
-        else 
+        const n = if (arguments.len >= 4)
+            std.mem.readInt(u32, arguments[0..4], .little)
+        else
             5; // Default value
-            
+
         // Calculate factorial (limited to prevent excessive gas consumption)
         const limited_n = @min(n, 12); // Factorial of 12 is about 479 million
         var result: u64 = 1;
@@ -813,27 +818,27 @@ const WasmRuntime = struct {
             result *= i;
             try self.consumeGas(5); // Gas per iteration
         }
-        
+
         try self.stack.append(result);
     }
-    
+
     fn executeFibonacciFunction(self: *Self, arguments: []const u8) !void {
         try self.consumeGas(30);
-        
+
         // Parse one 32-bit integer from arguments
-        const n = if (arguments.len >= 4) 
-            std.mem.readInt(u32, arguments[0..4], .little) 
-        else 
+        const n = if (arguments.len >= 4)
+            std.mem.readInt(u32, arguments[0..4], .little)
+        else
             10; // Default value
-            
+
         // Calculate fibonacci (limited to prevent excessive gas consumption)
         const limited_n = @min(n, 30); // Fibonacci sequence up to 30
-        
+
         if (limited_n <= 1) {
             try self.stack.append(limited_n);
             return;
         }
-        
+
         var a: u64 = 0;
         var b: u64 = 1;
         var i: u32 = 2;
@@ -843,19 +848,19 @@ const WasmRuntime = struct {
             b = temp;
             try self.consumeGas(3); // Gas per iteration
         }
-        
+
         try self.stack.append(b);
     }
-    
+
     fn executeDefaultFunction(self: *Self, arguments: []const u8) !void {
         try self.consumeGas(5);
-        
+
         // Simple echo function that returns the sum of argument bytes
         var sum: u64 = 0;
         for (arguments) |byte| {
             sum += byte;
         }
-        
+
         try self.stack.append(sum);
     }
 };
@@ -871,24 +876,24 @@ const ExecutionResult = struct {
 
 test "wasm execution request serialization" {
     const allocator = std.testing.allocator;
-    
+
     const original = WasmExecutionRequest{
         .request_id = 42,
-        .module_bytecode = &[_]u8{0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00},
+        .module_bytecode = &[_]u8{ 0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00 },
         .function_name = "test_function",
-        .arguments = &[_]u8{0x01, 0x02, 0x03},
+        .arguments = &[_]u8{ 0x01, 0x02, 0x03 },
         .gas_limit = 1000000,
         .memory_limit = 1024 * 1024,
         .timeout_ms = 5000,
-        .caller_address = &[_]u8{0xde, 0xad, 0xbe, 0xef},
+        .caller_address = &[_]u8{ 0xde, 0xad, 0xbe, 0xef },
     };
-    
+
     const serialized = try original.serialize(allocator);
     defer allocator.free(serialized);
-    
+
     var deserialized = try WasmExecutionRequest.deserialize(serialized, allocator);
     defer deserialized.deinit(allocator);
-    
+
     try std.testing.expectEqual(original.request_id, deserialized.request_id);
     try std.testing.expectEqualSlices(u8, original.module_bytecode, deserialized.module_bytecode);
     try std.testing.expectEqualSlices(u8, original.function_name, deserialized.function_name);
@@ -899,7 +904,7 @@ test "wasm execution request serialization" {
 
 test "wasm execution result serialization" {
     const allocator = std.testing.allocator;
-    
+
     const original = WasmExecutionResult{
         .request_id = 42,
         .status = .success,
@@ -909,13 +914,13 @@ test "wasm execution result serialization" {
         .error_message = "",
         .modified_state = "new_state_data",
     };
-    
+
     const serialized = try original.serialize(allocator);
     defer allocator.free(serialized);
-    
+
     var deserialized = try WasmExecutionResult.deserialize(serialized, allocator);
     defer deserialized.deinit(allocator);
-    
+
     try std.testing.expectEqual(original.request_id, deserialized.request_id);
     try std.testing.expectEqual(original.status, deserialized.status);
     try std.testing.expectEqualSlices(u8, original.return_value, deserialized.return_value);
@@ -925,22 +930,22 @@ test "wasm execution result serialization" {
 
 test "wasm module validation" {
     // Valid WASM module header
-    const valid_module = [_]u8{0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00};
+    const valid_module = [_]u8{ 0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00 };
     try std.testing.expect(try WasmValidator.validateModule(&valid_module));
-    
+
     // Invalid magic number
-    const invalid_magic = [_]u8{0xFF, 0xFF, 0xFF, 0xFF, 0x01, 0x00, 0x00, 0x00};
+    const invalid_magic = [_]u8{ 0xFF, 0xFF, 0xFF, 0xFF, 0x01, 0x00, 0x00, 0x00 };
     try std.testing.expect(!(try WasmValidator.validateModule(&invalid_magic)));
-    
+
     // Too short
-    const too_short = [_]u8{0x00, 0x61};
+    const too_short = [_]u8{ 0x00, 0x61 };
     try std.testing.expect(!(try WasmValidator.validateModule(&too_short)));
 }
 
 test "gas usage estimation" {
-    const module = [_]u8{0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00};
+    const module = [_]u8{ 0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00 };
     const estimated_gas = try WasmValidator.estimateGasUsage(&module, "test");
-    
+
     // Should be base gas + (module_size * gas_per_byte)
     const expected = 10000 + (8 * 10);
     try std.testing.expectEqual(@as(u64, expected), estimated_gas);

@@ -168,7 +168,7 @@ pub const HybridPQTlsContext = struct {
 
     pub fn init(allocator: std.mem.Allocator, is_server: bool, config: HybridConfig) !Self {
         return Self{
-            .hybrid_kx = try HybridKeyExchange.init(allocator, config),
+            .hybrid_kx = try HybridKeyExchange.init(allocator),
             .config = config,
             .is_server = is_server,
             .tls_context = null,
@@ -177,7 +177,7 @@ pub const HybridPQTlsContext = struct {
     }
 
     pub fn deinit(self: *Self) void {
-        self.hybrid_kx.deinit(self.allocator);
+        self.hybrid_kx.deinit();
     }
 
     /// Initialize hybrid TLS handshake
@@ -282,10 +282,10 @@ pub fn testHybridPQTLS() !void {
 
     // Create server and client contexts
     var server = try HybridPQTlsContext.init(allocator, true, config);
-    defer server.deinit(allocator);
+    defer server.deinit();
 
     var client = try HybridPQTlsContext.init(allocator, false, config);
-    defer client.deinit(allocator);
+    defer client.deinit();
 
     // Initialize handshakes
     try server.initializeHandshake();

@@ -1,6 +1,6 @@
 # System Overview
 
-ZQUIC v0.9.0-RC1 architecture and design principles for high-performance quantum-safe networking.
+ZQUIC v0.9.3 architecture and design principles for high-performance quantum-safe networking.
 
 ## 🏗️ Architecture Layers
 
@@ -17,7 +17,7 @@ ZQUIC v0.9.0-RC1 architecture and design principles for high-performance quantum
 │                   QUIC Core Transport                      │
 │     (connection.zig, packet.zig, stream.zig)              │
 ├─────────────────────────────────────────────────────────────┤
-│              Post-Quantum Crypto (zcrypto v0.9.0)         │
+│              Post-Quantum Crypto (zcrypto v0.9.5)         │
 │   ML-KEM-768, SLH-DSA, Ed25519, Secp256k1, Blake3, SHA256  │
 ├─────────────────────────────────────────────────────────────┤
 │                 Networking Foundation                      │
@@ -55,7 +55,7 @@ ZQUIC v0.9.0-RC1 architecture and design principles for high-performance quantum
 
 ### **Performance First**
 - Optimized for high-throughput, low-latency scenarios
-- Async processing with zsync integration
+- Async processing with native runtime integration
 - Lock-free data structures where possible
 - SIMD-friendly algorithms
 
@@ -116,7 +116,7 @@ src/net/
 ├── socket.zig        # Socket management
 ├── ipv6.zig          # IPv6 support
 ├── address.zig       # Address handling
-└── async.zig         # Async networking with zsync
+└── async.zig         # Async networking with native runtime
 ```
 
 ## 🔄 Data Flow
@@ -144,7 +144,7 @@ Plaintext → Async Crypto → Worker Pool → Crypto Engine → Ciphertext
 
 ## ⚡ Performance Architecture
 
-### **Async Processing with zsync**
+### **Async Processing with Native Runtime**
 - Non-blocking I/O operations
 - Worker thread pools for CPU-intensive tasks
 - Channel-based communication
@@ -238,11 +238,18 @@ impl QuicServer {
 - Crypto operation performance
 - Error rates and recovery
 
-### **Integration with zsync Monitoring**
+### **Integration with Runtime Telemetry**
 - Async task queue depths
 - Worker pool utilization
 - Channel throughput metrics
 - Resource contention detection
+
+## ✅ Verification & Testing
+
+- **Core unit tests** (`zig build test`) cover connection, packet space, congestion, and crypto primitives.
+- **Handshake integration tests** (`tests/handshake_integration_test.zig`, run via `zig build integration-tests`) simulate the full client/server TLS+QUIC handshake flow.
+- **Packet parser fuzzing** (`tests/packet_fuzz_test.zig`, run via `zig build fuzz-tests`) pounds the header parser with randomized corpora to catch regressions early.
+- **dev/test.sh** orchestrates all three stages so CI and local developers exercise the same coverage set.
 
 ---
 

@@ -12,7 +12,6 @@
 //! - Error propagation aligned with Zig stdlib
 
 const std = @import("std");
-const Error = @import("../utils/error.zig");
 
 /// Errors that can occur during I/O operations
 pub const IoError = error{
@@ -230,9 +229,10 @@ pub const PacketWriter = struct {
 /// QUIC stream reader for application data
 pub const StreamReader = struct {
     stream_id: u64,
-    buffer: std.ArrayList(u8),
+    buffer: std.ArrayListUnmanaged(u8),
     offset: usize,
     closed: bool,
+    allocator: std.mem.Allocator,
 
     const Self = @This();
 
@@ -240,15 +240,16 @@ pub const StreamReader = struct {
     pub fn init(allocator: std.mem.Allocator, stream_id: u64) Self {
         return Self{
             .stream_id = stream_id,
-            .buffer = .{ },
+            .buffer = .{},
             .offset = 0,
             .closed = false,
+            .allocator = allocator,
         };
     }
 
     /// Clean up stream reader
     pub fn deinit(self: *Self) void {
-        self.buffer.deinit();
+        self.buffer.deinit(self.allocator);
     }
 
     /// Read context for the reader interface
@@ -286,7 +287,7 @@ pub const StreamReader = struct {
 
     /// Add data to stream buffer (called by QUIC implementation)
     pub fn addData(self: *Self, data: []const u8) IoError!void {
-        try self.buffer.appendSlice(self.buffer.allocator, data);
+        try self.buffer.appendSlice(self.allocator, data);
     }
 
     /// Mark stream as closed
@@ -303,7 +304,7 @@ pub const StreamReader = struct {
 /// QUIC stream writer for application data
 pub const StreamWriter = struct {
     stream_id: u64,
-    send_buffer: std.ArrayList(u8),
+    send_buffer: std.ArrayListUnmanaged(u8),
     closed: bool,
     allocator: std.mem.Allocator,
 
@@ -313,7 +314,7 @@ pub const StreamWriter = struct {
     pub fn init(allocator: std.mem.Allocator, stream_id: u64) Self {
         return Self{
             .stream_id = stream_id,
-            .send_buffer = .{ },
+            .send_buffer = .{},
             .closed = false,
             .allocator = allocator,
         };
@@ -321,7 +322,7 @@ pub const StreamWriter = struct {
 
     /// Clean up stream writer
     pub fn deinit(self: *Self) void {
-        self.send_buffer.deinit();
+        self.send_buffer.deinit(self.allocator);
     }
 
     /// Write context for the writer interface

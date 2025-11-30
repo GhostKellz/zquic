@@ -12,6 +12,7 @@ pub const DoqServer = @import("doq/server.zig").DoQServer;
 pub const DoqClient = @import("doq/client.zig").DoQClient;
 pub const Message = @import("doq/message.zig");
 pub const DnsMessage = @import("doq/message.zig").DnsMessage;
+pub const DnsHeader = @import("doq/message.zig").DnsHeader;
 pub const DnsRecordType = @import("doq/message.zig").DnsRecordType;
 pub const DnsResponseCode = @import("doq/message.zig").DnsResponseCode;
 pub const DnsQuestion = @import("doq/message.zig").DnsQuestion;

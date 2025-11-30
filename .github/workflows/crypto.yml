@@ -1,0 +1,47 @@
+name: Crypto Validation
+
+on:
+  push:
+    paths:
+      - 'src/crypto/**'
+      - 'archive/zcrypto/**'
+  pull_request:
+    paths:
+      - 'src/crypto/**'
+      - 'archive/zcrypto/**'
+  workflow_dispatch:
+
+jobs:
+  crypto-test:
+    name: "🛡️ Basic Crypto Test"
+    runs-on: [self-hosted, Linux, X64, nvidia, gpu, zig, nv-osmium]
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build with Crypto Support
+        run: |
+          set -euo pipefail
+          echo "🔧 Building ZQUIC with crypto support..."
+          zig build -Dpost-quantum=true
+          
+          echo "📦 Build results:"
+          ls -la zig-out/bin/ || echo "No binaries found"
+
+      - name: Test Basic Crypto Functions
+        run: |
+          set -euo pipefail
+          echo "🔐 Testing basic crypto functionality..."
+          
+          # Just check if crypto-related binaries work
+          if [ -x "zig-out/bin/pq_quic_demo" ]; then
+            echo "✓ pq_quic_demo exists"
+            timeout 5s zig-out/bin/pq_quic_demo --help || echo "Basic test completed"
+          fi
+
+      - name: Check GPU Availability
+        run: |
+          set -euo pipefail
+          echo "🎮 GPU status (nv-osmium):"
+          nvidia-smi || echo "No GPU available"

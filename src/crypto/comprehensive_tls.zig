@@ -186,11 +186,11 @@ pub const TransportParameters = struct {
     version_information: ?[]const u32 = null,
 
     // Custom extensions
-    custom_parameters: std.HashMap(u64, []const u8, std.hash_map.AutoContext(u64), std.hash_map.default_max_load_percentage),
+    custom_parameters: std.AutoHashMapUnmanaged(u64, []const u8),
 
-    pub fn init(allocator: std.mem.Allocator) TransportParameters {
+    pub fn init() TransportParameters {
         return TransportParameters{
-            .custom_parameters = std.HashMap(u64, []const u8, std.hash_map.AutoContext(u64), std.hash_map.default_max_load_percentage).init(allocator),
+            .custom_parameters = .{},
         };
     }
 
@@ -301,19 +301,19 @@ pub const CryptoKeys = struct {
         defer self.allocator.free(full_label);
 
         // Create HkdfLabel structure
-        var hkdf_label = std.ArrayList(u8).init(self.allocator);
-        defer hkdf_label.deinit();
+        var hkdf_label = std.ArrayListUnmanaged(u8){};
+        defer hkdf_label.deinit(self.allocator);
 
         // Length (2 bytes)
-        try hkdf_label.writer().writeIntBig(u16, @intCast(out.len));
+        try hkdf_label.writer(self.allocator).writeIntBig(u16, @intCast(out.len));
 
         // Label length and label
-        try hkdf_label.writer().writeIntBig(u8, @intCast(full_label.len));
-        try hkdf_label.writer().writeAll(full_label);
+        try hkdf_label.writer(self.allocator).writeIntBig(u8, @intCast(full_label.len));
+        try hkdf_label.writer(self.allocator).writeAll(full_label);
 
         // Context length and context
-        try hkdf_label.writer().writeIntBig(u8, @intCast(context.len));
-        try hkdf_label.writer().writeAll(context);
+        try hkdf_label.writer(self.allocator).writeIntBig(u8, @intCast(context.len));
+        try hkdf_label.writer(self.allocator).writeAll(context);
 
         // Perform HKDF-Expand using ZCrypto
         switch (self.hash_algorithm) {
@@ -353,7 +353,7 @@ pub const Certificate = struct {
     issuer: []const u8,
     not_before: i64,
     not_after: i64,
-    extensions: std.HashMap([]const u8, []const u8, std.hash_map.StringContext, std.hash_map.default_max_load_percentage),
+    extensions: std.StringHashMapUnmanaged([]const u8),
 
     allocator: std.mem.Allocator,
 
@@ -371,7 +371,7 @@ pub const Certificate = struct {
             .issuer = &[_]u8{},
             .not_before = 0,
             .not_after = std.math.maxInt(i64),
-            .extensions = std.HashMap([]const u8, []const u8, std.hash_map.StringContext, std.hash_map.default_max_load_percentage).init(allocator),
+            .extensions = .{},
             .allocator = allocator,
         };
     }
@@ -384,7 +384,7 @@ pub const Certificate = struct {
             self.allocator.free(entry.key_ptr.*);
             self.allocator.free(entry.value_ptr.*);
         }
-        self.extensions.deinit();
+        self.extensions.deinit(self.allocator);
     }
 
     pub fn verify(self: *const Self, signature: []const u8, message: []const u8) !bool {
@@ -489,8 +489,8 @@ pub const ComprehensiveTlsContext = struct {
     zero_rtt_keys: ?CryptoKeys,
 
     // Certificate chain
-    certificate_chain: std.ArrayList(Certificate),
-    peer_certificate_chain: std.ArrayList(Certificate),
+    certificate_chain: std.ArrayListUnmanaged(Certificate),
+    peer_certificate_chain: std.ArrayListUnmanaged(Certificate),
 
     // Session resumption
     session_ticket: ?SessionTicket,
@@ -501,7 +501,7 @@ pub const ComprehensiveTlsContext = struct {
     early_data_accepted: bool,
 
     // Handshake transcript
-    handshake_transcript: std.ArrayList(u8),
+    handshake_transcript: std.ArrayListUnmanaged(u8),
 
     // Key exchange materials
     private_key: ?[]const u8,
@@ -526,19 +526,19 @@ pub const ComprehensiveTlsContext = struct {
             .cipher_suite = .tls_aes_128_gcm_sha256,
             .signature_algorithm = .ed25519,
             .key_exchange_algorithm = .x25519,
-            .transport_params = TransportParameters{},
+            .transport_params = TransportParameters.init(),
             .peer_transport_params = null,
             .initial_keys = null,
             .handshake_keys = null,
             .application_keys = null,
             .zero_rtt_keys = null,
-            .certificate_chain = .{ },
-            .peer_certificate_chain = .{ },
+            .certificate_chain = .{},
+            .peer_certificate_chain = .{},
             .session_ticket = null,
             .resumption_secret = null,
             .max_early_data_size = 0,
             .early_data_accepted = false,
-            .handshake_transcript = .{ },
+            .handshake_transcript = .{},
             .private_key = null,
             .public_key = null,
             .peer_public_key = null,
@@ -559,25 +559,25 @@ pub const ComprehensiveTlsContext = struct {
         }
 
         // Clean up cryptographic keys
-        if (self.initial_keys) |*keys| keys.deinit(self.allocator);
-        if (self.handshake_keys) |*keys| keys.deinit(self.allocator);
-        if (self.application_keys) |*keys| keys.deinit(self.allocator);
-        if (self.zero_rtt_keys) |*keys| keys.deinit(self.allocator);
+        if (self.initial_keys) |*keys| keys.deinit();
+        if (self.handshake_keys) |*keys| keys.deinit();
+        if (self.application_keys) |*keys| keys.deinit();
+        if (self.zero_rtt_keys) |*keys| keys.deinit();
 
         // Clean up certificates
         for (self.certificate_chain.items) |*cert| {
-            cert.deinit(self.allocator);
+            cert.deinit();
         }
-        self.certificate_chain.deinit();
+        self.certificate_chain.deinit(self.allocator);
 
         for (self.peer_certificate_chain.items) |*cert| {
-            cert.deinit(self.allocator);
+            cert.deinit();
         }
-        self.peer_certificate_chain.deinit();
+        self.peer_certificate_chain.deinit(self.allocator);
 
         // Clean up session ticket
         if (self.session_ticket) |*ticket| {
-            ticket.deinit(self.allocator);
+            ticket.deinit();
         }
 
         // Clean up sensitive key material
@@ -622,7 +622,7 @@ pub const ComprehensiveTlsContext = struct {
             self.allocator.free(secret);
         }
 
-        self.handshake_transcript.deinit();
+        self.handshake_transcript.deinit(self.allocator);
     }
 
     /// Initialize connection for client
@@ -692,7 +692,7 @@ pub const ComprehensiveTlsContext = struct {
         // Add to handshake transcript
         // Update handshake transcript
         try self.handshake_transcript.append(self.allocator, message_type);
-        try self.handshake_transcript.writer().writeIntBig(u24, @intCast(message.len));
+        try self.handshake_transcript.writer(self.allocator).writeIntBig(u24, @intCast(message.len));
         try self.handshake_transcript.appendSlice(self.allocator, message);
 
         switch (message_type) {

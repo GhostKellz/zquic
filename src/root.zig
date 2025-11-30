@@ -1,4 +1,4 @@
-//! ZQUIC — Modular QUIC/HTTP3 Library for Zig v0.9.2
+//! ZQUIC — Modular QUIC/HTTP3 Library for Zig v0.9.0
 //!
 //! zquic is a high-performance, modular QUIC (HTTP/3 transport layer)
 //! implementation written in pure Zig. Designed for flexibility:
@@ -105,7 +105,6 @@ pub const build_config = struct {
     pub const services_enabled = build_options.enable_services;
     pub const post_quantum_enabled = build_options.enable_post_quantum;
     pub const monitoring_enabled = build_options.enable_monitoring;
-    pub const async_zsync_enabled = build_options.enable_async_zsync;
 
     pub fn printConfig() void {
         std.debug.print("zquic v{s} build configuration:\n", .{version});
@@ -115,7 +114,6 @@ pub const build_config = struct {
         std.debug.print("  Services: {}\n", .{services_enabled});
         std.debug.print("  Post-Quantum: {}\n", .{post_quantum_enabled});
         std.debug.print("  Monitoring: {}\n", .{monitoring_enabled});
-        std.debug.print("  Async (zsync): {}\n", .{async_zsync_enabled});
     }
 };
 
@@ -145,7 +143,6 @@ pub fn getEnabledFeatures() []const []const u8 {
         if (build_options.enable_services) list = list ++ &[_][]const u8{"services"};
         if (build_options.enable_post_quantum) list = list ++ &[_][]const u8{"post-quantum"};
         if (build_options.enable_monitoring) list = list ++ &[_][]const u8{"monitoring"};
-        if (build_options.enable_async_zsync) list = list ++ &[_][]const u8{"async-zsync"};
         break :blk list;
     };
     return features;

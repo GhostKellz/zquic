@@ -1,6 +1,6 @@
 # Quick Start Guide
 
-Get up and running with ZQUIC v0.9.0-RC1 in minutes!
+Get up and running with ZQUIC v0.9.3 in minutes!
 
 ## 🚀 Installation
 
@@ -34,13 +34,14 @@ cd zquic
 # Build all working binaries
 zig build
 
-# Working binaries ready for production:
-./zig-out/bin/client              # QUIC client with post-quantum TLS
-./zig-out/bin/server              # QUIC server with async processing
-./zig-out/bin/doq_echo_server     # DNS-over-QUIC echo server
-./zig-out/bin/http3_server        # HTTP/3 server with QPACK
-./zig-out/bin/crypto_trading_demo # High-frequency trading demo
-./zig-out/bin/pq_quic_demo       # Post-quantum cryptography demo
+# Installed binaries (feature flags permitting):
+./zig-out/bin/zquic               # Core demo / toolkit
+./zig-out/bin/zquic-server        # Core QUIC server
+./zig-out/bin/zquic-client        # QUIC client with PQ TLS
+./zig-out/bin/zquic-http3-server  # HTTP/3 server with QPACK
+./zig-out/bin/zquic-doq-server    # DNS-over-QUIC demo
+./zig-out/bin/zquic-pq-demo       # Post-quantum crypto showcase
+./zig-out/bin/crypto-trading-demo # High-frequency trading demo (services flag)
 ```
 
 ## 📦 Build Options
@@ -92,10 +93,10 @@ pub fn main() !void {
 
 fn handleHome(req: *zquic.Http3.Request, res: *zquic.Http3.Response) !void {
     _ = req; // unused
-    try res.json(.{ 
-        .message = "Hello, QUIC World!", 
-        .version = "v0.9.0-RC1",
-        .quantum_safe = true 
+    try res.json(.{
+        .message = "Hello, QUIC World!",
+        .version = "v0.9.3",
+        .quantum_safe = true,
     });
 }
 ```
@@ -105,6 +106,33 @@ Build and run:
 zig build-exe hello_quic.zig --deps zquic
 ./hello_quic
 ```
+
+### Adding Middleware
+
+`Http3Server.use` wires middleware into the router chain, so you can run security filters, logging, or static file handlers before your route logic:
+
+```zig
+const NextFn = zquic.Http3.NextFn;
+
+const auth = struct {
+    fn middleware(req: *zquic.Http3.Request, res: *zquic.Http3.Response, next: NextFn) !void {
+        if (req.getHeader("authorization") == null) {
+            res.setStatus(.unauthorized);
+            try res.text("auth required");
+            return; // short-circuits the handler
+        }
+        try next(req, res);
+    }
+}.middleware;
+
+try server.use(zquic.Http3.Middleware.LoggingMiddleware.init(allocator, .info).middleware());
+try server.use(auth);
+try server.router.getWithMiddleware("/secure", handleSecure, &.{auth});
+```
+
+Route-specific middleware can be attached with `router.getWithMiddleware` (or `addRouteMiddleware` later) to keep per-route logic isolated.
+
+> Middleware chain guarantee: the router now routes unmatched requests through the global middleware stack before responding with 404, so logging/auth/static handlers still execute even when no route matches.
 
 ## 🌐 Your First QUIC Client
 
@@ -178,4 +206,24 @@ const config = zquic.Http3.ServerConfig{
 
 ---
 
-**🎉 Congratulations!** You now have a quantum-safe QUIC server running with ZQUIC v0.9.0-RC1!
+## 🧪 Recommended Workflow
+
+```bash
+# Format, build, and run tests the way CI does
+./dev/fmt.sh
+./dev/test.sh   # zig build test + integration-tests + fuzz-tests
+```
+
+**🎉 Congratulations!** You now have a quantum-safe QUIC server running with ZQUIC v0.9.3!
+
+## ⚙️ Zig 0.16 Migration Notes
+
+Zig 0.16.0-dev introduced a few notable changes that ZQUIC now follows:
+
+- `std.ArrayList` is unmanaged by default. Always pass an allocator to `append`, `appendSlice`, `resize`, and `deinit` (see `archive/ZIG_API_CHANGES.md`).
+- Writer helpers like `.writer()` were removed for unmanaged lists—use helper functions that call `append`/`appendSlice` instead.
+- Time utilities prefer `std.time.Instant`/`std.time.Timer` over `nanoTimestamp`.
+- `std.io` moved under `std.Io`; swap legacy `std.io.Writer`/`Reader` helpers for the new `std.Io.Writer`/`Reader` interfaces and adopt `takeInt`, `takeByte`, `readSliceAll`, etc.
+- Temporary directories/files now use `std.testing.tmpDir` (no allocator argument) and the new `std.fs.Dir.writeFile(.{ .data = ..., .flags = .{} })` options struct.
+
+If you are upgrading existing code, start by reviewing `archive/ZIG_API_CHANGES.md` for a comprehensive checklist before rebuilding with `zig build test`.

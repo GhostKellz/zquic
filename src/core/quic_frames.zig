@@ -4,6 +4,7 @@
 //! Including the missing frames: PING, RESET_STREAM, STOP_SENDING, and others
 
 const std = @import("std");
+const Io = std.Io;
 const Error = @import("../utils/error.zig");
 
 /// QUIC frame types as defined in RFC 9000
@@ -39,23 +40,23 @@ pub const FrameType = enum(u64) {
     connection_close = 0x1c,
     connection_close_app = 0x1d,
     handshake_done = 0x1e,
-    
+
     // Extension frames
     datagram = 0x30,
     datagram_len = 0x31,
-    
+
     pub fn isStreamFrame(self: FrameType) bool {
         const type_val = @intFromEnum(self);
         return type_val >= 0x08 and type_val <= 0x0f;
     }
-    
+
     pub fn isAckEliciting(self: FrameType) bool {
         return switch (self) {
             .padding, .ack, .ack_ecn, .connection_close, .connection_close_app => false,
             else => true,
         };
     }
-    
+
     pub fn toString(self: FrameType) []const u8 {
         return switch (self) {
             .padding => "PADDING",
@@ -109,21 +110,21 @@ pub fn writeVarint(writer: anytype, value: u64) !void {
 }
 
 pub fn readVarint(reader: anytype) !u64 {
-    const first_byte = try reader.readByte();
+    const first_byte = try reader.takeByte();
     const prefix = first_byte >> 6;
-    
+
     switch (prefix) {
         0 => return first_byte & 0x3F,
         1 => {
-            const second_byte = try reader.readByte();
+            const second_byte = try reader.takeByte();
             return (@as(u64, first_byte & 0x3F) << 8) | second_byte;
         },
         2 => {
-            const remaining = try reader.readInt(u24, .big);
+            const remaining = try reader.takeInt(u24, .big);
             return (@as(u64, first_byte & 0x3F) << 24) | remaining;
         },
         3 => {
-            const remaining = try reader.readInt(u56, .big);
+            const remaining = try reader.takeInt(u56, .big);
             return (@as(u64, first_byte & 0x3F) << 56) | remaining;
         },
         else => unreachable,
@@ -165,15 +166,15 @@ pub const Frame = union(FrameType) {
     handshake_done: HandshakeDoneFrame,
     datagram: DatagramFrame,
     datagram_len: DatagramFrame,
-    
+
     pub fn getType(self: Frame) FrameType {
         return @as(FrameType, self);
     }
-    
+
     pub fn isAckEliciting(self: Frame) bool {
         return self.getType().isAckEliciting();
     }
-    
+
     pub fn serialize(self: Frame, writer: anytype) !void {
         switch (self) {
             .padding => |frame| try frame.serialize(writer),
@@ -201,10 +202,10 @@ pub const Frame = union(FrameType) {
             .datagram, .datagram_len => |frame| try frame.serialize(writer),
         }
     }
-    
+
     pub fn parse(reader: anytype, allocator: std.mem.Allocator) !Frame {
         const frame_type_value = try readVarint(reader);
-        
+
         return switch (frame_type_value) {
             0x00 => Frame{ .padding = try PaddingFrame.parse(reader, allocator) },
             0x01 => Frame{ .ping = try PingFrame.parse(reader, allocator) },
@@ -243,18 +244,18 @@ pub const Frame = union(FrameType) {
 /// PADDING frame
 pub const PaddingFrame = struct {
     length: usize,
-    
+
     pub fn init(length: usize) PaddingFrame {
         return PaddingFrame{ .length = length };
     }
-    
+
     pub fn serialize(self: PaddingFrame, writer: anytype) !void {
         var i: usize = 0;
         while (i < self.length) : (i += 1) {
             try writer.writeByte(0x00);
         }
     }
-    
+
     pub fn parse(reader: anytype, allocator: std.mem.Allocator) !PaddingFrame {
         _ = reader;
         _ = allocator;
@@ -267,12 +268,12 @@ pub const PingFrame = struct {
     pub fn init() PingFrame {
         return PingFrame{};
     }
-    
+
     pub fn serialize(self: PingFrame, writer: anytype) !void {
         _ = self;
         try writeVarint(writer, 0x01);
     }
-    
+
     pub fn parse(reader: anytype, allocator: std.mem.Allocator) !PingFrame {
         _ = reader;
         _ = allocator;
@@ -287,12 +288,12 @@ pub const AckFrame = struct {
     ack_range_count: u64,
     first_ack_range: u64,
     ack_ranges: []AckRange,
-    
+
     pub const AckRange = struct {
         gap: u64,
         ack_range_length: u64,
     };
-    
+
     pub fn init(allocator: std.mem.Allocator, largest_acknowledged: u64, ack_delay: u64, first_ack_range: u64) !AckFrame {
         return AckFrame{
             .largest_acknowledged = largest_acknowledged,
@@ -302,36 +303,36 @@ pub const AckFrame = struct {
             .ack_ranges = try allocator.alloc(AckRange, 0),
         };
     }
-    
+
     pub fn deinit(self: AckFrame, allocator: std.mem.Allocator) void {
         allocator.free(self.ack_ranges);
     }
-    
+
     pub fn serialize(self: AckFrame, writer: anytype) !void {
         try writeVarint(writer, 0x02);
         try writeVarint(writer, self.largest_acknowledged);
         try writeVarint(writer, self.ack_delay);
         try writeVarint(writer, self.ack_range_count);
         try writeVarint(writer, self.first_ack_range);
-        
+
         for (self.ack_ranges) |range| {
             try writeVarint(writer, range.gap);
             try writeVarint(writer, range.ack_range_length);
         }
     }
-    
+
     pub fn parse(reader: anytype, allocator: std.mem.Allocator) !AckFrame {
         const largest_acknowledged = try readVarint(reader);
         const ack_delay = try readVarint(reader);
         const ack_range_count = try readVarint(reader);
         const first_ack_range = try readVarint(reader);
-        
+
         const ack_ranges = try allocator.alloc(AckRange, ack_range_count);
         for (ack_ranges) |*range| {
             range.gap = try readVarint(reader);
             range.ack_range_length = try readVarint(reader);
         }
-        
+
         return AckFrame{
             .largest_acknowledged = largest_acknowledged,
             .ack_delay = ack_delay,
@@ -348,7 +349,7 @@ pub const AckEcnFrame = struct {
     ect0_count: u64,
     ect1_count: u64,
     ecn_ce_count: u64,
-    
+
     pub fn init(ack_frame: AckFrame, ect0_count: u64, ect1_count: u64, ecn_ce_count: u64) AckEcnFrame {
         return AckEcnFrame{
             .ack_frame = ack_frame,
@@ -357,30 +358,30 @@ pub const AckEcnFrame = struct {
             .ecn_ce_count = ecn_ce_count,
         };
     }
-    
+
     pub fn serialize(self: AckEcnFrame, writer: anytype) !void {
         try writeVarint(writer, 0x03);
         try writeVarint(writer, self.ack_frame.largest_acknowledged);
         try writeVarint(writer, self.ack_frame.ack_delay);
         try writeVarint(writer, self.ack_frame.ack_range_count);
         try writeVarint(writer, self.ack_frame.first_ack_range);
-        
+
         for (self.ack_frame.ack_ranges) |range| {
             try writeVarint(writer, range.gap);
             try writeVarint(writer, range.ack_range_length);
         }
-        
+
         try writeVarint(writer, self.ect0_count);
         try writeVarint(writer, self.ect1_count);
         try writeVarint(writer, self.ecn_ce_count);
     }
-    
+
     pub fn parse(reader: anytype, allocator: std.mem.Allocator) !AckEcnFrame {
         const ack_frame = try AckFrame.parse(reader, allocator);
         const ect0_count = try readVarint(reader);
         const ect1_count = try readVarint(reader);
         const ecn_ce_count = try readVarint(reader);
-        
+
         return AckEcnFrame{
             .ack_frame = ack_frame,
             .ect0_count = ect0_count,
@@ -395,7 +396,7 @@ pub const ResetStreamFrame = struct {
     stream_id: u64,
     application_error_code: u64,
     final_size: u64,
-    
+
     pub fn init(stream_id: u64, application_error_code: u64, final_size: u64) ResetStreamFrame {
         return ResetStreamFrame{
             .stream_id = stream_id,
@@ -403,20 +404,20 @@ pub const ResetStreamFrame = struct {
             .final_size = final_size,
         };
     }
-    
+
     pub fn serialize(self: ResetStreamFrame, writer: anytype) !void {
         try writeVarint(writer, 0x04);
         try writeVarint(writer, self.stream_id);
         try writeVarint(writer, self.application_error_code);
         try writeVarint(writer, self.final_size);
     }
-    
+
     pub fn parse(reader: anytype, allocator: std.mem.Allocator) !ResetStreamFrame {
         _ = allocator;
         const stream_id = try readVarint(reader);
         const application_error_code = try readVarint(reader);
         const final_size = try readVarint(reader);
-        
+
         return ResetStreamFrame{
             .stream_id = stream_id,
             .application_error_code = application_error_code,
@@ -429,25 +430,25 @@ pub const ResetStreamFrame = struct {
 pub const StopSendingFrame = struct {
     stream_id: u64,
     application_error_code: u64,
-    
+
     pub fn init(stream_id: u64, application_error_code: u64) StopSendingFrame {
         return StopSendingFrame{
             .stream_id = stream_id,
             .application_error_code = application_error_code,
         };
     }
-    
+
     pub fn serialize(self: StopSendingFrame, writer: anytype) !void {
         try writeVarint(writer, 0x05);
         try writeVarint(writer, self.stream_id);
         try writeVarint(writer, self.application_error_code);
     }
-    
+
     pub fn parse(reader: anytype, allocator: std.mem.Allocator) !StopSendingFrame {
         _ = allocator;
         const stream_id = try readVarint(reader);
         const application_error_code = try readVarint(reader);
-        
+
         return StopSendingFrame{
             .stream_id = stream_id,
             .application_error_code = application_error_code,
@@ -459,28 +460,28 @@ pub const StopSendingFrame = struct {
 pub const CryptoFrame = struct {
     offset: u64,
     data: []const u8,
-    
+
     pub fn init(offset: u64, data: []const u8) CryptoFrame {
         return CryptoFrame{
             .offset = offset,
             .data = data,
         };
     }
-    
+
     pub fn serialize(self: CryptoFrame, writer: anytype) !void {
         try writeVarint(writer, 0x06);
         try writeVarint(writer, self.offset);
         try writeVarint(writer, self.data.len);
         try writer.writeAll(self.data);
     }
-    
+
     pub fn parse(reader: anytype, allocator: std.mem.Allocator) !CryptoFrame {
         const offset = try readVarint(reader);
         const length = try readVarint(reader);
-        
+
         const data = try allocator.alloc(u8, length);
-        _ = try reader.readAll(data);
-        
+        try reader.readSliceAll(data);
+
         return CryptoFrame{
             .offset = offset,
             .data = data,
@@ -491,22 +492,22 @@ pub const CryptoFrame = struct {
 /// NEW_TOKEN frame
 pub const NewTokenFrame = struct {
     token: []const u8,
-    
+
     pub fn init(token: []const u8) NewTokenFrame {
         return NewTokenFrame{ .token = token };
     }
-    
+
     pub fn serialize(self: NewTokenFrame, writer: anytype) !void {
         try writeVarint(writer, 0x07);
         try writeVarint(writer, self.token.len);
         try writer.writeAll(self.token);
     }
-    
+
     pub fn parse(reader: anytype, allocator: std.mem.Allocator) !NewTokenFrame {
         const token_length = try readVarint(reader);
         const token = try allocator.alloc(u8, token_length);
-        _ = try reader.readAll(token);
-        
+        try reader.readSliceAll(token);
+
         return NewTokenFrame{ .token = token };
     }
 };
@@ -519,7 +520,7 @@ pub const StreamFrame = struct {
     fin: bool,
     has_offset: bool,
     has_length: bool,
-    
+
     pub fn init(stream_id: u64, offset: u64, data: []const u8, fin: bool, has_offset: bool, has_length: bool) StreamFrame {
         return StreamFrame{
             .stream_id = stream_id,
@@ -530,41 +531,41 @@ pub const StreamFrame = struct {
             .has_length = has_length,
         };
     }
-    
+
     pub fn serialize(self: StreamFrame, writer: anytype) !void {
         var frame_type: u8 = 0x08;
         if (self.fin) frame_type |= 0x01;
         if (self.has_length) frame_type |= 0x02;
         if (self.has_offset) frame_type |= 0x04;
-        
+
         try writeVarint(writer, frame_type);
         try writeVarint(writer, self.stream_id);
-        
+
         if (self.has_offset) {
             try writeVarint(writer, self.offset);
         }
-        
+
         if (self.has_length) {
             try writeVarint(writer, self.data.len);
         }
-        
+
         try writer.writeAll(self.data);
     }
-    
+
     pub fn parse(reader: anytype, allocator: std.mem.Allocator, frame_type: u64) !StreamFrame {
         const fin = (frame_type & 0x01) != 0;
         const has_length = (frame_type & 0x02) != 0;
         const has_offset = (frame_type & 0x04) != 0;
-        
+
         const stream_id = try readVarint(reader);
-        
+
         const offset = if (has_offset) try readVarint(reader) else 0;
-        
+
         const data_length = if (has_length) try readVarint(reader) else 0;
-        
+
         const data = try allocator.alloc(u8, data_length);
-        _ = try reader.readAll(data);
-        
+        try reader.readSliceAll(data);
+
         return StreamFrame{
             .stream_id = stream_id,
             .offset = offset,
@@ -579,16 +580,16 @@ pub const StreamFrame = struct {
 /// MAX_DATA frame
 pub const MaxDataFrame = struct {
     maximum_data: u64,
-    
+
     pub fn init(maximum_data: u64) MaxDataFrame {
         return MaxDataFrame{ .maximum_data = maximum_data };
     }
-    
+
     pub fn serialize(self: MaxDataFrame, writer: anytype) !void {
         try writeVarint(writer, 0x10);
         try writeVarint(writer, self.maximum_data);
     }
-    
+
     pub fn parse(reader: anytype, allocator: std.mem.Allocator) !MaxDataFrame {
         _ = allocator;
         const maximum_data = try readVarint(reader);
@@ -600,25 +601,25 @@ pub const MaxDataFrame = struct {
 pub const MaxStreamDataFrame = struct {
     stream_id: u64,
     maximum_stream_data: u64,
-    
+
     pub fn init(stream_id: u64, maximum_stream_data: u64) MaxStreamDataFrame {
         return MaxStreamDataFrame{
             .stream_id = stream_id,
             .maximum_stream_data = maximum_stream_data,
         };
     }
-    
+
     pub fn serialize(self: MaxStreamDataFrame, writer: anytype) !void {
         try writeVarint(writer, 0x11);
         try writeVarint(writer, self.stream_id);
         try writeVarint(writer, self.maximum_stream_data);
     }
-    
+
     pub fn parse(reader: anytype, allocator: std.mem.Allocator) !MaxStreamDataFrame {
         _ = allocator;
         const stream_id = try readVarint(reader);
         const maximum_stream_data = try readVarint(reader);
-        
+
         return MaxStreamDataFrame{
             .stream_id = stream_id,
             .maximum_stream_data = maximum_stream_data,
@@ -630,20 +631,20 @@ pub const MaxStreamDataFrame = struct {
 pub const MaxStreamsFrame = struct {
     maximum_streams: u64,
     bidirectional: bool,
-    
+
     pub fn init(maximum_streams: u64, bidirectional: bool) MaxStreamsFrame {
         return MaxStreamsFrame{
             .maximum_streams = maximum_streams,
             .bidirectional = bidirectional,
         };
     }
-    
+
     pub fn serialize(self: MaxStreamsFrame, writer: anytype) !void {
         const frame_type: u64 = if (self.bidirectional) 0x12 else 0x13;
         try writeVarint(writer, frame_type);
         try writeVarint(writer, self.maximum_streams);
     }
-    
+
     pub fn parse(reader: anytype, allocator: std.mem.Allocator) !MaxStreamsFrame {
         _ = allocator;
         const maximum_streams = try readVarint(reader);
@@ -657,16 +658,16 @@ pub const MaxStreamsFrame = struct {
 /// DATA_BLOCKED frame
 pub const DataBlockedFrame = struct {
     maximum_data: u64,
-    
+
     pub fn init(maximum_data: u64) DataBlockedFrame {
         return DataBlockedFrame{ .maximum_data = maximum_data };
     }
-    
+
     pub fn serialize(self: DataBlockedFrame, writer: anytype) !void {
         try writeVarint(writer, 0x14);
         try writeVarint(writer, self.maximum_data);
     }
-    
+
     pub fn parse(reader: anytype, allocator: std.mem.Allocator) !DataBlockedFrame {
         _ = allocator;
         const maximum_data = try readVarint(reader);
@@ -678,25 +679,25 @@ pub const DataBlockedFrame = struct {
 pub const StreamDataBlockedFrame = struct {
     stream_id: u64,
     maximum_stream_data: u64,
-    
+
     pub fn init(stream_id: u64, maximum_stream_data: u64) StreamDataBlockedFrame {
         return StreamDataBlockedFrame{
             .stream_id = stream_id,
             .maximum_stream_data = maximum_stream_data,
         };
     }
-    
+
     pub fn serialize(self: StreamDataBlockedFrame, writer: anytype) !void {
         try writeVarint(writer, 0x15);
         try writeVarint(writer, self.stream_id);
         try writeVarint(writer, self.maximum_stream_data);
     }
-    
+
     pub fn parse(reader: anytype, allocator: std.mem.Allocator) !StreamDataBlockedFrame {
         _ = allocator;
         const stream_id = try readVarint(reader);
         const maximum_stream_data = try readVarint(reader);
-        
+
         return StreamDataBlockedFrame{
             .stream_id = stream_id,
             .maximum_stream_data = maximum_stream_data,
@@ -708,20 +709,20 @@ pub const StreamDataBlockedFrame = struct {
 pub const StreamsBlockedFrame = struct {
     maximum_streams: u64,
     bidirectional: bool,
-    
+
     pub fn init(maximum_streams: u64, bidirectional: bool) StreamsBlockedFrame {
         return StreamsBlockedFrame{
             .maximum_streams = maximum_streams,
             .bidirectional = bidirectional,
         };
     }
-    
+
     pub fn serialize(self: StreamsBlockedFrame, writer: anytype) !void {
         const frame_type: u64 = if (self.bidirectional) 0x16 else 0x17;
         try writeVarint(writer, frame_type);
         try writeVarint(writer, self.maximum_streams);
     }
-    
+
     pub fn parse(reader: anytype, allocator: std.mem.Allocator) !StreamsBlockedFrame {
         _ = allocator;
         const maximum_streams = try readVarint(reader);
@@ -738,7 +739,7 @@ pub const NewConnectionIdFrame = struct {
     retire_prior_to: u64,
     connection_id: []const u8,
     stateless_reset_token: [16]u8,
-    
+
     pub fn init(sequence_number: u64, retire_prior_to: u64, connection_id: []const u8, stateless_reset_token: [16]u8) NewConnectionIdFrame {
         return NewConnectionIdFrame{
             .sequence_number = sequence_number,
@@ -747,7 +748,7 @@ pub const NewConnectionIdFrame = struct {
             .stateless_reset_token = stateless_reset_token,
         };
     }
-    
+
     pub fn serialize(self: NewConnectionIdFrame, writer: anytype) !void {
         try writeVarint(writer, 0x18);
         try writeVarint(writer, self.sequence_number);
@@ -756,18 +757,18 @@ pub const NewConnectionIdFrame = struct {
         try writer.writeAll(self.connection_id);
         try writer.writeAll(&self.stateless_reset_token);
     }
-    
+
     pub fn parse(reader: anytype, allocator: std.mem.Allocator) !NewConnectionIdFrame {
         const sequence_number = try readVarint(reader);
         const retire_prior_to = try readVarint(reader);
-        const connection_id_length = try reader.readByte();
-        
+        const connection_id_length = try reader.takeByte();
+
         const connection_id = try allocator.alloc(u8, connection_id_length);
-        _ = try reader.readAll(connection_id);
-        
+        try reader.readSliceAll(connection_id);
+
         var stateless_reset_token: [16]u8 = undefined;
-        _ = try reader.readAll(&stateless_reset_token);
-        
+        try reader.readSliceAll(&stateless_reset_token);
+
         return NewConnectionIdFrame{
             .sequence_number = sequence_number,
             .retire_prior_to = retire_prior_to,
@@ -780,16 +781,16 @@ pub const NewConnectionIdFrame = struct {
 /// RETIRE_CONNECTION_ID frame
 pub const RetireConnectionIdFrame = struct {
     sequence_number: u64,
-    
+
     pub fn init(sequence_number: u64) RetireConnectionIdFrame {
         return RetireConnectionIdFrame{ .sequence_number = sequence_number };
     }
-    
+
     pub fn serialize(self: RetireConnectionIdFrame, writer: anytype) !void {
         try writeVarint(writer, 0x19);
         try writeVarint(writer, self.sequence_number);
     }
-    
+
     pub fn parse(reader: anytype, allocator: std.mem.Allocator) !RetireConnectionIdFrame {
         _ = allocator;
         const sequence_number = try readVarint(reader);
@@ -800,20 +801,20 @@ pub const RetireConnectionIdFrame = struct {
 /// PATH_CHALLENGE frame
 pub const PathChallengeFrame = struct {
     data: [8]u8,
-    
+
     pub fn init(data: [8]u8) PathChallengeFrame {
         return PathChallengeFrame{ .data = data };
     }
-    
+
     pub fn serialize(self: PathChallengeFrame, writer: anytype) !void {
         try writeVarint(writer, 0x1a);
         try writer.writeAll(&self.data);
     }
-    
+
     pub fn parse(reader: anytype, allocator: std.mem.Allocator) !PathChallengeFrame {
         _ = allocator;
         var data: [8]u8 = undefined;
-        _ = try reader.readAll(&data);
+        try reader.readSliceAll(&data);
         return PathChallengeFrame{ .data = data };
     }
 };
@@ -821,20 +822,20 @@ pub const PathChallengeFrame = struct {
 /// PATH_RESPONSE frame
 pub const PathResponseFrame = struct {
     data: [8]u8,
-    
+
     pub fn init(data: [8]u8) PathResponseFrame {
         return PathResponseFrame{ .data = data };
     }
-    
+
     pub fn serialize(self: PathResponseFrame, writer: anytype) !void {
         try writeVarint(writer, 0x1b);
         try writer.writeAll(&self.data);
     }
-    
+
     pub fn parse(reader: anytype, allocator: std.mem.Allocator) !PathResponseFrame {
         _ = allocator;
         var data: [8]u8 = undefined;
-        _ = try reader.readAll(&data);
+        try reader.readSliceAll(&data);
         return PathResponseFrame{ .data = data };
     }
 };
@@ -844,7 +845,7 @@ pub const ConnectionCloseFrame = struct {
     error_code: u64,
     frame_type: u64,
     reason_phrase: []const u8,
-    
+
     pub fn init(error_code: u64, frame_type: u64, reason_phrase: []const u8) ConnectionCloseFrame {
         return ConnectionCloseFrame{
             .error_code = error_code,
@@ -852,7 +853,7 @@ pub const ConnectionCloseFrame = struct {
             .reason_phrase = reason_phrase,
         };
     }
-    
+
     pub fn serialize(self: ConnectionCloseFrame, writer: anytype) !void {
         try writeVarint(writer, 0x1c);
         try writeVarint(writer, self.error_code);
@@ -860,15 +861,15 @@ pub const ConnectionCloseFrame = struct {
         try writeVarint(writer, self.reason_phrase.len);
         try writer.writeAll(self.reason_phrase);
     }
-    
+
     pub fn parse(reader: anytype, allocator: std.mem.Allocator) !ConnectionCloseFrame {
         const error_code = try readVarint(reader);
         const frame_type = try readVarint(reader);
         const reason_phrase_length = try readVarint(reader);
-        
+
         const reason_phrase = try allocator.alloc(u8, reason_phrase_length);
-        _ = try reader.readAll(reason_phrase);
-        
+        try reader.readSliceAll(reason_phrase);
+
         return ConnectionCloseFrame{
             .error_code = error_code,
             .frame_type = frame_type,
@@ -881,28 +882,28 @@ pub const ConnectionCloseFrame = struct {
 pub const ConnectionCloseAppFrame = struct {
     error_code: u64,
     reason_phrase: []const u8,
-    
+
     pub fn init(error_code: u64, reason_phrase: []const u8) ConnectionCloseAppFrame {
         return ConnectionCloseAppFrame{
             .error_code = error_code,
             .reason_phrase = reason_phrase,
         };
     }
-    
+
     pub fn serialize(self: ConnectionCloseAppFrame, writer: anytype) !void {
         try writeVarint(writer, 0x1d);
         try writeVarint(writer, self.error_code);
         try writeVarint(writer, self.reason_phrase.len);
         try writer.writeAll(self.reason_phrase);
     }
-    
+
     pub fn parse(reader: anytype, allocator: std.mem.Allocator) !ConnectionCloseAppFrame {
         const error_code = try readVarint(reader);
         const reason_phrase_length = try readVarint(reader);
-        
+
         const reason_phrase = try allocator.alloc(u8, reason_phrase_length);
-        _ = try reader.readAll(reason_phrase);
-        
+        try reader.readSliceAll(reason_phrase);
+
         return ConnectionCloseAppFrame{
             .error_code = error_code,
             .reason_phrase = reason_phrase,
@@ -915,12 +916,12 @@ pub const HandshakeDoneFrame = struct {
     pub fn init() HandshakeDoneFrame {
         return HandshakeDoneFrame{};
     }
-    
+
     pub fn serialize(self: HandshakeDoneFrame, writer: anytype) !void {
         _ = self;
         try writeVarint(writer, 0x1e);
     }
-    
+
     pub fn parse(reader: anytype, allocator: std.mem.Allocator) !HandshakeDoneFrame {
         _ = reader;
         _ = allocator;
@@ -932,31 +933,31 @@ pub const HandshakeDoneFrame = struct {
 pub const DatagramFrame = struct {
     data: []const u8,
     has_length: bool,
-    
+
     pub fn init(data: []const u8, has_length: bool) DatagramFrame {
         return DatagramFrame{
             .data = data,
             .has_length = has_length,
         };
     }
-    
+
     pub fn serialize(self: DatagramFrame, writer: anytype) !void {
         const frame_type: u64 = if (self.has_length) 0x31 else 0x30;
         try writeVarint(writer, frame_type);
-        
+
         if (self.has_length) {
             try writeVarint(writer, self.data.len);
         }
-        
+
         try writer.writeAll(self.data);
     }
-    
+
     pub fn parse(reader: anytype, allocator: std.mem.Allocator, has_length: bool) !DatagramFrame {
         const data_length = if (has_length) try readVarint(reader) else 0;
-        
+
         const data = try allocator.alloc(u8, data_length);
-        _ = try reader.readAll(data);
-        
+        try reader.readSliceAll(data);
+
         return DatagramFrame{
             .data = data,
             .has_length = has_length,
@@ -967,44 +968,53 @@ pub const DatagramFrame = struct {
 /// Frame parser for handling incoming frames
 pub const FrameParser = struct {
     allocator: std.mem.Allocator,
-    buffer: std.ArrayList(u8),
-    
+    // Use a fixed buffer for serialization - max QUIC packet is ~1200 bytes for initial
+    // but we allow up to max UDP datagram size
+    serialize_buffer: [65535]u8 = undefined,
+
     pub fn init(allocator: std.mem.Allocator) FrameParser {
         return FrameParser{
             .allocator = allocator,
-            .buffer = .{ },
         };
     }
-    
+
     pub fn deinit(self: *FrameParser) void {
-        self.buffer.deinit(allocator);
+        _ = self;
+        // No heap allocations to free
     }
-    
+
     pub fn parseFrames(self: *FrameParser, data: []const u8) ![]Frame {
-        var frames = .{ };
-        var reader = std.io.fixedBufferStream(data);
-        
-        while (reader.pos < data.len) {
-            const frame = Frame.parse(reader.reader(), self.allocator) catch |err| {
+        var frames: std.ArrayListUnmanaged(Frame) = .{};
+        errdefer frames.deinit(self.allocator);
+
+        var reader = Io.Reader.fixed(data);
+
+        while (true) {
+            const frame = Frame.parse(&reader, self.allocator) catch |err| {
                 switch (err) {
                     error.EndOfStream => break,
                     else => return err,
                 }
             };
-            try frames.append(allocator, frame);
+            try frames.append(self.allocator, frame);
+
+            if (reader.seek >= reader.end) break;
         }
-        
-        return frames.toOwnedSlice();
+
+        return frames.toOwnedSlice(self.allocator);
     }
-    
+
     pub fn serializeFrames(self: *FrameParser, frames: []const Frame) ![]u8 {
-        self.buffer.clearRetainingCapacity();
-        var writer = self.buffer.writer();
-        
+        var writer = Io.Writer.fixed(&self.serialize_buffer);
+
         for (frames) |frame| {
-            try frame.serialize(writer);
+            try frame.serialize(&writer);
         }
-        
-        return self.buffer.toOwnedSlice();
+
+        // Return a copy of the serialized data
+        const written = Io.Writer.buffered(&writer);
+        const result = try self.allocator.alloc(u8, written.len);
+        @memcpy(result, written);
+        return result;
     }
 };

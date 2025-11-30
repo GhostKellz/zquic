@@ -105,28 +105,17 @@ pub const AntiReplayWindow = struct {
 
 /// Zero-RTT session manager
 pub const ZeroRttSessionManager = struct {
-    sessions: std.HashMap([16]u8, SessionTicket, ArrayHashContext, std.hash_map.default_max_load_percentage),
+    sessions: std.AutoArrayHashMapUnmanaged([16]u8, SessionTicket),
     anti_replay: AntiReplayWindow,
     max_sessions: u32,
     ticket_lifetime: i64, // seconds
     allocator: std.mem.Allocator,
 
     const Self = @This();
-    const ArrayHashContext = struct {
-        pub fn hash(self: @This(), key: [16]u8) u64 {
-            _ = self;
-            return std.hash_map.hashString(std.mem.asBytes(&key));
-        }
-
-        pub fn eql(self: @This(), a: [16]u8, b: [16]u8) bool {
-            _ = self;
-            return std.mem.eql(u8, &a, &b);
-        }
-    };
 
     pub fn init(allocator: std.mem.Allocator) !Self {
         return Self{
-            .sessions = std.HashMap([16]u8, SessionTicket, ArrayHashContext, std.hash_map.default_max_load_percentage).init(allocator),
+            .sessions = .{},
             .anti_replay = try AntiReplayWindow.init(allocator, AntiReplayWindow.DEFAULT_WINDOW_SIZE),
             .max_sessions = 10000, // High limit for crypto trading
             .ticket_lifetime = 86400, // 24 hours
@@ -190,18 +179,18 @@ pub const ZeroRttSessionManager = struct {
 
     /// Cleanup expired sessions
     pub fn cleanupExpiredSessions(self: *Self) !void {
-        var expired_tickets = std.ArrayList([16]u8).init(self.allocator);
-        defer expired_tickets.deinit();
+        var expired_tickets = std.ArrayListUnmanaged([16]u8){};
+        defer expired_tickets.deinit(self.allocator);
 
         var iterator = self.sessions.iterator();
         while (iterator.next()) |entry| {
             if (entry.value_ptr.isExpired()) {
-                try expired_tickets.append(entry.key_ptr.*);
+                try expired_tickets.append(self.allocator, entry.key_ptr.*);
             }
         }
 
         for (expired_tickets.items) |ticket_id| {
-            _ = self.sessions.remove(ticket_id);
+            _ = self.sessions.swapRemove(ticket_id);
         }
 
         std.log.info("Cleaned up {} expired 0-RTT sessions", .{expired_tickets.items.len});
@@ -222,7 +211,7 @@ pub const ZeroRttContext = struct {
     early_data_accepted: bool,
     early_data_rejected: bool,
     session_ticket: ?SessionTicket,
-    early_data_buffer: std.ArrayList(u8),
+    early_data_buffer: std.ArrayListUnmanaged(u8),
     max_early_data: u32,
     early_data_sent: u32,
     allocator: std.mem.Allocator,
@@ -235,7 +224,7 @@ pub const ZeroRttContext = struct {
             .early_data_accepted = false,
             .early_data_rejected = false,
             .session_ticket = null,
-            .early_data_buffer = .{ },
+            .early_data_buffer = .{},
             .max_early_data = 16384,
             .early_data_sent = 0,
             .allocator = allocator,
@@ -243,7 +232,7 @@ pub const ZeroRttContext = struct {
     }
 
     pub fn deinit(self: *Self) void {
-        self.early_data_buffer.deinit();
+        self.early_data_buffer.deinit(self.allocator);
         if (self.session_ticket) |*ticket| {
             secureZero(std.mem.asBytes(&ticket.resumption_secret));
         }
@@ -268,7 +257,7 @@ pub const ZeroRttContext = struct {
             return false; // Would exceed limit
         }
 
-        try self.early_data_buffer.appendSlice(data);
+        try self.early_data_buffer.appendSlice(self.allocator, data);
         self.early_data_sent += @as(u32, @intCast(data.len));
 
         return true;
@@ -314,7 +303,7 @@ pub fn testZeroRtt() !void {
 
     // Create session manager
     var session_mgr = try ZeroRttSessionManager.init(allocator);
-    defer session_mgr.deinit(allocator);
+    defer session_mgr.deinit();
 
     // Create resumption secret
     var resumption_secret: [32]u8 = undefined;
@@ -324,8 +313,8 @@ pub fn testZeroRtt() !void {
     const ticket = try session_mgr.createSessionTicket(resumption_secret);
 
     // Create 0-RTT context
-    var zero_rtt = try ZeroRttContext.init(allocator);
-    defer zero_rtt.deinit(allocator);
+    var zero_rtt = ZeroRttContext.init(allocator);
+    defer zero_rtt.deinit();
 
     // Start early data
     try zero_rtt.startEarlyData(ticket);

@@ -276,7 +276,7 @@ pub const SendBuffer = struct {
         acked: bool,
     };
 
-    segments: std.ArrayList(Segment),
+    segments: std.ArrayListUnmanaged(Segment),
     next_offset: u64,
     allocator: std.mem.Allocator,
 
@@ -285,7 +285,7 @@ pub const SendBuffer = struct {
     /// Initialize send buffer
     pub fn init(allocator: std.mem.Allocator) Self {
         return Self{
-            .segments = .{ },
+            .segments = .{},
             .next_offset = 0,
             .allocator = allocator,
         };
@@ -296,7 +296,7 @@ pub const SendBuffer = struct {
         for (self.segments.items) |segment| {
             self.allocator.free(segment.data);
         }
-        self.segments.deinit();
+        self.segments.deinit(self.allocator);
     }
 
     /// Add data to send buffer
@@ -325,8 +325,8 @@ pub const SendBuffer = struct {
 
     /// Get unacknowledged segments for retransmission
     pub fn getUnacked(self: *Self, allocator: std.mem.Allocator) ![]Segment {
-        var unacked = .{ };
-        defer unacked.deinit();
+        var unacked: std.ArrayListUnmanaged(Segment) = .{};
+        defer unacked.deinit(allocator);
 
         for (self.segments.items) |segment| {
             if (!segment.acked) {
@@ -375,7 +375,7 @@ pub const RecvBuffer = struct {
         data: []u8,
     };
 
-    chunks: std.ArrayList(Chunk),
+    chunks: std.ArrayListUnmanaged(Chunk),
     next_expected: u64,
     allocator: std.mem.Allocator,
 
@@ -384,7 +384,7 @@ pub const RecvBuffer = struct {
     /// Initialize receive buffer
     pub fn init(allocator: std.mem.Allocator) Self {
         return Self{
-            .chunks = .{ },
+            .chunks = .{},
             .next_expected = 0,
             .allocator = allocator,
         };
@@ -395,7 +395,7 @@ pub const RecvBuffer = struct {
         for (self.chunks.items) |chunk| {
             self.allocator.free(chunk.data);
         }
-        self.chunks.deinit();
+        self.chunks.deinit(self.allocator);
     }
 
     /// Add data chunk at specific offset

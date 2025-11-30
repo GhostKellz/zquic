@@ -3,8 +3,10 @@
 //! HTTP response structures and generation for HTTP/3
 
 const std = @import("std");
+const Io = std.Io;
 const Error = @import("../utils/error.zig");
 const HeaderField = @import("qpack.zig").HeaderField;
+const QpackEncoder = @import("qpack.zig").QpackEncoder;
 const Frame = @import("frame.zig");
 
 /// HTTP status codes
@@ -101,14 +103,14 @@ pub const StatusCode = enum(u16) {
 
 /// Response headers management
 pub const ResponseHeaders = struct {
-    fields: std.ArrayList(HeaderField),
+    fields: std.ArrayListUnmanaged(HeaderField),
     allocator: std.mem.Allocator,
 
     const Self = @This();
 
     pub fn init(allocator: std.mem.Allocator) Self {
         return Self{
-            .fields = std.ArrayList(HeaderField){},
+            .fields = .{},
             .allocator = allocator,
         };
     }
@@ -169,8 +171,7 @@ pub const ResponseHeaders = struct {
 
     pub fn setCookie(self: *Self, name: []const u8, value: []const u8, options: CookieOptions) !void {
         var cookie_buffer: [512]u8 = undefined;
-        var fbs = std.io.fixedBufferStream(&cookie_buffer);
-        const writer = fbs.writer();
+        var writer = Io.Writer.fixed(&cookie_buffer);
 
         try writer.print("{s}={s}", .{ name, value });
 
@@ -198,7 +199,7 @@ pub const ResponseHeaders = struct {
             try writer.print("; SameSite={s}", .{same_site});
         }
 
-        const cookie_str = fbs.getWritten();
+        const cookie_str = Io.Writer.buffered(&writer);
         try self.add("set-cookie", cookie_str);
     }
 
@@ -223,7 +224,7 @@ pub const CookieOptions = struct {
 pub const Response = struct {
     status: StatusCode,
     headers: ResponseHeaders,
-    body: std.ArrayList(u8),
+    body: std.ArrayListUnmanaged(u8),
     allocator: std.mem.Allocator,
     stream_id: u64,
     is_sent: bool = false,
@@ -234,7 +235,7 @@ pub const Response = struct {
         return Self{
             .status = .ok,
             .headers = ResponseHeaders.init(allocator),
-            .body = std.ArrayList(u8){},
+            .body = .{},
             .allocator = allocator,
             .stream_id = stream_id,
         };
@@ -276,7 +277,7 @@ pub const Response = struct {
     pub fn json(self: *Self, data: anytype) !void {
         _ = data; // Suppress unused parameter warning
         try self.headers.setContentType("application/json");
-        
+
         // Simple workaround - convert to string literal
         const json_str = "{}";
         try self.body.appendSlice(self.allocator, json_str);
@@ -302,7 +303,12 @@ pub const Response = struct {
 
     /// Send file content (basic implementation)
     pub fn sendFile(self: *Self, file_path: []const u8) !void {
-        const file = std.fs.cwd().openFile(file_path, .{}) catch |err| switch (err) {
+        const file = if (std.fs.path.isAbsolute(file_path))
+            std.fs.openFileAbsolute(file_path, .{})
+        else
+            std.fs.cwd().openFile(file_path, .{});
+
+        const file_handle = file catch |err| switch (err) {
             error.FileNotFound => {
                 self.setStatus(.not_found);
                 try self.text("File not found");
@@ -310,18 +316,18 @@ pub const Response = struct {
             },
             else => return err,
         };
-        defer file.close();
+        defer file_handle.close();
 
         // Determine content type from extension
         const content_type = getContentTypeFromPath(file_path);
         try self.headers.setContentType(content_type);
 
         // Read and write file content
-        const file_size = try file.getEndPos();
+        const file_size = try file_handle.getEndPos();
         try self.body.resize(self.allocator, file_size);
         var total_read: usize = 0;
         while (total_read < file_size) {
-            const bytes_read = try file.read(self.body.items[total_read..]);
+            const bytes_read = try file_handle.read(self.body.items[total_read..]);
             if (bytes_read == 0) break;
             total_read += bytes_read;
         }
@@ -340,7 +346,7 @@ pub const Response = struct {
 
     /// Generate HTTP/3 frames for this response
     pub fn generateFrames(self: *Self, allocator: std.mem.Allocator) ![]Frame.Frame {
-        var frames = std.ArrayList(Frame.Frame){};
+        var frames: std.ArrayListUnmanaged(Frame.Frame) = .{};
 
         // Set content-length if not already set
         if (self.headers.get("content-length") == null) {
@@ -348,7 +354,7 @@ pub const Response = struct {
         }
 
         // Add pseudo-headers for HTTP/3
-        var all_headers = std.ArrayList(HeaderField){};
+        var all_headers: std.ArrayListUnmanaged(HeaderField) = .{};
         defer {
             for (all_headers.items) |*field| {
                 field.deinit();
@@ -366,14 +372,13 @@ pub const Response = struct {
             try all_headers.append(allocator, try HeaderField.init(allocator, field.name, field.value));
         }
 
-        // Create HEADERS frame (simplified - would need QPACK encoding)
-        const headers_payload = try allocator.alloc(u8, all_headers.items.len * 32); // Simplified
-        defer allocator.free(headers_payload);
+        var qpack_encoder = QpackEncoder.init();
+        defer qpack_encoder.deinit();
+        const headers_payload = try qpack_encoder.encode(all_headers.items, allocator);
 
-        // TODO: Properly encode headers with QPACK
         const headers_frame = Frame.Frame{
             .frame_type = .headers,
-            .payload = try allocator.dupe(u8, headers_payload[0..0]), // Empty for now
+            .payload = headers_payload,
         };
         try frames.append(allocator, headers_frame);
 

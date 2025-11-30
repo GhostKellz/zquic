@@ -60,14 +60,22 @@ pub const CryptoKeys = struct {
 
     /// Derive keys from a secret (simplified implementation)
     pub fn deriveFromSecret(secret: []const u8) Error.ZquicError!Self {
-        if (secret.len < 32) {
+        if (secret.len == 0) {
             return Error.ZquicError.CryptoError;
         }
 
         var keys = Self.init();
 
-        // Copy secret (in real implementation, would use HKDF)
-        @memcpy(keys.secret[0..@min(32, secret.len)], secret[0..@min(32, secret.len)]);
+        // Expand short secrets via SHA-256 so we always have 32 bytes to work with
+        var seed: [32]u8 = undefined;
+        if (secret.len < seed.len) {
+            var hasher = std.crypto.hash.sha2.Sha256.init(.{});
+            hasher.update(secret);
+            hasher.final(&seed);
+        } else {
+            @memcpy(seed[0..seed.len], secret[0..seed.len]);
+        }
+        @memcpy(&keys.secret, &seed);
 
         // Derive other keys using a simple hash (not cryptographically secure)
         var hasher = std.crypto.hash.sha2.Sha256.init(.{});

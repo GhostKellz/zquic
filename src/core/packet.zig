@@ -3,6 +3,7 @@
 //! Implements QUIC packet format according to RFC 9000
 
 const std = @import("std");
+const Io = std.Io;
 const Error = @import("../utils/error.zig");
 
 /// QUIC packet types
@@ -95,7 +96,9 @@ pub const PacketHeader = struct {
         }
 
         // Parse version
-        const version = std.mem.readInt(u32, data[pos .. pos + 4], .big);
+        const version_slice = data[pos .. pos + 4];
+        const version_bytes: *const [4]u8 = @ptrCast(version_slice.ptr);
+        const version = std.mem.readInt(u32, version_bytes, .big);
         pos += 4;
 
         // Parse destination connection ID length
@@ -236,7 +239,7 @@ test "connection id creation and comparison" {
 
 test "packet header serialization" {
     var buffer: [256]u8 = undefined;
-    var stream = std.io.fixedBufferStream(&buffer);
+    var writer = Io.Writer.fixed(&buffer);
 
     const dest_cid = try ConnectionId.init(&[_]u8{ 1, 2, 3, 4 });
     const src_cid = try ConnectionId.init(&[_]u8{ 5, 6, 7, 8 });
@@ -251,6 +254,6 @@ test "packet header serialization" {
         .token = null,
     };
 
-    try header.serialize(stream.writer());
-    try std.testing.expect(stream.pos > 0);
+    try header.serialize(&writer);
+    try std.testing.expect(Io.Writer.buffered(&writer).len > 0);
 }

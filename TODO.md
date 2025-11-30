@@ -1,94 +1,99 @@
-# ZQUIC v0.9.0 RC1 - COMPLETED ✅
+# ZQUIC Roadmap
 
-**Status**: Production Ready for Ghost Ecosystem Integration  
-**Completion Date**: September 24, 2025  
-**Version**: v0.9.0-RC1
+## Phase 1: Test Infrastructure
+- [x] Create unit tests for `src/core/` modules
+- [x] Create unit tests for `src/crypto/` modules
+- [x] Create integration tests for client/server handshake
+- [x] Add fuzz testing for packet parsing
+- [ ] Set up test coverage reporting
+- [x] Create `dev/test.sh` script for running all tests
 
-## ✅ COMPLETED - High Priority (RC1 Blockers)
+## Phase 2: Documentation Cleanup
+- [ ] Update README.md (remove stale badges, fix asset paths)
+- [ ] Audit and update `docs/` content for accuracy
+- [ ] Add inline doc comments to all public APIs
+- [ ] Create CONTRIBUTING.md with development guidelines
+- [ ] Document build flags and configuration options
 
-### Build Fixes ✅
-- [x] Fixed all ArrayList API errors for Zig 0.16 compatibility
-- [x] Fixed all allocator parameter issues across codebase
-- [x] Resolved TLS compilation errors (comprehensive_tls.zig, hybrid_pq_tls.zig)
-- [x] Fixed zero_rtt_resumption.zig compilation errors
-- [x] All 6+ build targets compile successfully with zero errors
-- [x] Rebuilt async_crypto.zig with full zsync integration
+### Phase 2 Execution Plan
+1. **README refresh:** remove obsolete build badges, link new integration tests, and consolidate feature matrix once HTTP/3/services notes are stable.
+2. **Docs audit sweep:** prioritize `docs/getting-started/` and `docs/architecture/` folders, logging mismatches in a tracking table before touching long-tail guides.
+3. **Inline API comments:** start with `src/core/` and `src/http3/` exports, using succinct `///` doc comments only for public symbols surfaced via `src/root.zig`.
+4. **CONTRIBUTING revamp:** merge existing CONTRIBUTING.md stubs with `dev/` script explanations so contributor workflow (format/test/build) is explicit.
+5. **Build flag reference:** extend `docs/getting-started/build-config.md` with a table covering `-Dhttp3`, `-Dservices`, `-Dpost-quantum`, etc., noting default values and related tests.
 
-### API Refactoring ✅
-- [x] Extracted packet number space logic to src/core/packet_space.zig
-- [x] Created recovery.zig module for loss detection & congestion control
-- [x] Implemented crypto.zig interface for AEAD/HP operations
-- [x] Created io.zig module for Reader/Writer glue
-- [x] Created buffers.zig module for ring buffers with explicit lifecycle
-- [x] Created errors.zig with central error sets and proper propagation
+## Phase 3: Error Handling Audit
+- [ ] Audit all error paths for proper cleanup
+- [ ] Ensure no resource leaks on error conditions
+- [ ] Add error context/tracing for debugging
+- [ ] Standardize error types across modules
+- [ ] Add proper error logging hooks
 
-### Public API Implementation ✅
-- [x] Modular architecture with clean core/ separation
-- [x] Working binaries: client, server, doq_echo_server, http3_server, crypto_trading_demo, pq_quic_demo
-- [x] Proper Config patterns with allocator management
-- [x] Event-driven architecture with connection/stream events
-- [x] Explicit deinit methods for all public types
+## Phase 4: Memory Safety
+- [ ] Audit all allocator usage patterns
+- [ ] Add memory leak detection in debug builds
+- [ ] Verify all `deinit()` paths are called
+- [ ] Add arena allocators where appropriate
+- [ ] Profile memory usage under load
 
-## 🚀 NEXT PHASE - Post-RC1 Enhancements
+## Phase 5: Performance Optimization
+- [ ] Profile hot paths with `zig build -Doptimize=ReleaseFast`
+- [ ] Optimize packet serialization/parsing
+- [ ] Reduce allocations in critical paths
+- [ ] Add zero-copy receive path
+- [ ] Benchmark against quinn (Rust QUIC)
+- [ ] Create `benchmarks/` directory with reproducible benchmarks
 
-### Immediate Priorities (Next Developer)
-- [ ] Performance optimization and benchmarking
-- [ ] Extended testing suite and golden trace validation
-- [ ] Documentation expansion in docs/ directory
-- [ ] Ghost ecosystem integration patterns
+## Phase 6: Protocol Compliance
+- [ ] Run against QUIC interop test suite
+- [ ] Verify RFC 9000 compliance (QUIC transport)
+- [ ] Verify RFC 9001 compliance (QUIC TLS)
+- [ ] Verify RFC 9002 compliance (loss detection)
+- [ ] Verify RFC 9114 compliance (HTTP/3)
+- [ ] Fix any compliance gaps found
 
-### Feature Integration (Future)
-- [x] Post-quantum crypto support via zcrypto ✅
-- [ ] Advanced DoQ DNS message parsing
-- [ ] Enhanced HTTP/3 QPACK optimization
-- [ ] VPN router performance tuning
-- [ ] Real-time monitoring dashboards
+## Phase 7: Security Hardening
+- [ ] Security audit of crypto implementations
+- [ ] Add constant-time comparisons where needed
+- [ ] Audit for timing side channels
+- [ ] Add rate limiting for connection attempts
+- [ ] Implement address validation tokens
+- [ ] Add amplification attack mitigations
 
-### Testing & Validation (Future)
-- [ ] Comprehensive fuzz testing implementation
-- [ ] Performance regression testing
-- [ ] Multi-platform compatibility testing
-- [ ] Security audit and penetration testing
+## Phase 8: Production Readiness
+- [ ] Add graceful shutdown handling
+- [ ] Implement connection draining
+- [ ] Add health check endpoints
+- [ ] Create production deployment guide
+- [ ] Add metrics export (Prometheus format)
+- [ ] Stress test with 10K+ concurrent connections
 
-## 🎯 Optimization Opportunities (Future)
-- [ ] Implement zero-copy stream operations using advanced zsync patterns
-- [ ] Add connection pooling for HTTP/3 with intelligent load balancing
-- [ ] SIMD acceleration for crypto operations (leverage zcrypto capabilities)
-- [ ] Memory pool optimization for high-frequency allocations
+## Phase 9: API Stabilization
+- [ ] Review and finalize public API surface
+- [ ] Add deprecation warnings for any breaking changes
+- [ ] Document API stability guarantees
+- [ ] Create migration guide from v0.x to v1.0
+- [ ] Freeze public API for v1.0
 
-## 🌟 Extended Features (Future)
-- [ ] WebTransport support for modern web applications
-- [ ] QUIC datagram extension for low-latency applications
-- [ ] Connection migration support for mobile/dynamic networks
-- [ ] Multi-version QUIC support (v1, v2 when available)
-
-## ✅ COMPLETED - Quality Assurance
-
-### Error Handling ✅
-- [x] Consistent error sets across all modules
-- [x] Proper error propagation in async code paths
-- [x] Comprehensive error context for debugging
-
-### Memory Management ✅
-- [x] All allocations use passed-in allocator pattern
-- [x] Every allocation paired with corresponding deinit
-- [x] Clean memory management in all error paths
-
-### Async Patterns ✅
-- [x] Standardized async function signatures with zsync
-- [x] Proper resource cleanup in async operations
-- [x] Integrated timeout support via zsync features
-
-## ✅ FINAL VALIDATION CHECKLIST - PASSED
-
-- [x] **All build targets compile without errors**
-- [x] **Core functionality validated through working binaries**
-- [x] **Memory management audit completed**
-- [x] **Async patterns standardized**
-- [x] **Modular architecture implemented**
-- [x] **API consistency achieved**
-- [x] **Production readiness confirmed**
+## Phase 10: Release v1.0.0
+- [ ] Final code review and cleanup
+- [ ] Update version to 1.0.0
+- [ ] Write release notes
+- [ ] Tag release
+- [ ] Publish to Zig package index
 
 ---
 
-**ZQUIC v0.9.0-RC1 is COMPLETE and ready for Ghost ecosystem deployment!** 🔮
+## Current Status: v0.9.3
+
+**Completed:**
+- [x] Zig 0.16.0-dev compatibility
+- [x] Clean build (6 binaries, zero errors)
+- [x] Modular architecture (core, crypto, http3, doq, vpn, services)
+- [x] Post-quantum crypto integration via zcrypto
+- [x] Local dev scripts in `dev/`
+- [x] Internal async runtime (zsync fully removed)
+
+**Known Issues:**
+- Need service-level integration tests under `tests/` (DoQ remaining; HTTP/3 + services covered)
+- CI workflows disabled; re-enable GitHub Actions for regression coverage

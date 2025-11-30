@@ -1,7 +1,7 @@
 //! ZQUIC Build Script - Modular QUIC Library for Zig
 //!
-//! Supports fine-grained zcrypto feature selection for optimized builds:
-//! - Core QUIC + zsync: Always included (~1.5MB)
+//! Supports fine-grained feature selection for optimized builds:
+//! - Core QUIC: Always included (~1.5MB)
 //! - HTTP/3: Web server support (+0.5MB)
 //! - DoQ: DNS-over-QUIC (+0.3MB)
 //! - Services: GhostBridge/Wraith (+1.5MB)
@@ -9,12 +9,10 @@
 //! - Post-Quantum: zcrypto PQ features (+1.5MB)
 //! - Monitoring: Performance tracking (+0.2MB)
 //!
-//! The real size savings come from zcrypto modularity:
-//!
 //! Examples:
 //!   zig build                              # Common features (HTTP/3, DoQ, PQ)
 //!   zig build -Dpost-quantum=false        # Disable PQ crypto (-1.5MB)
-//!   zig build -Dvpn=false -Dservices=false # Minimal zcrypto features
+//!   zig build -Dvpn=false -Dservices=false # Minimal features
 //!   zig build -Dservices=true -Dvpn=true  # Full enterprise build
 
 const std = @import("std");
@@ -33,7 +31,6 @@ pub fn build(b: *std.Build) !void {
     const enable_services = b.option(bool, "services", "Enable GhostBridge/Wraith services") orelse false;
     const enable_post_quantum = b.option(bool, "post-quantum", "Enable post-quantum QUIC") orelse true;
     const enable_monitoring = b.option(bool, "monitoring", "Enable performance monitoring") orelse false;
-    // Note: zsync is always enabled - modularity focuses on zcrypto features
     const enable_examples = b.option(bool, "examples", "Build example executables") orelse true;
 
     // ============================================================================
@@ -47,13 +44,6 @@ pub fn build(b: *std.Build) !void {
         // Pass our feature flags to zcrypto
         .@"post-quantum" = enable_post_quantum,
         .vpn = enable_vpn,
-        .async = true, // zsync always enabled
-    });
-
-    // zsync dependency (always enabled - high performance async runtime)
-    const zsync_dep = b.dependency("zsync", .{
-        .target = target,
-        .optimize = optimize,
     });
 
     // ============================================================================
@@ -68,7 +58,6 @@ pub fn build(b: *std.Build) !void {
     build_options.addOption(bool, "enable_services", enable_services);
     build_options.addOption(bool, "enable_post_quantum", enable_post_quantum);
     build_options.addOption(bool, "enable_monitoring", enable_monitoring);
-    build_options.addOption(bool, "enable_async_zsync", true); // zsync always enabled
 
     const mod = b.addModule("zquic", .{
         .root_source_file = b.path("src/root.zig"),
@@ -76,7 +65,6 @@ pub fn build(b: *std.Build) !void {
         .imports = &.{
             .{ .name = "build_options", .module = build_options.createModule() },
             .{ .name = "zcrypto", .module = zcrypto_dep.module("zcrypto") },
-            .{ .name = "zsync", .module = zsync_dep.module("zsync") },
         },
     });
 
@@ -275,9 +263,94 @@ pub fn build(b: *std.Build) !void {
     });
     const run_exe_tests = b.addRunArtifact(exe_tests);
 
+    const handshake_test_module = b.createModule(.{
+        .root_source_file = b.path("tests/handshake_integration_test.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "zquic", .module = mod },
+        },
+    });
+    const handshake_tests = b.addTest(.{
+        .root_module = handshake_test_module,
+    });
+    const run_handshake_tests = b.addRunArtifact(handshake_tests);
+
+    const fuzz_test_module = b.createModule(.{
+        .root_source_file = b.path("tests/packet_fuzz_test.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "zquic", .module = mod },
+        },
+    });
+    const fuzz_tests = b.addTest(.{
+        .root_module = fuzz_test_module,
+    });
+    const run_fuzz_tests = b.addRunArtifact(fuzz_tests);
+
+    const integration_step = b.step("integration-tests", "Run integration tests");
+    integration_step.dependOn(&run_handshake_tests.step);
+
+    const fuzz_step = b.step("fuzz-tests", "Run packet parsing fuzz tests");
+    fuzz_step.dependOn(&run_fuzz_tests.step);
+
     const test_step = b.step("test", "Run library tests");
     test_step.dependOn(&run_mod_tests.step);
     test_step.dependOn(&run_exe_tests.step);
+    test_step.dependOn(&run_handshake_tests.step);
+    test_step.dependOn(&run_fuzz_tests.step);
+
+    if (enable_http3) {
+        const http3_test_module = b.createModule(.{
+            .root_source_file = b.path("tests/http3_integration_test.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{
+                .{ .name = "zquic", .module = mod },
+            },
+        });
+        const http3_tests = b.addTest(.{
+            .root_module = http3_test_module,
+        });
+        const run_http3_tests = b.addRunArtifact(http3_tests);
+        integration_step.dependOn(&run_http3_tests.step);
+        test_step.dependOn(&run_http3_tests.step);
+    }
+
+    if (enable_doq) {
+        const doq_test_module = b.createModule(.{
+            .root_source_file = b.path("tests/doq_integration_test.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{
+                .{ .name = "zquic", .module = mod },
+            },
+        });
+        const doq_tests = b.addTest(.{
+            .root_module = doq_test_module,
+        });
+        const run_doq_tests = b.addRunArtifact(doq_tests);
+        integration_step.dependOn(&run_doq_tests.step);
+        test_step.dependOn(&run_doq_tests.step);
+    }
+
+    if (enable_services) {
+        const services_test_module = b.createModule(.{
+            .root_source_file = b.path("tests/services_integration_test.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{
+                .{ .name = "zquic", .module = mod },
+            },
+        });
+        const services_tests = b.addTest(.{
+            .root_module = services_test_module,
+        });
+        const run_services_tests = b.addRunArtifact(services_tests);
+        integration_step.dependOn(&run_services_tests.step);
+        test_step.dependOn(&run_services_tests.step);
+    }
 
     // ============================================================================
     // DOCUMENTATION

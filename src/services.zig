@@ -4,14 +4,33 @@
 //! Only included when the 'services' feature is enabled.
 
 const std = @import("std");
-const zquic_core = @import("zquic_core");
-const zcrypto = @import("zcrypto");
+const ghostbridge_mod = @import("services/ghostbridge.zig");
+const wraith_mod = @import("services/wraith.zig");
+const cns_mod = @import("services/cns_resolver.zig");
+const zvm_mod = @import("services/zvm_integration.zig");
 
 // Re-export service functionality
-pub const GhostBridge = @import("services/ghostbridge.zig").GhostBridge;
-pub const Wraith = @import("services/wraith.zig").Wraith;
-pub const GhostBridgeConfig = @import("services/ghostbridge.zig").GhostBridgeConfig;
-pub const WraithConfig = @import("services/wraith.zig").WraithConfig;
+pub const GhostBridge = ghostbridge_mod.GhostBridge;
+pub const GhostBridgeConfig = ghostbridge_mod.GhostBridgeConfig;
+pub const BridgeStats = ghostbridge_mod.BridgeStats;
+pub const ServiceRegistration = ghostbridge_mod.ServiceRegistration;
+
+pub const Wraith = wraith_mod.WraithProxy;
+pub const WraithProxy = wraith_mod.WraithProxy;
+pub const WraithConfig = wraith_mod.WraithConfig;
+pub const ResponseCache = wraith_mod.ResponseCache;
+pub const ProxyStats = wraith_mod.ProxyStats;
+
+pub const CnsResolver = cns_mod.CnsResolver;
+pub const CnsResolverConfig = cns_mod.CnsResolverConfig;
+pub const DnsQuestion = cns_mod.DnsQuestion;
+pub const DnsRecordType = cns_mod.DnsRecordType;
+pub const DnsClass = cns_mod.DnsClass;
+pub const DnsCacheEntry = cns_mod.CacheEntry;
+
+pub const ZvmQuicServer = zvm_mod.ZvmQuicServer;
+pub const WasmExecutionRequest = zvm_mod.WasmExecutionRequest;
+pub const WasmExecutionResult = zvm_mod.WasmExecutionResult;
 
 // Service-specific types
 pub const ServiceType = enum {

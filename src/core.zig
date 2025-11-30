@@ -16,7 +16,6 @@
 
 const std = @import("std");
 const zcrypto = @import("zcrypto");
-const zsync = @import("zsync");
 
 // Core QUIC protocol components
 pub const Connection = @import("core/connection.zig");

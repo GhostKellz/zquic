@@ -1,21 +1,22 @@
-//! Supercharged HTTP/3 server with zsync async pipeline
+//! HTTP/3 Server Implementation
 //!
-//! ZQUIC v0.8.0 - Sub-millisecond HTTP/3 with async request processing
+//! ZQUIC v0.9.3 - High-performance HTTP/3 server without external dependencies
 
 const std = @import("std");
-const zsync = @import("zsync");
 const Error = @import("../utils/error.zig");
+const Time = @import("../utils/time.zig");
 const Frame = @import("frame.zig");
 const QpackDecoder = @import("qpack.zig").QpackDecoder;
 const Request = @import("request.zig").Request;
 const Response = @import("response.zig").Response;
 const Router = @import("router.zig").Router;
 const HandlerFn = @import("router.zig").HandlerFn;
+const NextFn = @import("router.zig").NextFn;
 const Middleware = @import("middleware.zig");
 const Connection = @import("../core/connection.zig").Connection;
 const Stream = @import("../core/stream.zig");
 
-/// Supercharged server configuration for high performance
+/// Server configuration for high performance
 pub const SuperServerConfig = struct {
     max_connections: u32 = 100_000, // 100k concurrent connections
     max_streams_per_connection: u32 = 1000, // 1k streams per connection
@@ -30,7 +31,7 @@ pub const SuperServerConfig = struct {
     cors_origins: []const []const u8 = &[_][]const u8{"*"}, // Allow all origins
     enable_security_headers: bool = true,
 
-    // Advanced zsync performance settings
+    // Performance settings
     request_batch_size: u32 = 64, // Process 64 requests in batch
     response_batch_size: u32 = 64, // Send 64 responses in batch
     worker_threads: u32 = 0, // Auto-detect CPU cores
@@ -40,22 +41,23 @@ pub const SuperServerConfig = struct {
 /// Legacy alias for compatibility
 pub const ServerConfig = SuperServerConfig;
 
-/// Supercharged server statistics with atomic counters
+/// Server statistics with atomic counters
 pub const SuperServerStats = struct {
     connections_active: std.atomic.Value(u32),
     connections_total: std.atomic.Value(u64),
     requests_handled: std.atomic.Value(u64),
-    requests_per_second: std.atomic.Value(u64), // Changed to atomic u64
+    requests_per_second: std.atomic.Value(u64),
     bytes_sent: std.atomic.Value(u64),
     bytes_received: std.atomic.Value(u64),
     errors_count: std.atomic.Value(u64),
     start_time: i64,
-    peak_rps: std.atomic.Value(u64), // Peak requests per second
-    avg_response_time_us: std.atomic.Value(u64), // Average response time in microseconds
+    peak_rps: std.atomic.Value(u64),
+    avg_response_time_us: std.atomic.Value(u64),
 
     const Self = @This();
 
     pub fn init() Self {
+        const ts = std.posix.clock_gettime(std.posix.CLOCK.REALTIME) catch unreachable;
         return Self{
             .connections_active = std.atomic.Value(u32).init(0),
             .connections_total = std.atomic.Value(u64).init(0),
@@ -64,10 +66,7 @@ pub const SuperServerStats = struct {
             .bytes_sent = std.atomic.Value(u64).init(0),
             .bytes_received = std.atomic.Value(u64).init(0),
             .errors_count = std.atomic.Value(u64).init(0),
-            .start_time = blk: {
-                const ts = std.posix.clock_gettime(std.posix.CLOCK.REALTIME) catch unreachable;
-                break :blk ts.sec;
-            },
+            .start_time = ts.sec,
             .peak_rps = std.atomic.Value(u64).init(0),
             .avg_response_time_us = std.atomic.Value(u64).init(0),
         };
@@ -100,24 +99,17 @@ pub const SuperServerStats = struct {
     }
 };
 
-/// Supercharged HTTP/3 server with zsync async pipeline
+/// HTTP/3 Server with async processing pipeline
 pub const SuperHttp3Server = struct {
     config: SuperServerConfig,
     stats: SuperServerStats,
     allocator: std.mem.Allocator,
 
-    // High-performance async processing pipeline
-    request_queue: zsync.bounded(Request, 1000),
-    response_queue: zsync.bounded(Response, 1000),
+    // Request/response queues
+    request_queue: std.ArrayListUnmanaged(Request),
+    response_queue: std.ArrayListUnmanaged(Response),
 
-    // Multi-stage async processing pools (placeholder types)
-    parser_pool: zsync.bounded(*void, 100), // TODO: Define RequestParser
-    handler_pool: zsync.bounded(*void, 100), // TODO: Define RequestHandler
-
-    // Different I/O contexts for optimal performance
-    network_io: zsync.GreenThreadsIo, // For network operations
-    compute_io: zsync.ThreadPoolIo, // For CPU-intensive tasks
-    file_io: zsync.BlockingIo, // For static file serving
+    is_running: bool = false,
 
     const Self = @This();
 
@@ -126,83 +118,51 @@ pub const SuperHttp3Server = struct {
             .config = config,
             .stats = SuperServerStats.init(),
             .allocator = allocator,
-            .request_queue = zsync.bounded(Request, 1000),
-            .response_queue = zsync.bounded(Response, 1000),
-            .parser_pool = zsync.bounded(*void, 100),
-            .handler_pool = zsync.bounded(*void, 100),
-            .network_io = zsync.GreenThreadsIo{},
-            .compute_io = zsync.ThreadPoolIo{},
-            .file_io = zsync.BlockingIo{},
+            .request_queue = .{},
+            .response_queue = .{},
         };
     }
 
-    /// Run the supercharged HTTP/3 server - sub-millisecond responses
+    pub fn deinit(self: *Self) void {
+        self.request_queue.deinit(self.allocator);
+        self.response_queue.deinit(self.allocator);
+    }
+
+    /// Run the HTTP/3 server
     pub fn runSuperServer(self: *Self) !void {
-        // Spawn high-performance pipeline stages
-        _ = try self.network_io.spawn(requestReceiver, .{self});
-        _ = try self.network_io.spawn(requestParser, .{self});
-        // _ = try self.network_io.spawn(requestRouter, .{self}); // TODO: Implement
-        // _ = try self.network_io.spawn(responseWriter, .{self}); // TODO: Implement
+        self.is_running = true;
 
         // Main server loop
-        while (true) {
+        while (self.is_running) {
             try self.manageConnections();
-            try zsync.yieldNow();
+            Time.sleep(std.time.ns_per_ms);
         }
     }
 
-    /// Async request processing pipeline
-    fn requestReceiver(self: *Self) !void {
-        while (true) {
-            // Receive requests from all connections
-            const request = try self.receiveRequest();
-            try self.request_queue.send(request);
-        }
-    }
-
-    fn requestParser(self: *Self) !void {
-        while (true) {
-            const request = try self.request_queue.recv();
-
-            // Parse on compute pool for CPU-intensive work
-            const parsed = try self.compute_io.run(parseRequest, .{request});
-
-            try self.parsed_queue.send(parsed);
-        }
-    }
-
-    // Placeholder methods for compilation
     fn manageConnections(self: *Self) !void {
-        _ = self;
-    }
-
-    fn receiveRequest(self: *Self) !Request {
-        _ = self;
-        return Request{}; // TODO: Implement
-    }
-
-    fn parseRequest(request: Request) !Request {
-        return request; // TODO: Implement parsing
+        // Process pending requests
+        while (self.request_queue.items.len > 0) {
+            _ = self.request_queue.orderedRemove(0);
+            // Process request...
+        }
     }
 };
 
 /// Connection context for managing HTTP/3 connections
 pub const ConnectionContext = struct {
     connection: *Connection,
-    active_requests: std.HashMap(u64, *ActiveRequest, std.hash_map.AutoContext(u64), std.hash_map.default_max_load_percentage),
+    active_requests: std.AutoHashMapUnmanaged(u64, *ActiveRequest),
     last_activity: i64,
     allocator: std.mem.Allocator,
 
     const Self = @This();
 
     pub fn init(allocator: std.mem.Allocator, connection: *Connection) Self {
+        const ts = std.posix.clock_gettime(std.posix.CLOCK.REALTIME) catch unreachable;
         return Self{
             .connection = connection,
-            .active_requests = std.HashMap(u64, *ActiveRequest, std.hash_map.AutoContext(u64), std.hash_map.default_max_load_percentage).init(allocator),
-            .last_activity = blk: {
-                const ts = std.posix.clock_gettime(std.posix.CLOCK.REALTIME) catch unreachable;
-                break :blk ts.sec;
-            },
+            .active_requests = .{},
+            .last_activity = ts.sec,
             .allocator = allocator,
         };
     }
@@ -213,7 +173,7 @@ pub const ConnectionContext = struct {
             entry.value_ptr.*.deinit();
             self.allocator.destroy(entry.value_ptr.*);
         }
-        self.active_requests.deinit();
+        self.active_requests.deinit(self.allocator);
     }
 
     pub fn updateActivity(self: *Self) void {
@@ -238,13 +198,11 @@ pub const ActiveRequest = struct {
     const Self = @This();
 
     pub fn init(allocator: std.mem.Allocator, stream_id: u64, connection_id: []const u8) Self {
+        const ts = std.posix.clock_gettime(std.posix.CLOCK.REALTIME) catch unreachable;
         return Self{
             .request = Request.init(allocator, stream_id, connection_id),
             .response = Response.init(allocator, stream_id),
-            .start_time = blk: {
-                const ts = std.posix.clock_gettime(std.posix.CLOCK.REALTIME) catch unreachable;
-                break :blk @intCast(@divTrunc((@as(i128, ts.sec) * std.time.ns_per_s + ts.nsec), 1000));
-            },
+            .start_time = @intCast(@divTrunc((@as(i128, ts.sec) * std.time.ns_per_s + ts.nsec), 1000)),
             .allocator = allocator,
         };
     }
@@ -265,12 +223,11 @@ pub const ActiveRequest = struct {
 pub const Http3Server = struct {
     allocator: std.mem.Allocator,
     qpack_decoder: QpackDecoder,
-    qpack_encoder: QpackEncoder,
     router: Router,
     config: SuperServerConfig,
     stats: SuperServerStats,
-    connections: std.HashMap([]const u8, *ConnectionContext, std.hash_map.StringContext, std.hash_map.default_max_load_percentage),
-    middleware_stack: std.ArrayList(Middleware.MiddlewareFn),
+    connections: std.StringHashMapUnmanaged(*ConnectionContext),
+    middleware_stack: std.ArrayListUnmanaged(Middleware.MiddlewareFn),
     running: bool = false,
 
     const Self = @This();
@@ -279,12 +236,11 @@ pub const Http3Server = struct {
         var server = Self{
             .allocator = allocator,
             .qpack_decoder = QpackDecoder.init(allocator, 4096),
-            .qpack_encoder = try QpackEncoder.init(allocator),
             .router = Router.init(allocator),
             .config = config,
             .stats = SuperServerStats.init(),
-            .connections = std.HashMap([]const u8, *ConnectionContext, std.hash_map.StringContext, std.hash_map.default_max_load_percentage).init(allocator),
-            .middleware_stack = try std.ArrayList(Middleware.MiddlewareFn).initCapacity(allocator, 0),
+            .connections = .{},
+            .middleware_stack = .{},
         };
 
         // Setup default middleware
@@ -295,7 +251,6 @@ pub const Http3Server = struct {
 
     pub fn deinit(self: *Self) void {
         self.qpack_decoder.deinit(self.allocator);
-        self.qpack_encoder.deinit();
         self.router.deinit();
 
         // Clean up connections
@@ -305,7 +260,7 @@ pub const Http3Server = struct {
             self.allocator.destroy(entry.value_ptr.*);
             self.allocator.free(entry.key_ptr.*);
         }
-        self.connections.deinit();
+        self.connections.deinit(self.allocator);
         self.middleware_stack.deinit(self.allocator);
     }
 
@@ -313,32 +268,42 @@ pub const Http3Server = struct {
         // Security headers (if enabled)
         if (self.config.enable_security_headers) {
             var security = Middleware.SecurityMiddleware.init(self.allocator);
-            try self.middleware_stack.append(self.allocator, security.middleware());
+            const handler = security.middleware();
+            try self.middleware_stack.append(self.allocator, handler);
+            try self.router.use(handler);
         }
 
         // CORS (if enabled)
         if (self.config.enable_cors) {
             var cors = Middleware.CorsMiddleware.init(self.allocator);
             defer cors.deinit();
-            try self.middleware_stack.append(self.allocator, cors.middleware());
+            const handler = cors.middleware();
+            try self.middleware_stack.append(self.allocator, handler);
+            try self.router.use(handler);
         }
 
         // Compression (if enabled)
         if (self.config.enable_compression) {
             const compression = Middleware.CompressionMiddleware.init(self.allocator, self.config.compression_level, 256 // min size
             );
-            try self.middleware_stack.append(self.allocator, compression.middleware());
+            const handler = compression.middleware();
+            try self.middleware_stack.append(self.allocator, handler);
+            try self.router.use(handler);
         }
 
         // Static files (if configured)
         if (self.config.static_files_root) |static_root| {
             const static_middleware = Middleware.StaticMiddleware.init(self.allocator, static_root);
-            try self.middleware_stack.append(self.allocator, static_middleware.middleware());
+            const handler = static_middleware.middleware();
+            try self.middleware_stack.append(self.allocator, handler);
+            try self.router.use(handler);
         }
 
         // Logging
         const logging = Middleware.LoggingMiddleware.init(self.allocator, .info);
-        try self.middleware_stack.append(self.allocator, logging.middleware());
+        const handler = logging.middleware();
+        try self.middleware_stack.append(self.allocator, handler);
+        try self.router.use(handler);
     }
 
     /// Start the server
@@ -359,7 +324,7 @@ pub const Http3Server = struct {
         const context = try self.allocator.create(ConnectionContext);
         context.* = ConnectionContext.init(self.allocator, connection);
 
-        try self.connections.put(conn_id, context);
+        try self.connections.put(self.allocator, conn_id, context);
         _ = self.stats.connections_active.fetchAdd(1, .acq_rel);
         _ = self.stats.connections_total.fetchAdd(1, .acq_rel);
 
@@ -442,7 +407,7 @@ pub const Http3Server = struct {
         const conn_id_bytes = context.connection.super_connection.local_conn_id.bytes();
         active_request.* = ActiveRequest.init(self.allocator, stream_id, conn_id_bytes);
 
-        try context.active_requests.put(stream_id, active_request);
+        try context.active_requests.put(self.allocator, stream_id, active_request);
         return active_request;
     }
 
@@ -484,7 +449,7 @@ pub const Http3Server = struct {
         self.stats.addBytesSent(active_request.response.getBodySize());
 
         // Log response
-        std.log.info("HTTP/3 response sent: {s} {s} - {}μs", .{
+        std.log.info("HTTP/3 response sent: {s} {s} - {}us", .{
             active_request.request.method.toString(),
             active_request.request.path,
             active_request.duration(),
@@ -496,8 +461,9 @@ pub const Http3Server = struct {
         const stream = try connection.createStream(.server_bidirectional);
 
         // Encode the frame with type and length
-        var frame_data = try std.ArrayList(u8).initCapacity(self.allocator, 64);
+        var frame_data: std.ArrayListUnmanaged(u8) = .{};
         defer frame_data.deinit(self.allocator);
+        try frame_data.ensureTotalCapacity(self.allocator, 64);
 
         // Write frame type (1 byte)
         try frame_data.append(self.allocator, @as(u8, @intCast(@intFromEnum(frame.frame_type))));
@@ -516,7 +482,7 @@ pub const Http3Server = struct {
     }
 
     /// Write a variable-length integer as defined in RFC 9000
-    fn writeVarint(self: *Self, writer: *std.ArrayList(u8), value: usize) !void {
+    fn writeVarint(self: *Self, writer: *std.ArrayListUnmanaged(u8), value: usize) !void {
         if (value < 64) {
             try writer.append(self.allocator, @intCast(value));
         } else if (value < 16384) {
@@ -542,6 +508,7 @@ pub const Http3Server = struct {
     /// Add middleware to the server
     pub fn use(self: *Self, middleware: Middleware.MiddlewareFn) !void {
         try self.middleware_stack.append(self.allocator, middleware);
+        try self.router.use(middleware);
     }
 
     /// Add route handlers
@@ -578,8 +545,9 @@ pub const Http3Server = struct {
 
     /// Cleanup expired connections
     pub fn cleanupExpiredConnections(self: *Self) void {
-        var to_remove = std.ArrayList([]const u8).initCapacity(self.allocator, 10) catch return;
+        var to_remove: std.ArrayListUnmanaged([]const u8) = .{};
         defer to_remove.deinit(self.allocator);
+        to_remove.ensureTotalCapacity(self.allocator, 10) catch return;
 
         var iterator = self.connections.iterator();
         while (iterator.next()) |entry| {
@@ -600,36 +568,6 @@ pub const Http3Server = struct {
     }
 };
 
-/// QPACK Encoder (basic implementation)
-pub const QpackEncoder = struct {
-    dynamic_table: std.ArrayList(HeaderField),
-    allocator: std.mem.Allocator,
-
-    const Self = @This();
-    const HeaderField = @import("qpack.zig").HeaderField;
-
-    pub fn init(allocator: std.mem.Allocator) !Self {
-        return Self{
-            .dynamic_table = try std.ArrayList(HeaderField).initCapacity(allocator, 0),
-            .allocator = allocator,
-        };
-    }
-
-    pub fn deinit(self: *Self) void {
-        for (self.dynamic_table.items) |*field| {
-            field.deinit();
-        }
-        self.dynamic_table.deinit(self.allocator);
-    }
-
-    pub fn encode(self: *Self, headers: []const HeaderField, allocator: std.mem.Allocator) ![]u8 {
-        _ = self;
-        _ = headers;
-        // Simplified: return empty encoded data
-        return try allocator.alloc(u8, 0);
-    }
-};
-
 test "server initialization" {
     const config = SuperServerConfig{};
     var server = try Http3Server.init(std.testing.allocator, config);
@@ -637,6 +575,52 @@ test "server initialization" {
 
     try std.testing.expect(!server.running);
     try std.testing.expect(server.stats.connections_active.load(.acquire) == 0);
+}
+
+test "server.use registers middleware with router" {
+    const config = SuperServerConfig{
+        .enable_security_headers = false,
+        .enable_cors = false,
+        .enable_compression = false,
+        .static_files_root = null,
+    };
+
+    var server = try Http3Server.init(std.testing.allocator, config);
+    defer server.deinit();
+
+    var middleware_seen = false;
+
+    const test_middleware = struct {
+        fn flag(req: *Request, res: *Response, next: NextFn) Error.ZquicError!void {
+            const flag_ptr: *bool = @ptrCast(@alignCast(req.context.user_data orelse return Error.ZquicError.InternalError));
+            flag_ptr.* = true;
+            try next(req, res);
+        }
+    };
+
+    try server.use(test_middleware.flag);
+
+    const handler = struct {
+        fn ok(_: *Request, res: *Response) Error.ZquicError!void {
+            try res.text("ok");
+        }
+    }.ok;
+
+    try server.get("/health", handler);
+
+    var request = Request.init(std.testing.allocator, 1, "conn-1");
+    defer request.deinit();
+    request.method = .GET;
+    request.uri = try request.allocator.dupe(u8, "/health");
+    request.path = try request.allocator.dupe(u8, "/health");
+    request.context.user_data = &middleware_seen;
+
+    var response = Response.init(std.testing.allocator, request.context.stream_id);
+    defer response.deinit();
+
+    try server.router.handleRequest(&request, &response);
+    try std.testing.expect(middleware_seen);
+    try std.testing.expect(std.mem.eql(u8, response.getBody(), "ok"));
 }
 
 test "server stats tracking" {

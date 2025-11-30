@@ -1,64 +1,12 @@
-//! Supercharged QUIC Connection with zsync channels
+//! QUIC Connection with async channel support
 //!
-//! ZQUIC v0.8.0 - Million+ concurrent connections with lock-free async channels
-//! Features: Zero-contention, async I/O, cooperative yielding, PQ crypto
+//! ZQUIC v0.9.3 - High-performance connection management without external dependencies
 
 const std = @import("std");
 const Error = @import("../utils/error.zig");
+const Time = @import("../utils/time.zig");
 const Packet = @import("packet.zig");
 const Stream = @import("stream.zig");
-
-/// Conditionally import zsync for async functionality
-const zsync = if (@import("builtin").is_test) @import("zsync") else void;
-
-/// Conditionally import zcrypto
-const zcrypto = if (@import("builtin").is_test) @import("zcrypto") else void;
-
-/// Fallback implementations when zsync is not available
-const FallbackIo = struct {
-    pub fn init(allocator: std.mem.Allocator, config: anytype) !FallbackIo {
-        _ = allocator;
-        _ = config;
-        return FallbackIo{};
-    }
-};
-
-const FallbackBounded = struct {
-    pub fn init(comptime T: type, allocator: std.mem.Allocator, size: usize) !FallbackBounded {
-        _ = T;
-        _ = allocator;
-        _ = size;
-        return FallbackBounded{};
-    }
-};
-
-const FallbackUnbounded = struct {
-    pub fn init(comptime T: type, allocator: std.mem.Allocator) !FallbackUnbounded {
-        _ = T;
-        _ = allocator;
-        return FallbackUnbounded{};
-    }
-};
-
-// Use zsync types if available, otherwise fallbacks
-const GreenThreadsIo = FallbackIo;
-const BlockingIo = FallbackIo; // Simplified for now
-const bounded = if (@TypeOf(zsync) != void) zsync.bounded else FallbackBounded.init;
-const unbounded = if (@TypeOf(zsync) != void) zsync.unbounded else FallbackUnbounded.init;
-const spawn = if (@TypeOf(zsync) != void) zsync.spawn else struct {
-    pub fn spawn(func: anytype, args: anytype) !void {
-        _ = func;
-        _ = args;
-    }
-}.spawn;
-const yieldNow = if (@TypeOf(zsync) != void) zsync.yieldNow else struct {
-    pub fn yieldNow() !void {}
-}.yieldNow;
-const sleep = if (@TypeOf(zsync) != void) zsync.sleep else struct {
-    pub fn sleep(ms: u64) void {
-        _ = ms;
-    }
-}.sleep;
 
 /// Connection states according to RFC 9000
 pub const ConnectionState = enum {
@@ -147,7 +95,7 @@ pub const ConnectionStats = struct {
     crypto_operations: u64 = 0,
 };
 
-/// Supercharged connection with zsync channels - Million+ concurrent connections
+/// High-performance QUIC connection
 pub const SuperConnection = struct {
     // Core connection data
     role: Role,
@@ -158,18 +106,13 @@ pub const SuperConnection = struct {
     stats: ConnectionStats,
     next_stream_id: u64,
 
-    // Lock-free async channels - properly initialized in init()
-    incoming_packets: ?*anyopaque,
-    outgoing_packets: ?*anyopaque,
-    stream_events: ?*anyopaque,
-    crypto_operations: ?*anyopaque,
-
-    // Async I/O contexts for optimal performance
-    io: GreenThreadsIo, // For network I/O coordination
-    crypto_io: BlockingIo, // For CPU-intensive PQ crypto
+    // Internal packet queues
+    incoming_packets: std.ArrayListUnmanaged(Packet.Packet),
+    outgoing_packets: std.ArrayListUnmanaged(Packet.Packet),
+    stream_events: std.ArrayListUnmanaged(StreamEvent),
 
     // Stream management
-    streams: std.HashMap(u64, *Stream.SuperStream, std.hash_map.AutoContext(u64), std.hash_map.default_max_load_percentage),
+    streams: std.AutoHashMapUnmanaged(u64, *Stream.SuperStream),
     allocator: std.mem.Allocator,
     is_running: bool = false,
 
@@ -191,13 +134,10 @@ pub const SuperConnection = struct {
             .params = params,
             .stats = ConnectionStats{},
             .next_stream_id = initial_stream_id,
-            .incoming_packets = undefined, // TODO: Replace with bounded(Packet.Packet, allocator, 256) when zsync compatibility fixed
-            .outgoing_packets = undefined, // TODO: Replace with bounded(Packet.Packet, allocator, 256) when zsync compatibility fixed
-            .stream_events = undefined, // TODO: Replace with unbounded(StreamEvent, allocator) when zsync compatibility fixed
-            .crypto_operations = undefined, // TODO: Replace with bounded(CryptoOperation, allocator, 64) when zsync compatibility fixed
-            .io = GreenThreadsIo.init(allocator, .{}) catch @panic("GreenThreadsIo init failed"),
-            .crypto_io = try BlockingIo.init(allocator, .{}),
-            .streams = std.HashMap(u64, *Stream.SuperStream, std.hash_map.AutoContext(u64), std.hash_map.default_max_load_percentage).init(allocator),
+            .incoming_packets = .{},
+            .outgoing_packets = .{},
+            .stream_events = .{},
+            .streams = .{},
             .allocator = allocator,
         };
     }
@@ -211,78 +151,40 @@ pub const SuperConnection = struct {
             entry.value_ptr.*.deinit();
             self.allocator.destroy(entry.value_ptr.*);
         }
-        self.streams.deinit();
+        self.streams.deinit(self.allocator);
+
+        // Clean up queues
+        self.incoming_packets.deinit(self.allocator);
+        self.outgoing_packets.deinit(self.allocator);
+        self.stream_events.deinit(self.allocator);
     }
 
-    /// Run supercharged connection event loop - Handles million+ connections
+    /// Run connection event loop
     pub fn runConnectionLoop(self: *Self) !void {
         self.is_running = true;
 
-        // Spawn multiple async tasks for parallel processing
-        _ = try spawn(packetProcessor, .{self});
-        _ = try spawn(streamManager, .{self});
-        _ = try spawn(cryptoProcessor, .{self});
-        _ = try spawn(flowControlManager, .{self});
-
-        self.stats.async_tasks_spawned += 4;
-
-        // Main connection event loop with cooperative yielding
+        // Main connection event loop
         while (self.is_running and self.state != .closed) {
-            const event = try self.stream_events.recv();
-            try self.handleStreamEvent(event);
-            self.stats.channel_operations += 1;
+            // Process pending events
+            while (self.stream_events.items.len > 0) {
+                const event = self.stream_events.orderedRemove(0);
+                try self.handleStreamEvent(event);
+                self.stats.channel_operations += 1;
+            }
 
-            // Cooperative yield for other tasks
-            try zsync.yieldNow();
+            // Process packets
+            while (self.incoming_packets.items.len > 0) {
+                const packet = self.incoming_packets.orderedRemove(0);
+                try self.processPacket(packet);
+                self.stats.packets_received += 1;
+            }
+
+            // Small sleep to prevent busy loop
+            Time.sleep(std.time.ns_per_ms);
         }
     }
 
-    /// Process packets asynchronously - Zero blocking
-    fn packetProcessor(self: *Self) !void {
-        while (self.is_running and self.state != .closed) {
-            const packet = try self.incoming_packets.recv();
-            try self.processPacket(packet);
-            self.stats.packets_received += 1;
-
-            // Yield after processing each packet
-            try zsync.yieldNow();
-        }
-    }
-
-    /// Handle crypto operations on blocking I/O for optimal CPU usage
-    fn cryptoProcessor(self: *Self) !void {
-        while (self.is_running and self.state != .closed) {
-            const crypto_op = try self.crypto_operations.recv();
-
-            // Run on BlockingIo for CPU optimization
-            _ = try self.crypto_io.run(processCrypto, .{crypto_op});
-            self.stats.crypto_operations += 1;
-        }
-    }
-
-    /// Manage streams with async coordination
-    fn streamManager(self: *Self) !void {
-        while (self.is_running and self.state != .closed) {
-            // Process stream events
-            const event = try self.stream_events.recv();
-            try self.handleStreamEvent(event);
-
-            // Yield for cooperative multitasking
-            try zsync.yieldNow();
-        }
-    }
-
-    /// Flow control management
-    fn flowControlManager(self: *Self) !void {
-        while (self.is_running and self.state != .closed) {
-            try self.updateFlowControl();
-
-            // Check flow control every 1ms
-            try zsync.sleep(1000); // 1ms
-        }
-    }
-
-    /// Handle stream events with zero-copy
+    /// Handle stream events
     fn handleStreamEvent(self: *Self, event: StreamEvent) !void {
         switch (event) {
             .new_stream => |new| {
@@ -300,42 +202,18 @@ pub const SuperConnection = struct {
         }
     }
 
-    /// Process crypto operation on blocking I/O
-    fn processCrypto(crypto_op: CryptoOperation) !void {
-        switch (crypto_op) {
-            .pq_encrypt => |encrypt| {
-                // Use zcrypto for post-quantum encryption
-                const ciphertext = try zcrypto.pq.encrypt(encrypt.plaintext, encrypt.public_key);
-                try encrypt.result_channel.send(ciphertext);
-            },
-            .pq_decrypt => |decrypt| {
-                // Use zcrypto for post-quantum decryption
-                const plaintext = try zcrypto.pq.decrypt(decrypt.ciphertext, decrypt.private_key);
-                try decrypt.result_channel.send(plaintext);
-            },
-            .tls_handshake => |handshake| {
-                // Process TLS handshake data
-                const response = try zcrypto.tls.processHandshake(handshake.handshake_data);
-                try handshake.result_channel.send(response);
-            },
-        }
-    }
-
     /// Create stream asynchronously
     fn createStreamAsync(self: *Self, stream_id: u64, stream_type: Stream.StreamType) !void {
         const stream = try self.allocator.create(Stream.SuperStream);
         stream.* = try Stream.SuperStream.init(self.allocator, stream_id, stream_type);
 
-        try self.streams.put(stream_id, stream);
-
-        // Start stream processor
-        // _ = try zsync.spawn(Stream.SuperStream.runStreamProcessor, .{stream});
+        try self.streams.put(self.allocator, stream_id, stream);
     }
 
-    /// Handle stream data with zero-copy
+    /// Handle stream data
     fn handleStreamData(self: *Self, stream_id: u64, data: []const u8, fin: bool) !void {
         if (self.streams.get(stream_id)) |stream| {
-            try stream.writeAsync(data);
+            _ = try stream.write(data, fin);
             if (fin) {
                 try stream.close();
             }
@@ -358,28 +236,22 @@ pub const SuperConnection = struct {
         }
     }
 
-    /// Update connection flow control
-    fn updateFlowControl(self: *Self) !void {
-        // Flow control logic
-        _ = self;
-    }
-
     /// Process packet
-    fn processPacket(self: *Self, packet: Packet.QuicPacket) !void {
+    fn processPacket(self: *Self, packet: Packet.Packet) !void {
         _ = self;
         _ = packet;
         // Packet processing logic
     }
 
-    /// Async packet send
-    pub fn sendPacketAsync(self: *Self, packet: Packet.QuicPacket) !void {
-        try self.outgoing_packets.send(packet);
+    /// Send packet
+    pub fn sendPacketAsync(self: *Self, packet: Packet.Packet) !void {
+        try self.outgoing_packets.append(self.allocator, packet);
         self.stats.packets_sent += 1;
     }
 
-    /// Async packet receive
-    pub fn receivePacketAsync(self: *Self, packet: Packet.QuicPacket) !void {
-        try self.incoming_packets.send(packet);
+    /// Receive packet
+    pub fn receivePacketAsync(self: *Self, packet: Packet.Packet) !void {
+        try self.incoming_packets.append(self.allocator, packet);
     }
 
     /// Get connection statistics
@@ -409,10 +281,12 @@ pub const Connection = struct {
         const stream_id = self.super_connection.next_stream_id;
         self.super_connection.next_stream_id += 4; // Increment by 4 for proper stream ID space
 
-        self.super_connection.createStreamAsync(stream_id, stream_type) catch return Error.ZquicError.InternalError;
+        self.super_connection.createStreamAsync(stream_id, stream_type) catch return error.InternalError;
 
-        // Return a legacy stream wrapper (implementation needed)
-        return Error.ZquicError.InternalError;
+        if (self.super_connection.streams.get(stream_id)) |stream| {
+            return stream;
+        }
+        return error.InternalError;
     }
 
     /// Get connection state
@@ -431,12 +305,13 @@ pub const Connection = struct {
     }
 };
 
-/// Lock-free connection pool for million+ connections
+/// Connection pool for managing multiple connections
 pub const SuperConnectionPool = struct {
-    available: zsync.bounded(*SuperConnection, 1000),
-    active: zsync.unbounded(*SuperConnection),
+    available: std.ArrayListUnmanaged(*SuperConnection),
+    active: std.ArrayListUnmanaged(*SuperConnection),
     allocator: std.mem.Allocator,
     stats: PoolStats,
+    mutex: std.Thread.Mutex,
 
     pub const PoolStats = struct {
         connections_created: u64 = 0,
@@ -449,31 +324,40 @@ pub const SuperConnectionPool = struct {
 
     pub fn init(allocator: std.mem.Allocator) Self {
         return Self{
-            .available = zsync.bounded(*SuperConnection, 1000),
-            .active = zsync.unbounded(*SuperConnection),
+            .available = .{},
+            .active = .{},
             .allocator = allocator,
             .stats = PoolStats{},
+            .mutex = .{},
         };
     }
 
     pub fn deinit(self: *Self) void {
-        // Clean up all connections
-        while (self.available.tryRecv()) |conn| {
-            conn.deinit();
-            self.allocator.destroy(conn);
-        }
+        self.mutex.lock();
+        defer self.mutex.unlock();
 
-        while (self.active.tryRecv()) |conn| {
+        // Clean up all connections
+        for (self.available.items) |conn| {
             conn.deinit();
             self.allocator.destroy(conn);
         }
+        self.available.deinit(self.allocator);
+
+        for (self.active.items) |conn| {
+            conn.deinit();
+            self.allocator.destroy(conn);
+        }
+        self.active.deinit(self.allocator);
     }
 
     /// Acquire connection from pool
     pub fn acquire(self: *Self, role: Role, params: ConnectionParams) !*SuperConnection {
+        self.mutex.lock();
+        defer self.mutex.unlock();
+
         // Try to get from available pool first
-        if (self.available.tryRecv()) |conn| {
-            try self.active.send(conn);
+        if (self.available.popOrNull()) |conn| {
+            try self.active.append(self.allocator, conn);
             self.stats.connections_active += 1;
             return conn;
         }
@@ -482,7 +366,7 @@ pub const SuperConnectionPool = struct {
         const conn = try self.allocator.create(SuperConnection);
         conn.* = try SuperConnection.init(self.allocator, role, params);
 
-        try self.active.send(conn);
+        try self.active.append(self.allocator, conn);
         self.stats.connections_created += 1;
         self.stats.connections_active += 1;
         self.stats.peak_active = @max(self.stats.peak_active, self.stats.connections_active);
@@ -492,12 +376,23 @@ pub const SuperConnectionPool = struct {
 
     /// Release connection back to pool
     pub fn release(self: *Self, conn: *SuperConnection) !void {
+        self.mutex.lock();
+        defer self.mutex.unlock();
+
         // Reset connection state
         conn.state = .initial;
         conn.is_running = false;
 
+        // Remove from active
+        for (self.active.items, 0..) |c, i| {
+            if (c == conn) {
+                _ = self.active.swapRemove(i);
+                break;
+            }
+        }
+
         // Return to available pool
-        try self.available.send(conn);
+        try self.available.append(self.allocator, conn);
         self.stats.connections_active -= 1;
         self.stats.connections_pooled += 1;
     }
@@ -508,7 +403,7 @@ pub const SuperConnectionPool = struct {
     }
 };
 
-test "supercharged connection creation" {
+test "connection creation" {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();

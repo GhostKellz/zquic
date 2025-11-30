@@ -167,7 +167,7 @@ const StreamEntry = struct {
 /// Combined flow control manager
 pub const FlowController = struct {
     connection_fc: ConnectionFlowControl,
-    stream_fc_map: std.ArrayList(StreamEntry),
+    stream_fc_map: std.ArrayListUnmanaged(StreamEntry),
     allocator: std.mem.Allocator,
 
     const Self = @This();
@@ -175,7 +175,7 @@ pub const FlowController = struct {
     pub fn init(allocator: std.mem.Allocator, initial_max_data: u64, peer_max_data: u64) Self {
         return Self{
             .connection_fc = ConnectionFlowControl.init(initial_max_data, peer_max_data),
-            .stream_fc_map = std.ArrayList(StreamEntry){},
+            .stream_fc_map = .{},
             .allocator = allocator,
         };
     }
@@ -243,7 +243,7 @@ pub const FlowController = struct {
 
     /// Get streams that need MAX_STREAM_DATA updates
     pub fn getStreamsNeedingUpdates(self: *Self, allocator: std.mem.Allocator) ![]u64 {
-        var streams_needing_updates = std.ArrayList(u64){};
+        var streams_needing_updates: std.ArrayListUnmanaged(u64) = .{};
 
         for (self.stream_fc_map.items) |*entry| {
             if (entry.fc.shouldSendMaxStreamData()) {

@@ -1,98 +1,148 @@
-name: ZQUIC CI - Simple & Reliable
+name: ZQUIC CI Pipeline
 
 on:
   push:
-    branches: [ main, develop ]
+    branches: [ main ]
   pull_request:
     branches: [ main ]
 
+env:
+  ZIG_VERSION: 0.16.0-dev.1484+d0ba6642b
+
 jobs:
-  # 🏗️ Basic build and test
-  build-and-test:
-    name: "Build & Test"
-    runs-on: [self-hosted, nvidia, gpu, zig, palladium]
-    timeout-minutes: 15
-    
+  lint:
+    name: "Lint & API Checks"
+    runs-on: [self-hosted, Linux, X64, nvidia, gpu, zig, nv-osmium]
+    timeout-minutes: 10
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Check Environment
-        run: |
-          echo "🔧 Environment check:"
-          zig version
-          pwd
-          ls -la
+      - name: Cache zig artifacts
+        uses: actions/cache@v4
+        with:
+          path: |
+            zig-cache
+            zig-out
+          key: ${{ runner.os }}-zig-${{ hashFiles('build.zig', 'build.zig.zon', 'src/**/*.zig', 'tests/**/*.zig', 'examples/**/*.zig') }}
 
-      - name: Clean Previous Build
+      - name: Verify Zig toolchain
         run: |
-          echo "🧹 Cleaning previous builds..."
-          rm -rf zig-out zig-cache || true
-
-      - name: Build ZQUIC
-        run: |
-          echo "🔨 Building ZQUIC..."
-          zig build
-          
-          echo "📦 Build results:"
-          if [ -d "zig-out/bin" ]; then
-            ls -la zig-out/bin/
-          else
-            echo "No zig-out/bin directory found"
+          set -euo pipefail
+          INSTALLED=$(zig version)
+          echo "Using Zig ${INSTALLED}"
+          if [ "$INSTALLED" != "$ZIG_VERSION" ]; then
+            echo "::error::Expected Zig $ZIG_VERSION but found $INSTALLED"
+            exit 1
           fi
 
-      - name: Run Tests
+      - name: Format check
         run: |
-          echo "🧪 Running tests..."
-          zig build test
-
-      - name: Basic Functionality Check
-        run: |
-          echo "✅ Basic functionality check..."
-          if [ -d "zig-out/bin" ]; then
-            for bin in zig-out/bin/*; do
-              if [ -x "$bin" ]; then
-                echo "✓ $(basename $bin) exists and is executable"
-                # Just check if it runs without erroring out immediately
-                timeout 2s "$bin" --version 2>/dev/null || echo "  - Binary responds to basic invocation"
-              fi
-            done
-          else
-            echo "No binaries to test"
+          set -euo pipefail
+          zig fmt --check src/
+          zig fmt --check examples/
+          if [ -d tests ]; then
+            zig fmt --check tests/
           fi
 
-      - name: Build Size Report
+      - name: Deprecated API sweep
         run: |
-          echo "📊 Build size report:"
-          if [ -d "zig-out" ]; then
-            du -sh zig-out/
-            if [ -d "zig-out/bin" ]; then
-              echo "Binary sizes:"
-              du -h zig-out/bin/* 2>/dev/null || echo "No binaries found"
-            fi
+          set -euo pipefail
+          ./dev/check_api.sh
+
+  unit-tests:
+    name: "Unit & fuzz tests"
+    runs-on: [self-hosted, Linux, X64, nvidia, gpu, zig, nv-osmium]
+    timeout-minutes: 20
+    needs: lint
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Cache zig artifacts
+        uses: actions/cache@v4
+        with:
+          path: |
+            zig-cache
+            zig-out
+          key: ${{ runner.os }}-zig-${{ hashFiles('build.zig', 'build.zig.zon', 'src/**/*.zig', 'tests/**/*.zig', 'examples/**/*.zig') }}
+
+      - name: Verify Zig toolchain
+        run: |
+          set -euo pipefail
+          INSTALLED=$(zig version)
+          echo "Using Zig ${INSTALLED}"
+          if [ "$INSTALLED" != "$ZIG_VERSION" ]; then
+            echo "::error::Expected Zig $ZIG_VERSION but found $INSTALLED"
+            exit 1
           fi
 
-  # 🔍 Optional release build (only on main branch)
+      - name: Run dev/test.sh
+        run: |
+          set -euo pipefail
+          ./dev/test.sh
+
+  integration:
+    name: "Integration smoke"
+    runs-on: [self-hosted, Linux, X64, nvidia, gpu, zig, nv-osmium]
+    timeout-minutes: 15
+    needs: unit-tests
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Cache zig artifacts
+        uses: actions/cache@v4
+        with:
+          path: |
+            zig-cache
+            zig-out
+          key: ${{ runner.os }}-zig-${{ hashFiles('build.zig', 'build.zig.zon', 'src/**/*.zig', 'tests/**/*.zig', 'examples/**/*.zig') }}
+
+      - name: Verify Zig toolchain
+        run: |
+          set -euo pipefail
+          INSTALLED=$(zig version)
+          echo "Using Zig ${INSTALLED}"
+          if [ "$INSTALLED" != "$ZIG_VERSION" ]; then
+            echo "::error::Expected Zig $ZIG_VERSION but found $INSTALLED"
+            exit 1
+          fi
+
+      - name: Run smoke tests
+        run: |
+          set -euo pipefail
+          ./dev/smoke_test.sh
+
+      - name: Run local test sweep
+        run: |
+          set -euo pipefail
+          ./dev/test_local.sh
+
   release-build:
     name: "Release Build"
-    runs-on: [self-hosted, nvidia, gpu, zig, palladium]
-    needs: build-and-test
+    runs-on: [self-hosted, Linux, X64, nvidia, gpu, zig, nv-osmium]
+    needs: [unit-tests, integration]
     if: github.ref == 'refs/heads/main'
     timeout-minutes: 10
-    
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Build Release
+      - name: Verify Zig toolchain
         run: |
-          echo "🚀 Building release version..."
-          zig build -Doptimize=ReleaseFast
-          
-          echo "📦 Release build results:"
-          if [ -d "zig-out/bin" ]; then
-            ls -lah zig-out/bin/
+          set -euo pipefail
+          INSTALLED=$(zig version)
+          echo "Using Zig ${INSTALLED}"
+          if [ "$INSTALLED" != "$ZIG_VERSION" ]; then
+            echo "::error::Expected Zig $ZIG_VERSION but found $INSTALLED"
+            exit 1
           fi
+
+      - name: Build Release via dev script
+        run: |
+          set -euo pipefail
+          ./dev/build_release.sh
 
       - name: Archive Release Artifacts
         uses: actions/upload-artifact@v4

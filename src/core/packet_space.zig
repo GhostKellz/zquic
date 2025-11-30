@@ -81,7 +81,10 @@ pub const PacketSpace = struct {
     largest_acked_time: u64,
 
     /// Sent packets awaiting acknowledgment
-    sent_packets: std.HashMap(PacketNumber, SentPacket, std.hash_map.DefaultHashContext(PacketNumber), std.hash_map.default_max_load_percentage),
+    sent_packets: std.AutoHashMapUnmanaged(PacketNumber, SentPacket),
+
+    /// Allocator for packet space operations
+    allocator: std.mem.Allocator,
 
     /// Loss detection timer
     loss_detection_timer: ?u64,
@@ -103,7 +106,8 @@ pub const PacketSpace = struct {
             .largest_sent_packet = null,
             .largest_acked_packet = null,
             .largest_acked_time = 0,
-            .sent_packets = std.HashMap(PacketNumber, SentPacket, std.hash_map.DefaultHashContext(PacketNumber), std.hash_map.default_max_load_percentage).init(allocator),
+            .sent_packets = .{},
+            .allocator = allocator,
             .loss_detection_timer = null,
             .pto_count = 0,
             .time_of_last_ack_eliciting_packet = 0,
@@ -112,7 +116,7 @@ pub const PacketSpace = struct {
 
     /// Cleanup packet space resources
     pub fn deinit(self: *Self) void {
-        self.sent_packets.deinit();
+        self.sent_packets.deinit(self.allocator);
     }
 
     /// Get the next packet number and increment counter
@@ -139,7 +143,7 @@ pub const PacketSpace = struct {
             .sent_bytes = sent_bytes,
         };
 
-        try self.sent_packets.put(packet_number, sent_packet);
+        try self.sent_packets.put(self.allocator, packet_number, sent_packet);
 
         if (ack_eliciting) {
             self.time_of_last_ack_eliciting_packet = time_sent;
@@ -159,7 +163,7 @@ pub const PacketSpace = struct {
         now: u64,
     ) void {
         _ = ack_delay; // TODO: Use for RTT calculation
-        var newly_acked_packets = std.ArrayList(PacketNumber).init(self.sent_packets.allocator);
+        var newly_acked_packets = std.ArrayList(PacketNumber).init(self.allocator);
         defer newly_acked_packets.deinit();
 
         // Find newly acknowledged packets
@@ -196,7 +200,7 @@ pub const PacketSpace = struct {
         time_threshold: u64,
         packet_threshold: u32,
     ) std.ArrayList(PacketNumber) {
-        var lost_packets = std.ArrayList(PacketNumber).init(self.sent_packets.allocator);
+        var lost_packets = std.ArrayList(PacketNumber).init(self.allocator);
 
         if (self.largest_acked_packet == null) {
             return lost_packets;
@@ -260,7 +264,7 @@ pub const PacketSpace = struct {
     /// Complete discarding of space
     pub fn discard(self: *Self) void {
         self.state = .discarded;
-        self.sent_packets.clearAndFree();
+        self.sent_packets.clearAndFree(self.allocator);
     }
 
     /// Check if space is active
@@ -399,4 +403,34 @@ test "packet space manager" {
     try std.testing.expect(!initial_space.isActive());
     try std.testing.expect(!handshake_space.isActive());
     try std.testing.expect(app_space.isActive());
+}
+
+test "packet space acknowledgments and loss detection" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+
+    var space = try PacketSpace.init(allocator, .application);
+    defer space.deinit();
+
+    try space.onPacketSent(0, 1_000, true, true, 1200);
+    try space.onPacketSent(1, 2_000, true, true, 1200);
+    try space.onPacketSent(2, 3_000, true, true, 1200);
+
+    const ack_first = [_]struct { start: PacketNumber, end: PacketNumber }{.{ .start = 0, .end = 0 }};
+    space.onAckReceived(&ack_first, 0, 4_000);
+    try std.testing.expectEqual(@as(PacketNumber, 0), space.largest_acked_packet.?);
+    try std.testing.expectEqual(@as(usize, 2), space.sent_packets.count());
+
+    const ack_latest = [_]struct { start: PacketNumber, end: PacketNumber }{.{ .start = 2, .end = 2 }};
+    space.onAckReceived(&ack_latest, 0, 5_000);
+    try std.testing.expectEqual(@as(PacketNumber, 2), space.largest_acked_packet.?);
+
+    var lost = space.detectLostPackets(6_000, 500, 1);
+    defer lost.deinit();
+    try std.testing.expectEqual(@as(usize, 1), lost.items.len);
+    try std.testing.expectEqual(@as(PacketNumber, 1), lost.items[0]);
+
+    space.onPacketsLost(lost.items);
+    try std.testing.expectEqual(@as(usize, 0), space.sent_packets.count());
 }

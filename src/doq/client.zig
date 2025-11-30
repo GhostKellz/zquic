@@ -156,7 +156,7 @@ pub const DoQClient = struct {
 
     /// Query DNS record
     pub fn query(self: *DoQClient, domain: []const u8, record_type: DnsRecordType, options: DoQQueryOptions) !DoQQueryResult {
-        const start_time = std.time.milliTimestamp();
+        const start_time = std.time.Instant.now() catch return error.TimerUnavailable;
 
         try self.connect();
 
@@ -193,8 +193,8 @@ pub const DoQClient = struct {
                 continue;
             };
 
-            const end_time = std.time.milliTimestamp();
-            const duration = @as(u64, @intCast(end_time - start_time));
+            const end_time = std.time.Instant.now() catch return error.TimerUnavailable;
+            const duration = end_time.since(start_time) / std.time.ns_per_ms;
 
             self.stats.queries_successful += 1;
             self.stats.total_query_time_ms += duration;

@@ -1,6 +1,6 @@
 # ZQUIC Documentation
 
-Welcome to the ZQUIC v0.9.0-RC1 documentation! This guide covers the complete modular QUIC transport library for Zig.
+Welcome to the ZQUIC v0.9.3 documentation! This guide covers the complete modular QUIC transport library for Zig 0.16.0-dev.
 
 ## 📚 Documentation Structure
 
@@ -24,7 +24,7 @@ Welcome to the ZQUIC v0.9.0-RC1 documentation! This guide covers the complete mo
 - **[Post-Quantum Crypto](features/post-quantum.md)** - ML-KEM-768 + X25519 hybrid TLS
 - **[HTTP/3 Server](features/http3.md)** - Production HTTP/3 with QPACK
 - **[DNS-over-QUIC](features/doq.md)** - Secure DNS resolution
-- **[Async Processing](features/async.md)** - zsync integration and worker pools
+- **[Async Processing](features/async.md)** - Native runtime and worker pools (no external deps)
 
 ### Examples
 - **[Client Examples](examples/client.md)** - QUIC client implementations
@@ -48,23 +48,11 @@ Welcome to the ZQUIC v0.9.0-RC1 documentation! This guide covers the complete mo
 
 **Production deployment?** Follow [Production Guide](guides/production.md)
 
-## 🔧 ZQUIC v0.9.0-RC1 Status
-
-**Production Ready Components:**
-- ✅ Core QUIC transport with full v1 compliance
-- ✅ Post-quantum cryptography (ML-KEM-768 + X25519)
-- ✅ HTTP/3 server with QPACK encoding
-- ✅ DNS-over-QUIC resolver
-- ✅ Asynchronous crypto processing
-- ✅ Complete modular architecture
-- ✅ Zero compilation errors
-
-**Key Achievements:**
-- 6 working binaries ready for production
+## 🏆 Release Highlights
+- 6 working binaries installed under `zig-out/bin/`
 - Zero-copy packet processing
 - Enterprise-grade memory management
-- High-performance async operations via zsync
+- High-performance async operations via in-house runtime
+- Unified `dev/test.sh` pipeline (unit + integration + fuzz)
 
 ---
-
-*ZQUIC v0.9.0-RC1 - Production Ready for Ghost Ecosystem Deployment* 🔮

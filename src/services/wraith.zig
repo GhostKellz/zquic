@@ -3,13 +3,14 @@
 //! Production-ready reverse proxy for edge infrastructure and traffic management
 
 const std = @import("std");
-const zquic_core = @import("zquic_core");
+const zquic_core = @import("../core.zig");
 const zcrypto = @import("zcrypto");
 const build_options = @import("build_options");
 const Error = @import("../utils/error.zig");
+const Time = @import("../utils/time.zig");
 
 /// Conditionally import HTTP/3 if enabled
-const http3 = if (build_options.enable_http3) @import("http3") else struct {};
+const http3 = if (build_options.enable_http3) @import("../http3.zig") else struct {};
 
 const Http3Server = if (build_options.enable_http3) http3.Http3Server else void;
 const ServerConfig = if (build_options.enable_http3) http3.ServerConfig else void;
@@ -98,7 +99,7 @@ pub const BackendServer = struct {
 
     pub fn updateHealth(self: *BackendServer, status: HealthStatus) void {
         self.health = status;
-        self.last_health_check = (try std.time.Instant.now()).timestamp.sec;
+        self.last_health_check = Time.nowSeconds();
     }
 
     pub fn recordResponseTime(self: *BackendServer, response_time_us: u64) void {
@@ -123,7 +124,7 @@ pub const LoadBalancingAlgorithm = enum {
 
 /// Backend pool for load balancing
 pub const BackendPool = struct {
-    backends: std.ArrayList(BackendServer),
+    backends: std.ArrayListUnmanaged(BackendServer),
     algorithm: LoadBalancingAlgorithm,
     current_index: usize, // For round-robin
     allocator: std.mem.Allocator,
@@ -131,7 +132,7 @@ pub const BackendPool = struct {
 
     pub fn init(allocator: std.mem.Allocator, algorithm: LoadBalancingAlgorithm) BackendPool {
         return BackendPool{
-            .backends = .{ },
+            .backends = .{},
             .algorithm = algorithm,
             .current_index = 0,
             .allocator = allocator,
@@ -143,14 +144,14 @@ pub const BackendPool = struct {
         for (self.backends.items) |*backend| {
             backend.deinit(self.allocator);
         }
-        self.backends.deinit();
+        self.backends.deinit(self.allocator);
     }
 
     pub fn addBackend(self: *BackendPool, backend: BackendServer) !void {
         self.mutex.lock();
         defer self.mutex.unlock();
 
-        try self.backends.append(backend);
+        try self.backends.append(self.allocator, backend);
     }
 
     pub fn removeBackend(self: *BackendPool, backend_id: []const u8) !void {
@@ -175,12 +176,12 @@ pub const BackendPool = struct {
         if (self.backends.items.len == 0) return null;
 
         // Filter healthy backends
-        var healthy_backends = std.ArrayList(*BackendServer).init(self.allocator);
-        defer healthy_backends.deinit();
+        var healthy_backends: std.ArrayListUnmanaged(*BackendServer) = .{};
+        defer healthy_backends.deinit(self.allocator);
 
         for (self.backends.items) |*backend| {
             if (backend.health == .healthy and backend.load < backend.max_connections) {
-                healthy_backends.append(backend) catch continue;
+                healthy_backends.append(self.allocator, backend) catch continue;
             }
         }
 
@@ -347,7 +348,7 @@ pub const HealthChecker = struct {
     fn healthCheckLoop(self: *HealthChecker) void {
         while (self.running) {
             self.performHealthChecks();
-            std.time.sleep(self.check_interval_s * std.time.ns_per_s);
+            Time.sleep(self.check_interval_s * std.time.ns_per_s);
         }
     }
 
@@ -439,7 +440,7 @@ pub const HealthChecker = struct {
 
 /// Response cache for performance optimization
 pub const ResponseCache = struct {
-    cache: std.HashMap(u64, CacheEntry, std.hash_map.DefaultContext(u64), std.hash_map.default_max_load_percentage),
+    cache: std.AutoHashMapUnmanaged(u64, CacheEntry),
     max_size_mb: u32,
     current_size_bytes: u64,
     allocator: std.mem.Allocator,
@@ -447,7 +448,7 @@ pub const ResponseCache = struct {
 
     const CacheEntry = struct {
         response_data: []u8,
-        headers: std.StringHashMap([]const u8),
+        headers: std.StringHashMapUnmanaged([]const u8),
         expiry_time: i64,
         last_accessed: i64,
         size_bytes: u64,
@@ -459,13 +460,13 @@ pub const ResponseCache = struct {
                 allocator.free(entry.key_ptr.*);
                 allocator.free(entry.value_ptr.*);
             }
-            self.headers.deinit();
+            self.headers.deinit(allocator);
         }
     };
 
     pub fn init(allocator: std.mem.Allocator, max_size_mb: u32) ResponseCache {
         return ResponseCache{
-            .cache = std.HashMap(u64, CacheEntry, std.hash_map.DefaultContext(u64), std.hash_map.default_max_load_percentage).init(allocator),
+            .cache = .{},
             .max_size_mb = max_size_mb,
             .current_size_bytes = 0,
             .allocator = allocator,
@@ -478,7 +479,7 @@ pub const ResponseCache = struct {
         while (iterator.next()) |entry| {
             entry.value_ptr.deinit(self.allocator);
         }
-        self.cache.deinit();
+        self.cache.deinit(self.allocator);
     }
 
     pub fn get(self: *ResponseCache, key: u64) ?CacheEntry {
@@ -486,12 +487,12 @@ pub const ResponseCache = struct {
         defer self.mutex.unlockShared();
 
         if (self.cache.getPtr(key)) |entry| {
-            // Check if expired
-            if (entry.expiry_time < (try std.time.Instant.now()).timestamp.sec) {
+            const now = Time.nowSeconds();
+            if (entry.expiry_time < now) {
                 return null;
             }
 
-            entry.last_accessed = (try std.time.Instant.now()).timestamp.sec;
+            entry.last_accessed = now;
             return entry.*;
         }
 
@@ -508,22 +509,23 @@ pub const ResponseCache = struct {
             try self.evictLRU();
         }
 
+        const now = Time.nowSeconds();
         const entry = CacheEntry{
             .response_data = try self.allocator.dupe(u8, response_data),
-            .headers = std.StringHashMap([]const u8).init(self.allocator),
-            .expiry_time = (try std.time.Instant.now()).timestamp.sec + ttl_seconds,
-            .last_accessed = (try std.time.Instant.now()).timestamp.sec,
+            .headers = .{},
+            .expiry_time = now + ttl_seconds,
+            .last_accessed = now,
             .size_bytes = entry_size,
         };
 
-        try self.cache.put(key, entry);
+        try self.cache.put(self.allocator, key, entry);
         self.current_size_bytes += entry_size;
     }
 
     fn evictLRU(self: *ResponseCache) !void {
         // Find least recently used entry
         var oldest_key: ?u64 = null;
-        var oldest_time: i64 = (try std.time.Instant.now()).timestamp.sec;
+        var oldest_time: i64 = Time.nowSeconds();
 
         var iterator = self.cache.iterator();
         while (iterator.next()) |entry| {
@@ -536,7 +538,8 @@ pub const ResponseCache = struct {
         if (oldest_key) |key| {
             if (self.cache.fetchRemove(key)) |removed| {
                 self.current_size_bytes -= removed.value.size_bytes;
-                removed.value.deinit(self.allocator);
+                var entry = removed.value;
+                entry.deinit(self.allocator);
             }
         }
     }
@@ -584,7 +587,7 @@ pub const WraithProxy = struct {
             .response_cache = ResponseCache.init(allocator, config.cache_size_mb),
             .allocator = allocator,
             .running = false,
-            .stats = .{ .start_time = (try std.time.Instant.now()).timestamp.sec },
+            .stats = .{ .start_time = Time.nowSeconds() },
         };
 
         proxy.health_checker = HealthChecker.init(allocator, &proxy.backend_pool, config.health_check_interval_s);
@@ -681,7 +684,7 @@ pub const WraithProxy = struct {
             .cache_hits = self.stats.cache_hits,
             .cache_misses = self.stats.cache_misses,
             .avg_response_time_us = self.stats.avg_response_time_us,
-            .uptime_seconds = @intCast((try std.time.Instant.now()).timestamp.sec - self.stats.start_time),
+            .uptime_seconds = @intCast(Time.nowSeconds() - self.stats.start_time),
             .healthy_backends = self.backend_pool.getHealthyBackendCount(),
             .total_load = self.backend_pool.getTotalLoad(),
         };
@@ -749,7 +752,7 @@ fn proxyHandler(req: *Request, res: *Response) !void {
         res.setStatus(.bad_gateway);
         try res.setHeader("Content-Type", "application/json");
         var buffer: [256]u8 = undefined;
-        const json_response = std.fmt.bufPrint(&buffer, "{{\"error\": \"Backend Unavailable\", \"message\": \"Unable to connect to upstream server\", \"backend\": \"{s}\", \"timestamp\": {}}}", .{ backend_host, (try std.time.Instant.now()).timestamp.sec }) catch "Backend error";
+        const json_response = std.fmt.bufPrint(&buffer, "{{\"error\": \"Backend Unavailable\", \"message\": \"Unable to connect to upstream server\", \"backend\": \"{s}\", \"timestamp\": {}}}", .{ backend_host, Time.nowSeconds() }) catch "Backend error";
         try res.text(json_response);
         return;
     };
@@ -815,7 +818,7 @@ fn proxyHandler(req: *Request, res: *Response) !void {
     try res.setHeader("X-Response-Time-Microseconds", time_str);
 
     // Read and forward response body
-    var response_body = .{ };
+    var response_body: std.ArrayListUnmanaged(u8) = .{};
     defer response_body.deinit(allocator);
 
     const reader = backend_request.reader();
@@ -838,7 +841,7 @@ fn healthHandler(req: *Request, res: *Response) !void {
     try res.json(.{
         .status = "healthy",
         .version = "1.0.0",
-        .timestamp = (try std.time.Instant.now()).timestamp.sec,
+        .timestamp = Time.nowSeconds(),
     });
 }
 
