@@ -77,72 +77,72 @@ pub fn main() !void {
 
     if (ctx) |context| {
         print("✅ Context initialized successfully\n", .{});
-        
+
         // Test 2: Connection creation (to localhost for testing)
         print("\n📋 Test 2: Connection Creation\n", .{});
         const connection = zquic_create_connection(context, "127.0.0.1:8444");
-    if (connection) |conn| {
-        defer zquic_close_connection(conn);
-        print("✅ Connection created successfully\n", .{});
+        if (connection) |conn| {
+            defer zquic_close_connection(conn);
+            print("✅ Connection created successfully\n", .{});
 
-        // Test 3: Data transmission
-        print("\n📋 Test 3: Data Transmission\n", .{});
-        const test_message = "Hello from ZQUIC FFI!";
-        const bytes_sent = zquic_send_data(conn, test_message.ptr, test_message.len);
-        if (bytes_sent >= 0) {
-            print("✅ Sent {} bytes\n", .{bytes_sent});
-        } else {
-            print("⚠️  Send returned error code: {}\n", .{bytes_sent});
-        }
-
-        // Test receive (will likely fail without a real server, but tests the interface)
-        var receive_buffer: [1024]u8 = undefined;
-        const bytes_received = zquic_receive_data(conn, &receive_buffer, receive_buffer.len);
-        if (bytes_received >= 0) {
-            print("✅ Received {} bytes\n", .{bytes_received});
-        } else {
-            print("⚠️  Receive returned error code: {} (expected without server)\n", .{bytes_received});
-        }
-
-        // Test 4: gRPC over QUIC
-        print("\n📋 Test 4: gRPC over QUIC\n", .{});
-        const grpc_request = "{}"; // Empty JSON request for testing
-        const grpc_response = zquic_grpc_call(
-            conn,
-            "ghostd.WalletService/GetBalance",
-            grpc_request.ptr,
-            grpc_request.len,
-        );
-
-        if (grpc_response) |response| {
-            defer zquic_grpc_response_free(response);
-            print("✅ gRPC call completed, status: {}, response_len: {}\n", .{ response.status, response.len });
-
-            // Print response data if present
-            if (response.len > 0 and response.len < 256) {
-                const response_slice = response.data[0..response.len];
-                print("   Response: {s}\n", .{response_slice});
+            // Test 3: Data transmission
+            print("\n📋 Test 3: Data Transmission\n", .{});
+            const test_message = "Hello from ZQUIC FFI!";
+            const bytes_sent = zquic_send_data(conn, test_message.ptr, test_message.len);
+            if (bytes_sent >= 0) {
+                print("✅ Sent {} bytes\n", .{bytes_sent});
+            } else {
+                print("⚠️  Send returned error code: {}\n", .{bytes_sent});
             }
-        } else {
-            print("❌ gRPC call failed\n", .{});
-        }
 
-        // Test 5: DNS over QUIC
-        print("\n📋 Test 5: DNS over QUIC (CNS/ZNS)\n", .{});
-        var dns_buffer: [512]u8 = undefined;
-        const dns_response_len = zquic_dns_query(
-            conn,
-            "test.ghost",
-            1, // A record
-            &dns_buffer,
-            dns_buffer.len,
-        );
+            // Test receive (will likely fail without a real server, but tests the interface)
+            var receive_buffer: [1024]u8 = undefined;
+            const bytes_received = zquic_receive_data(conn, &receive_buffer, receive_buffer.len);
+            if (bytes_received >= 0) {
+                print("✅ Received {} bytes\n", .{bytes_received});
+            } else {
+                print("⚠️  Receive returned error code: {} (expected without server)\n", .{bytes_received});
+            }
 
-        if (dns_response_len >= 0) {
-            print("✅ DNS query completed, response_len: {}\n", .{dns_response_len});
-        } else {
-            print("⚠️  DNS query returned error code: {}\n", .{dns_response_len});
-        }
+            // Test 4: gRPC over QUIC
+            print("\n📋 Test 4: gRPC over QUIC\n", .{});
+            const grpc_request = "{}"; // Empty JSON request for testing
+            const grpc_response = zquic_grpc_call(
+                conn,
+                "ghostd.WalletService/GetBalance",
+                grpc_request.ptr,
+                grpc_request.len,
+            );
+
+            if (grpc_response) |response| {
+                defer zquic_grpc_response_free(response);
+                print("✅ gRPC call completed, status: {}, response_len: {}\n", .{ response.status, response.len });
+
+                // Print response data if present
+                if (response.len > 0 and response.len < 256) {
+                    const response_slice = response.data[0..response.len];
+                    print("   Response: {s}\n", .{response_slice});
+                }
+            } else {
+                print("❌ gRPC call failed\n", .{});
+            }
+
+            // Test 5: DNS over QUIC
+            print("\n📋 Test 5: DNS over QUIC (CNS/ZNS)\n", .{});
+            var dns_buffer: [512]u8 = undefined;
+            const dns_response_len = zquic_dns_query(
+                conn,
+                "test.ghost",
+                1, // A record
+                &dns_buffer,
+                dns_buffer.len,
+            );
+
+            if (dns_response_len >= 0) {
+                print("✅ DNS query completed, response_len: {}\n", .{dns_response_len});
+            } else {
+                print("⚠️  DNS query returned error code: {}\n", .{dns_response_len});
+            }
         } else {
             print("⚠️  Connection creation failed (expected without server)\n", .{});
         }
