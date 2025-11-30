@@ -12,7 +12,7 @@ env:
 jobs:
   lint:
     name: "Lint & API Checks"
-    runs-on: [self-hosted, Linux, X64, nvidia, gpu, zig, nv-osmium]
+    runs-on: self-hosted
     timeout-minutes: 10
     steps:
       - name: Checkout
@@ -52,7 +52,7 @@ jobs:
 
   unit-tests:
     name: "Unit & fuzz tests"
-    runs-on: [self-hosted, Linux, X64, nvidia, gpu, zig, nv-osmium]
+    runs-on: self-hosted
     timeout-minutes: 20
     needs: lint
     steps:
@@ -84,7 +84,7 @@ jobs:
 
   integration:
     name: "Integration smoke"
-    runs-on: [self-hosted, Linux, X64, nvidia, gpu, zig, nv-osmium]
+    runs-on: self-hosted
     timeout-minutes: 15
     needs: unit-tests
     steps:
@@ -121,7 +121,7 @@ jobs:
 
   release-build:
     name: "Release Build"
-    runs-on: [self-hosted, Linux, X64, nvidia, gpu, zig, nv-osmium]
+    runs-on: self-hosted
     needs: [unit-tests, integration]
     if: github.ref == 'refs/heads/main'
     timeout-minutes: 10

@@ -14,7 +14,7 @@ on:
 jobs:
   crypto-test:
     name: "🛡️ Basic Crypto Test"
-    runs-on: [self-hosted, Linux, X64, nvidia, gpu, zig, nv-osmium]
+    runs-on: self-hosted
     timeout-minutes: 15
     steps:
       - name: Checkout
