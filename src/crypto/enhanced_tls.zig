@@ -13,8 +13,7 @@ fn secureZero(data: []u8) void {
     asm volatile (""
         :
         : [data] "m" (data),
-        : .{ .memory = true }
-    );
+        : .{ .memory = true });
 }
 
 // Import specific zcrypto modules

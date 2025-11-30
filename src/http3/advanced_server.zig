@@ -30,7 +30,7 @@ pub const LoadBalancingAlgorithm = enum {
     ip_hash,
     consistent_hash,
     random,
-    
+
     pub fn toString(self: LoadBalancingAlgorithm) []const u8 {
         return switch (self) {
             .round_robin => "round_robin",
@@ -82,7 +82,7 @@ pub const BackendConfig = struct {
     timeout_ms: u32 = 30_000,
     health_check: HealthCheckConfig = HealthCheckConfig{},
     circuit_breaker: CircuitBreakerConfig = CircuitBreakerConfig{},
-    
+
     // Advanced features
     connection_pool_size: u32 = 50,
     keepalive_timeout_ms: u32 = 300_000,
@@ -91,7 +91,7 @@ pub const BackendConfig = struct {
     enable_http2_fallback: bool = true,
     enable_tls: bool = true,
     sni_hostname: ?[]const u8 = null,
-    
+
     pub fn getAddress(self: *const BackendConfig) !std.net.Address {
         return std.net.Address.resolveIp(self.host, self.port);
     }
@@ -104,9 +104,9 @@ pub const BackendServer = struct {
     circuit_breaker: CircuitBreaker,
     connection_pool: ConnectionPool,
     stats: BackendStats,
-    
+
     const Self = @This();
-    
+
     pub fn init(allocator: std.mem.Allocator, config: BackendConfig) !Self {
         return Self{
             .config = config,
@@ -116,25 +116,25 @@ pub const BackendServer = struct {
             .stats = BackendStats.init(),
         };
     }
-    
+
     pub fn deinit(self: *Self) void {
         self.connection_pool.deinit(allocator);
     }
-    
+
     pub fn isHealthy(self: *const Self) bool {
         return self.health_status.is_healthy and self.circuit_breaker.state == .closed;
     }
-    
+
     pub fn isAvailable(self: *const Self) bool {
         return self.isHealthy() and self.connection_pool.hasAvailableConnections();
     }
-    
+
     pub fn getLoad(self: *const Self) f64 {
         const active_connections = self.connection_pool.getActiveConnections();
         const max_connections = self.config.max_connections;
         return @as(f64, @floatFromInt(active_connections)) / @as(f64, @floatFromInt(max_connections));
     }
-    
+
     pub fn getAverageResponseTime(self: *const Self) f64 {
         return self.stats.average_response_time;
     }
@@ -146,7 +146,7 @@ pub const HealthStatus = struct {
     last_check: i64,
     consecutive_failures: u8,
     consecutive_successes: u8,
-    
+
     pub fn init() HealthStatus {
         return HealthStatus{
             .is_healthy = true,
@@ -155,19 +155,19 @@ pub const HealthStatus = struct {
             .consecutive_successes = 0,
         };
     }
-    
+
     pub fn markSuccess(self: *HealthStatus) void {
         self.consecutive_successes += 1;
         self.consecutive_failures = 0;
         self.last_check = (try std.time.Instant.now()).timestamp.sec;
     }
-    
+
     pub fn markFailure(self: *HealthStatus) void {
         self.consecutive_failures += 1;
         self.consecutive_successes = 0;
         self.last_check = (try std.time.Instant.now()).timestamp.sec;
     }
-    
+
     pub fn updateHealthStatus(self: *HealthStatus, config: HealthCheckConfig) void {
         if (self.consecutive_failures >= config.failure_threshold) {
             self.is_healthy = false;
@@ -185,7 +185,7 @@ pub const CircuitBreaker = struct {
     success_count: u32,
     last_failure_time: i64,
     half_open_calls: u32,
-    
+
     pub fn init(config: CircuitBreakerConfig) CircuitBreaker {
         return CircuitBreaker{
             .state = .closed,
@@ -196,12 +196,12 @@ pub const CircuitBreaker = struct {
             .half_open_calls = 0,
         };
     }
-    
+
     pub fn canExecute(self: *CircuitBreaker) bool {
         if (!self.config.enabled) return true;
-        
+
         const now = (try std.time.Instant.now()).timestamp.sec;
-        
+
         switch (self.state) {
             .closed => return true,
             .open => {
@@ -217,10 +217,10 @@ pub const CircuitBreaker = struct {
             },
         }
     }
-    
+
     pub fn recordSuccess(self: *CircuitBreaker) void {
         if (!self.config.enabled) return;
-        
+
         switch (self.state) {
             .closed => {
                 self.failure_count = 0;
@@ -236,13 +236,13 @@ pub const CircuitBreaker = struct {
             .open => {}, // Should not happen
         }
     }
-    
+
     pub fn recordFailure(self: *CircuitBreaker) void {
         if (!self.config.enabled) return;
-        
+
         self.failure_count += 1;
         self.last_failure_time = (try std.time.Instant.now()).timestamp.sec;
-        
+
         switch (self.state) {
             .closed => {
                 if (self.failure_count >= self.config.failure_threshold) {
@@ -256,7 +256,7 @@ pub const CircuitBreaker = struct {
             .open => {}, // Already open
         }
     }
-    
+
     pub fn recordCall(self: *CircuitBreaker) void {
         if (self.state == .half_open) {
             self.half_open_calls += 1;
@@ -270,14 +270,14 @@ pub const ConnectionPool = struct {
     available_connections: std.ArrayListUnmanaged(usize),
     max_size: u32,
     allocator: std.mem.Allocator,
-    
+
     const PooledConnection = struct {
         connection: ?*Connection,
         in_use: bool,
         created_at: i64,
         last_used: i64,
         request_count: u32,
-        
+
         pub fn init() PooledConnection {
             const now = (try std.time.Instant.now()).timestamp.sec;
             return PooledConnection{
@@ -288,13 +288,13 @@ pub const ConnectionPool = struct {
                 .request_count = 0,
             };
         }
-        
+
         pub fn isExpired(self: *const PooledConnection, max_age_ms: u32) bool {
             const now = (try std.time.Instant.now()).timestamp.sec;
             return now - self.last_used > max_age_ms;
         }
     };
-    
+
     pub fn init(allocator: std.mem.Allocator, max_size: u32) !ConnectionPool {
         return ConnectionPool{
             .connections = .{},
@@ -313,7 +313,7 @@ pub const ConnectionPool = struct {
         self.connections.deinit(self.allocator);
         self.available_connections.deinit(self.allocator);
     }
-    
+
     pub fn getConnection(self: *ConnectionPool) ?*Connection {
         // Try to get an available connection
         if (self.available_connections.popOrNull()) |index| {
@@ -322,17 +322,17 @@ pub const ConnectionPool = struct {
             pooled_conn.last_used = (try std.time.Instant.now()).timestamp.sec;
             return pooled_conn.connection;
         }
-        
+
         // Create new connection if under limit
         if (self.connections.items.len < self.max_size) {
             const pooled_conn = PooledConnection.init();
             self.connections.append(self.allocator, pooled_conn) catch return null;
             return null; // Would need to establish connection
         }
-        
+
         return null;
     }
-    
+
     pub fn returnConnection(self: *ConnectionPool, connection: *Connection) void {
         for (self.connections.items, 0..) |*conn, i| {
             if (conn.connection == connection) {
@@ -344,11 +344,11 @@ pub const ConnectionPool = struct {
             }
         }
     }
-    
+
     pub fn hasAvailableConnections(self: *const ConnectionPool) bool {
         return self.available_connections.items.len > 0 or self.connections.items.len < self.max_size;
     }
-    
+
     pub fn getActiveConnections(self: *const ConnectionPool) u32 {
         var count: u32 = 0;
         for (self.connections.items) |*conn| {
@@ -356,7 +356,7 @@ pub const ConnectionPool = struct {
         }
         return count;
     }
-    
+
     pub fn cleanupExpiredConnections(self: *ConnectionPool, max_age_ms: u32) void {
         var i: usize = 0;
         while (i < self.connections.items.len) {
@@ -366,7 +366,7 @@ pub const ConnectionPool = struct {
                     c.close();
                 }
                 _ = self.connections.swapRemove(i);
-                
+
                 // Update available connections indices
                 for (self.available_connections.items, 0..) |*idx, j| {
                     if (idx.* == i) {
@@ -394,7 +394,7 @@ pub const BackendStats = struct {
     max_response_time: u64,
     bytes_sent: u64,
     bytes_received: u64,
-    
+
     pub fn init() BackendStats {
         return BackendStats{
             .total_requests = 0,
@@ -408,31 +408,31 @@ pub const BackendStats = struct {
             .bytes_received = 0,
         };
     }
-    
+
     pub fn recordRequest(self: *BackendStats, success: bool, response_time: u64, bytes_sent: u64, bytes_received: u64) void {
         self.total_requests += 1;
-        
+
         if (success) {
             self.successful_requests += 1;
         } else {
             self.failed_requests += 1;
         }
-        
+
         self.total_response_time += response_time;
         self.average_response_time = @as(f64, @floatFromInt(self.total_response_time)) / @as(f64, @floatFromInt(self.total_requests));
-        
+
         if (response_time < self.min_response_time) {
             self.min_response_time = response_time;
         }
-        
+
         if (response_time > self.max_response_time) {
             self.max_response_time = response_time;
         }
-        
+
         self.bytes_sent += bytes_sent;
         self.bytes_received += bytes_received;
     }
-    
+
     pub fn getSuccessRate(self: *const BackendStats) f64 {
         if (self.total_requests == 0) return 0.0;
         return @as(f64, @floatFromInt(self.successful_requests)) / @as(f64, @floatFromInt(self.total_requests));
@@ -458,7 +458,7 @@ pub const LoadBalancer = struct {
             .allocator = alloc,
         };
     }
-    
+
     pub fn deinit(self: *LoadBalancer) void {
         for (self.backends.items) |*backend| {
             backend.deinit(self.allocator);
@@ -497,11 +497,11 @@ pub const LoadBalancer = struct {
             }
         }
     }
-    
+
     pub fn selectBackend(self: *LoadBalancer, request: *const Request) ?*BackendServer {
         const healthy_backends = self.getHealthyBackends();
         if (healthy_backends.len == 0) return null;
-        
+
         switch (self.algorithm) {
             .round_robin => {
                 const index = self.current_index % healthy_backends.len;
@@ -511,7 +511,7 @@ pub const LoadBalancer = struct {
             .least_connections => {
                 var best_backend: ?*BackendServer = null;
                 var min_load: f64 = std.math.inf(f64);
-                
+
                 for (healthy_backends) |backend| {
                     const load = backend.getLoad();
                     if (load < min_load) {
@@ -519,7 +519,7 @@ pub const LoadBalancer = struct {
                         best_backend = backend;
                     }
                 }
-                
+
                 return best_backend;
             },
             .weighted_round_robin => {
@@ -528,12 +528,12 @@ pub const LoadBalancer = struct {
                 for (healthy_backends) |backend| {
                     total_weight += backend.config.weight;
                 }
-                
+
                 if (total_weight == 0) return null;
-                
+
                 const target = self.current_index % total_weight;
                 self.current_index += 1;
-                
+
                 var current_weight: u32 = 0;
                 for (healthy_backends) |backend| {
                     current_weight += backend.config.weight;
@@ -541,13 +541,13 @@ pub const LoadBalancer = struct {
                         return backend;
                     }
                 }
-                
+
                 return healthy_backends[0];
             },
             .least_response_time => {
                 var best_backend: ?*BackendServer = null;
                 var min_response_time: f64 = std.math.inf(f64);
-                
+
                 for (healthy_backends) |backend| {
                     const response_time = backend.getAverageResponseTime();
                     if (response_time < min_response_time) {
@@ -555,7 +555,7 @@ pub const LoadBalancer = struct {
                         best_backend = backend;
                     }
                 }
-                
+
                 return best_backend;
             },
             .ip_hash => {
@@ -568,14 +568,14 @@ pub const LoadBalancer = struct {
                 if (self.hash_ring) |*ring| {
                     const client_ip = request.getClientIP();
                     const host = ring.getNode(client_ip);
-                    
+
                     for (healthy_backends) |backend| {
                         if (std.mem.eql(u8, backend.config.host, host)) {
                             return backend;
                         }
                     }
                 }
-                
+
                 // Fallback to round robin
                 const index = self.current_index % healthy_backends.len;
                 self.current_index += 1;
@@ -587,13 +587,13 @@ pub const LoadBalancer = struct {
             },
         }
     }
-    
+
     fn getHealthyBackends(self: *LoadBalancer) []BackendServer {
         // Return the full backends list - caller filters by isAvailable
         // This avoids allocation in hot path
         return self.backends.items;
     }
-    
+
     pub fn getStats(self: *const LoadBalancer) LoadBalancerStats {
         var stats = LoadBalancerStats{
             .total_backends = @intCast(self.backends.items.len),
@@ -603,22 +603,22 @@ pub const LoadBalancer = struct {
             .failed_requests = 0,
             .average_response_time = 0.0,
         };
-        
+
         for (self.backends.items) |*backend| {
             if (backend.isHealthy()) {
                 stats.healthy_backends += 1;
             }
-            
+
             stats.total_requests += backend.stats.total_requests;
             stats.successful_requests += backend.stats.successful_requests;
             stats.failed_requests += backend.stats.failed_requests;
             stats.average_response_time += backend.stats.average_response_time;
         }
-        
+
         if (stats.healthy_backends > 0) {
             stats.average_response_time /= @as(f64, @floatFromInt(stats.healthy_backends));
         }
-        
+
         return stats;
     }
 };
@@ -631,7 +631,7 @@ pub const LoadBalancerStats = struct {
     successful_requests: u64,
     failed_requests: u64,
     average_response_time: f64,
-    
+
     pub fn getSuccessRate(self: *const LoadBalancerStats) f64 {
         if (self.total_requests == 0) return 0.0;
         return @as(f64, @floatFromInt(self.successful_requests)) / @as(f64, @floatFromInt(self.total_requests));
@@ -671,7 +671,7 @@ pub const ConsistentHashRing = struct {
         // Sort hashes for binary search
         std.mem.sort(u64, self.sorted_hashes.items, {}, std.sort.asc(u64));
     }
-    
+
     pub fn removeNode(self: *ConsistentHashRing, node: []const u8) void {
         var hashes_to_remove: std.ArrayListUnmanaged(u64) = .{};
         defer hashes_to_remove.deinit(self.allocator);
@@ -695,19 +695,19 @@ pub const ConsistentHashRing = struct {
             }
         }
     }
-    
+
     pub fn getNode(self: *ConsistentHashRing, key: []const u8) []const u8 {
         if (self.sorted_hashes.items.len == 0) return "";
-        
+
         const hash = std.hash_map.hashString(key);
-        
+
         // Find the first node with hash >= key hash
         for (self.sorted_hashes.items) |node_hash| {
             if (node_hash >= hash) {
                 return self.nodes.get(node_hash) orelse "";
             }
         }
-        
+
         // Wrap around to the first node
         return self.nodes.get(self.sorted_hashes.items[0]) orelse "";
     }
@@ -721,28 +721,28 @@ pub const AdvancedServerConfig = struct {
     request_timeout_ms: u32 = 30_000,
     keep_alive_timeout_ms: u32 = 60_000,
     max_request_body_size: usize = 10 * 1024 * 1024, // 10MB
-    
+
     // Proxy settings
     enable_proxy: bool = false,
     proxy_timeout_ms: u32 = 30_000,
     proxy_buffer_size: usize = 1024 * 1024, // 1MB
     enable_proxy_protocol: bool = false,
-    
+
     // Load balancing
     load_balancing_algorithm: LoadBalancingAlgorithm = .round_robin,
     health_check_interval_ms: u32 = 30_000,
-    
+
     // Performance settings
     enable_server_push: bool = true,
     push_cache_size: usize = 1000,
     enable_early_hints: bool = true,
     enable_websocket: bool = true,
-    
+
     // Compression
     enable_compression: bool = true,
     compression_level: u8 = 6,
     compression_min_size: usize = 1024,
-    
+
     // Security
     enable_cors: bool = true,
     cors_origins: []const []const u8 = &[_][]const u8{},
@@ -750,18 +750,18 @@ pub const AdvancedServerConfig = struct {
     enable_rate_limiting: bool = true,
     rate_limit_per_ip: u32 = 1000,
     rate_limit_window_ms: u32 = 60_000,
-    
+
     // Monitoring
     enable_metrics: bool = true,
     metrics_path: []const u8 = "/metrics",
     enable_access_logs: bool = true,
     access_log_format: []const u8 = "combined",
-    
+
     // Static files
     static_files_root: ?[]const u8 = null,
     static_files_index: []const u8 = "index.html",
     enable_directory_listing: bool = false,
-    
+
     // Edge features
     enable_edge_side_includes: bool = false,
     enable_image_optimization: bool = false,
@@ -778,24 +778,24 @@ pub const AdvancedHttp3Server = struct {
     // Middleware and routing
     router: Router,
     middleware_stack: std.ArrayListUnmanaged(Middleware),
-    
+
     // Performance monitoring
     stats: ServerStats,
     metrics_collector: MetricsCollector,
-    
+
     // Health monitoring
     health_monitor: HealthMonitor,
-    
+
     allocator: std.mem.Allocator,
-    
+
     const Self = @This();
-    
+
     pub fn init(allocator: std.mem.Allocator, config: AdvancedServerConfig, multiplexer: *EnhancedUdpMultiplexer) !Self {
         var load_balancer: ?LoadBalancer = null;
         if (config.enable_proxy) {
             load_balancer = LoadBalancer.init(allocator, config.load_balancing_algorithm);
         }
-        
+
         return Self{
             .config = config,
             .multiplexer = multiplexer,
@@ -809,7 +809,7 @@ pub const AdvancedHttp3Server = struct {
             .allocator = allocator,
         };
     }
-    
+
     pub fn deinit(self: *Self) void {
         if (self.load_balancer) |*lb| {
             lb.deinit(self.allocator);
@@ -827,51 +827,51 @@ pub const AdvancedHttp3Server = struct {
         self.metrics_collector.deinit(self.allocator);
         self.health_monitor.deinit(self.allocator);
     }
-    
+
     /// Add backend server for load balancing
     pub fn addBackend(self: *Self, config: BackendConfig) !void {
         if (self.load_balancer) |*lb| {
             try lb.addBackend(config);
         }
     }
-    
+
     /// Remove backend server
     pub fn removeBackend(self: *Self, host: []const u8) void {
         if (self.load_balancer) |*lb| {
             lb.removeBackend(host);
         }
     }
-    
+
     /// Add middleware to the stack
     pub fn addMiddleware(self: *Self, middleware: Middleware) !void {
         try self.middleware_stack.append(self.allocator, middleware);
     }
-    
+
     /// Add route handler
     pub fn addRoute(self: *Self, method: []const u8, path: []const u8, handler: HandlerFn) !void {
         try self.router.addRoute(method, path, handler);
     }
-    
+
     /// Handle incoming connection
     pub fn handleConnection(self: *Self, connection: *Connection) !void {
         const conn_id = @intFromPtr(connection);
-        
+
         if (self.connections.count() >= self.config.max_connections) {
             return Error.ZquicError.ConnectionLimitReached;
         }
-        
+
         const context = try self.allocator.create(ConnectionContext);
         context.* = ConnectionContext.init(self.allocator, connection);
-        
+
         try self.connections.put(self.allocator, conn_id, context);
-        
+
         self.stats.connections_total += 1;
         self.stats.connections_active += 1;
-        
+
         // Start connection handling
         try self.processConnectionStreams(context);
     }
-    
+
     /// Process streams for a connection
     fn processConnectionStreams(self: *Self, context: *ConnectionContext) !void {
         // This would be called in an async context
@@ -888,67 +888,67 @@ pub const AdvancedHttp3Server = struct {
             }
         }
     }
-    
+
     /// Handle individual stream
     fn handleStream(self: *Self, context: *ConnectionContext, stream: *Stream.Stream) !void {
         const request_start = std.time.microTimestamp();
-        
+
         // Parse HTTP/3 request
         const request = try self.parseRequest(stream);
         defer request.deinit(allocator);
-        
+
         // Update activity
         context.updateActivity();
-        
+
         // Apply middleware
         var response = Response.init(allocator);
         defer response.deinit(allocator);
-        
+
         for (self.middleware_stack.items) |middleware| {
             try middleware.process(&request, &response);
         }
-        
+
         // Route request
         if (self.config.enable_proxy and self.load_balancer != null) {
             try self.handleProxyRequest(context, &request, &response);
         } else {
             try self.handleDirectRequest(context, &request, &response);
         }
-        
+
         // Send response
         try self.sendResponse(stream, &response);
-        
+
         // Update statistics
         const request_duration = std.time.microTimestamp() - request_start;
         self.stats.incrementRequest();
         self.stats.addBytesReceived(request.getContentLength());
         self.stats.addBytesSent(response.getContentLength());
-        
+
         // Record metrics
         self.metrics_collector.recordRequest(request_duration, response.status_code);
     }
-    
+
     /// Handle proxy request
     fn handleProxyRequest(self: *Self, context: *ConnectionContext, request: *const Request, response: *Response) !void {
         _ = context;
-        
+
         if (self.load_balancer) |*lb| {
             const backend = lb.selectBackend(request) orelse {
                 response.setStatus(503);
                 try response.setBody("Service Unavailable");
                 return;
             };
-            
+
             // Check circuit breaker
             if (!backend.circuit_breaker.canExecute()) {
                 response.setStatus(503);
                 try response.setBody("Service Unavailable - Circuit Breaker Open");
                 return;
             }
-            
+
             // Record circuit breaker call
             backend.circuit_breaker.recordCall();
-            
+
             // Get connection from pool
             const conn = backend.connection_pool.getConnection() orelse {
                 response.setStatus(503);
@@ -956,7 +956,7 @@ pub const AdvancedHttp3Server = struct {
                 backend.circuit_breaker.recordFailure();
                 return;
             };
-            
+
             // Forward request to backend
             const backend_response = self.forwardRequest(conn, request) catch |err| {
                 backend.circuit_breaker.recordFailure();
@@ -964,24 +964,24 @@ pub const AdvancedHttp3Server = struct {
                 try response.setBody("Bad Gateway");
                 return;
             };
-            
+
             // Record success
             backend.circuit_breaker.recordSuccess();
-            
+
             // Copy response from backend
             response.status_code = backend_response.status_code;
             response.headers = backend_response.headers;
             response.body = backend_response.body;
-            
+
             // Return connection to pool
             backend.connection_pool.returnConnection(conn);
         }
     }
-    
+
     /// Handle direct request (non-proxy)
     fn handleDirectRequest(self: *Self, context: *ConnectionContext, request: *const Request, response: *Response) !void {
         _ = context;
-        
+
         if (self.router.findRoute(request.method, request.path)) |route| {
             try route.handler(request, response);
         } else {
@@ -994,51 +994,51 @@ pub const AdvancedHttp3Server = struct {
             }
         }
     }
-    
+
     /// Handle static file serving
     fn handleStaticFile(self: *Self, root: []const u8, request: *const Request, response: *Response) !void {
         _ = self;
         _ = root;
         _ = request;
-        
+
         // Static file serving implementation
         response.setStatus(404);
         try response.setBody("Not Found");
     }
-    
+
     /// Forward request to backend
     fn forwardRequest(self: *Self, connection: *Connection, request: *const Request) !Response {
         _ = self;
         _ = connection;
         _ = request;
-        
+
         // Implementation would forward the request to the backend
         // and return the response
         return Response.init(allocator);
     }
-    
+
     /// Parse HTTP/3 request from stream
     fn parseRequest(self: *Self, stream: *Stream.Stream) !Request {
         _ = stream;
-        
+
         // Implementation would parse HTTP/3 frames to construct request
         return Request.init(allocator);
     }
-    
+
     /// Send HTTP/3 response
     fn sendResponse(self: *Self, stream: *Stream.Stream, response: *const Response) !void {
         _ = self;
         _ = stream;
         _ = response;
-        
+
         // Implementation would send HTTP/3 frames
     }
-    
+
     /// Get server statistics
     pub fn getStats(self: *const Self) ServerStats {
         return self.stats;
     }
-    
+
     /// Get load balancer statistics
     pub fn getLoadBalancerStats(self: *const Self) ?LoadBalancerStats {
         if (self.load_balancer) |*lb| {
@@ -1046,7 +1046,7 @@ pub const AdvancedHttp3Server = struct {
         }
         return null;
     }
-    
+
     /// Get health status
     pub fn getHealth(self: *const Self) HealthStatus {
         return self.health_monitor.getOverallHealth();
@@ -1072,7 +1072,7 @@ pub const ConnectionContext = struct {
     pub fn deinit(self: *ConnectionContext) void {
         self.active_streams.deinit(self.allocator);
     }
-    
+
     pub fn updateActivity(self: *ConnectionContext) void {
         self.last_activity = (try std.time.Instant.now()).timestamp.sec;
     }
@@ -1086,25 +1086,25 @@ pub const ServerStats = struct {
     bytes_sent: u64 = 0,
     bytes_received: u64 = 0,
     start_time: i64,
-    
+
     pub fn init() ServerStats {
         return ServerStats{
             .start_time = (try std.time.Instant.now()).timestamp.sec,
         };
     }
-    
+
     pub fn incrementRequest(self: *ServerStats) void {
         self.requests_handled += 1;
     }
-    
+
     pub fn addBytesReceived(self: *ServerStats, bytes: usize) void {
         self.bytes_received += bytes;
     }
-    
+
     pub fn addBytesSent(self: *ServerStats, bytes: usize) void {
         self.bytes_sent += bytes;
     }
-    
+
     pub fn uptime(self: *const ServerStats) i64 {
         return (try std.time.Instant.now()).timestamp.sec - self.start_time;
     }
@@ -1128,22 +1128,22 @@ pub const MetricsCollector = struct {
         self.request_durations.deinit(self.allocator);
         self.status_codes.deinit(self.allocator);
     }
-    
+
     pub fn recordRequest(self: *MetricsCollector, duration: u64, status_code: u16) void {
         self.request_durations.append(self.allocator, duration) catch {};
 
         const count = self.status_codes.get(status_code) orelse 0;
         self.status_codes.put(self.allocator, status_code, count + 1) catch {};
     }
-    
+
     pub fn getAverageResponseTime(self: *const MetricsCollector) f64 {
         if (self.request_durations.items.len == 0) return 0.0;
-        
+
         var total: u64 = 0;
         for (self.request_durations.items) |duration| {
             total += duration;
         }
-        
+
         return @as(f64, @floatFromInt(total)) / @as(f64, @floatFromInt(self.request_durations.items.len));
     }
 };
@@ -1165,21 +1165,21 @@ pub const HealthMonitor = struct {
     pub fn deinit(self: *HealthMonitor) void {
         self.component_health.deinit(self.allocator);
     }
-    
+
     pub fn getOverallHealth(self: *const HealthMonitor) HealthStatus {
         return self.overall_health;
     }
-    
+
     pub fn setComponentHealth(self: *HealthMonitor, component: []const u8, health: HealthStatus) !void {
         try self.component_health.put(component, health);
-        
+
         // Update overall health based on component health
         self.updateOverallHealth();
     }
-    
+
     fn updateOverallHealth(self: *HealthMonitor) void {
         var all_healthy = true;
-        
+
         var iterator = self.component_health.iterator();
         while (iterator.next()) |entry| {
             if (!entry.value_ptr.is_healthy) {
@@ -1187,7 +1187,7 @@ pub const HealthMonitor = struct {
                 break;
             }
         }
-        
+
         self.overall_health.is_healthy = all_healthy;
     }
 };
@@ -1209,11 +1209,11 @@ pub const Router = struct {
             .allocator = allocator,
         };
     }
-    
+
     pub fn deinit(self: *Router) void {
         self.routes.deinit(self.allocator);
     }
-    
+
     pub fn addRoute(self: *Router, method: []const u8, path: []const u8, handler: HandlerFn) !void {
         try self.routes.append(self.allocator, Route{
             .method = method,
@@ -1221,7 +1221,7 @@ pub const Router = struct {
             .handler = handler,
         });
     }
-    
+
     pub fn findRoute(self: *const Router, method: []const u8, path: []const u8) ?Route {
         for (self.routes.items) |route| {
             if (std.mem.eql(u8, route.method, method) and std.mem.eql(u8, route.path, path)) {

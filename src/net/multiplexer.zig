@@ -14,7 +14,7 @@ pub const ConnectionEntry = struct {
     connection: *Connection.Connection,
     remote_address: std.net.Address,
     last_activity: i64, // timestamp in microseconds
-    
+
     pub fn isExpired(self: *const @This(), current_time: i64, timeout_us: i64) bool {
         return current_time - self.last_activity > timeout_us;
     }
@@ -41,11 +41,11 @@ pub const UdpMultiplexer = struct {
     connections: std.HashMap(u64, ConnectionEntry, std.hash_map.AutoContext(u64), std.hash_map.default_max_load_percentage),
     config: MultiplexerConfig,
     allocator: std.mem.Allocator,
-    
+
     // Async operation support
     receive_buffer: []u8,
     send_queue: std.fifo.LinearFifo(OutboundPacket, .Dynamic),
-    
+
     // Statistics
     packets_received: u64 = 0,
     packets_sent: u64 = 0,
@@ -114,20 +114,20 @@ pub const UdpMultiplexer = struct {
     pub fn routePacket(self: *Self, packet_data: []const u8, source_address: std.net.Address) Error.ZquicError!void {
         // Parse packet header to extract connection ID
         const packet = Packet.PacketHeader.parse(packet_data, self.allocator) catch return Error.ZquicError.InvalidPacket;
-        
+
         const conn_id_hash = self.hashConnectionId(&packet.dest_conn_id);
-        
+
         if (self.connections.getPtr(conn_id_hash)) |entry| {
             // Update last activity
             const ts = std.posix.clock_gettime(std.posix.CLOCK.REALTIME) catch unreachable;
             entry.last_activity = (@as(i128, ts.sec) * std.time.ns_per_s + ts.nsec) / 1000;
-            
+
             // Create packet and route to connection
             const full_packet = Packet.Packet.init(packet, packet_data);
             entry.connection.processPacket(full_packet) catch |err| {
                 std.log.warn("Failed to process packet for connection {}: {}", .{ conn_id_hash, err });
             };
-            
+
             // Update connection's remote address if it changed (connection migration)
             if (!std.meta.eql(entry.remote_address, source_address)) {
                 std.log.info("Connection {} migrated from {} to {}", .{ conn_id_hash, entry.remote_address, source_address });
@@ -146,7 +146,7 @@ pub const UdpMultiplexer = struct {
     /// Receive and route packets from the UDP socket
     pub fn receiveAndRoute(self: *Self) Error.ZquicError!void {
         const result = self.socket.receiveFrom(self.receive_buffer) catch return Error.ZquicError.NetworkError;
-        
+
         if (result.bytes_received > 0) {
             try self.routePacket(self.receive_buffer[0..result.bytes_received], result.remote_address);
         }
@@ -155,7 +155,7 @@ pub const UdpMultiplexer = struct {
     /// Send a packet through the multiplexer
     pub fn sendPacket(self: *Self, packet_data: []const u8, destination: std.net.Address, connection_id: ?Packet.ConnectionId) Error.ZquicError!void {
         _ = self.socket.sendTo(packet_data, destination) catch return Error.ZquicError.NetworkError;
-        
+
         self.packets_sent += 1;
         self.bytes_sent += packet_data.len;
 
@@ -172,7 +172,7 @@ pub const UdpMultiplexer = struct {
     /// Queue a packet for sending (for async operation)
     pub fn queuePacket(self: *Self, packet_data: []const u8, destination: std.net.Address, connection_id: ?Packet.ConnectionId) Error.ZquicError!void {
         const packet_copy = self.allocator.dupe(u8, packet_data) catch return Error.ZquicError.OutOfMemory;
-        
+
         const outbound_packet = OutboundPacket{
             .data = packet_copy,
             .destination = destination,
@@ -185,18 +185,18 @@ pub const UdpMultiplexer = struct {
     /// Process queued outbound packets
     pub fn processSendQueue(self: *Self) Error.ZquicError!u32 {
         var packets_sent: u32 = 0;
-        
+
         while (self.send_queue.readItem()) |packet| {
             defer self.allocator.free(packet.data);
-            
+
             self.sendPacket(packet.data, packet.destination, packet.connection_id) catch |err| {
                 std.log.warn("Failed to send queued packet: {}", .{err});
                 continue;
             };
-            
+
             packets_sent += 1;
         }
-        
+
         return packets_sent;
     }
 
@@ -205,7 +205,7 @@ pub const UdpMultiplexer = struct {
         const ts = std.posix.clock_gettime(std.posix.CLOCK.REALTIME) catch unreachable;
         const current_time = (@as(i128, ts.sec) * std.time.ns_per_s + ts.nsec) / 1000;
         const timeout_us = @as(i64, self.config.connection_timeout_ms) * 1000;
-        
+
         var expired_connections = std.ArrayList(u64).init(self.allocator);
         defer expired_connections.deinit();
 
@@ -284,7 +284,7 @@ test "connection management" {
     defer connection.deinit();
 
     const remote_addr = std.net.Address.initIp4([4]u8{ 192, 168, 1, 1 }, 4433);
-    
+
     try multiplexer.addConnection(conn_id, &connection, remote_addr);
     try std.testing.expect(multiplexer.connection_count == 1);
 

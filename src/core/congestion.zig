@@ -256,34 +256,34 @@ pub const BbrCongestionController = struct {
     const Self = @This();
     const BbrState = enum { startup, drain, probe_bw, probe_rtt };
     const ProbeType = enum { none, up, down };
-    
+
     max_datagram_size: u64,
     congestion_window: u64,
-    
+
     // BBR state
     state: BbrState,
     round_count: u64,
     round_start: bool,
-    
+
     // Bandwidth estimation
     max_bandwidth: f64,
     bandwidth_samples: [8]f64,
     bandwidth_sample_idx: usize,
     min_rtt: u64,
     min_rtt_timestamp: u64,
-    
+
     // Probing state
     probe_type: ProbeType,
     probe_up_rounds: u32,
     cycle_start_time: u64,
     pacing_gain: f64,
     cwnd_gain: f64,
-    
+
     // Packet tracking
     bytes_in_flight: u64,
     delivered: u64,
     delivered_time: u64,
-    
+
     pub fn init(max_datagram_size: u64) Self {
         const initial_cwnd = 10 * max_datagram_size; // Initial congestion window
         return Self{
@@ -307,74 +307,74 @@ pub const BbrCongestionController = struct {
             .delivered_time = 0,
         };
     }
-    
+
     pub fn canSend(self: *const Self, packet_size: u64) bool {
         return self.bytes_in_flight + packet_size <= self.congestion_window;
     }
-    
+
     pub fn onPacketSent(self: *Self, packet_size: u64) void {
         self.bytes_in_flight += packet_size;
     }
-    
+
     pub fn onAcked(self: *Self, acked_bytes: u64, rtt: u64, now: u64) void {
         self.bytes_in_flight -|= acked_bytes;
         self.delivered += acked_bytes;
         self.delivered_time = now;
-        
+
         // Update minimum RTT
         if (rtt < self.min_rtt) {
             self.min_rtt = rtt;
             self.min_rtt_timestamp = now;
         }
-        
+
         // Update bandwidth estimate
         self.updateBandwidth(acked_bytes, rtt, now);
-        
+
         // Update BBR state machine
         self.updateBbrState(now);
-        
+
         // Update congestion window and pacing
         self.updateCongestionWindow();
     }
-    
+
     pub fn onLost(self: *Self, lost_bytes: u64) void {
         self.bytes_in_flight -|= lost_bytes;
-        
+
         // BBR is less reactive to loss than other algorithms
         // Only adjust if we're in probe_rtt state or experiencing persistent loss
         if (self.state == .probe_rtt) {
             self.congestion_window = @max(self.congestion_window * 7 / 10, 2 * self.max_datagram_size);
         }
     }
-    
+
     pub fn availableWindow(self: *const Self) u64 {
-        return if (self.congestion_window > self.bytes_in_flight) 
-            self.congestion_window - self.bytes_in_flight 
-        else 
+        return if (self.congestion_window > self.bytes_in_flight)
+            self.congestion_window - self.bytes_in_flight
+        else
             0;
     }
-    
+
     fn updateBandwidth(self: *Self, acked_bytes: u64, rtt: u64, now: u64) void {
         // Calculate delivery rate (bytes per second)
-        const delivery_rate = if (rtt > 0) 
+        const delivery_rate = if (rtt > 0)
             (@as(f64, @floatFromInt(acked_bytes)) * 1_000_000.0) / @as(f64, @floatFromInt(rtt))
-        else 
+        else
             self.max_bandwidth;
-            
+
         // Add to circular buffer
         self.bandwidth_samples[self.bandwidth_sample_idx] = delivery_rate;
         self.bandwidth_sample_idx = (self.bandwidth_sample_idx + 1) % 8;
-        
+
         // Update max bandwidth (windowed maximum)
         var max_bw: f64 = 0.0;
         for (self.bandwidth_samples) |sample| {
             max_bw = @max(max_bw, sample);
         }
         self.max_bandwidth = max_bw;
-        
+
         _ = now; // Suppress unused parameter warning
     }
-    
+
     fn updateBbrState(self: *Self, now: u64) void {
         switch (self.state) {
             .startup => {
@@ -399,7 +399,7 @@ pub const BbrCongestionController = struct {
                     self.cyclePacingGain();
                     self.cycle_start_time = now;
                 }
-                
+
                 // Check if we should enter probe_rtt
                 if (now - self.min_rtt_timestamp > 10_000_000) { // 10 seconds
                     self.state = .probe_rtt;
@@ -409,7 +409,7 @@ pub const BbrCongestionController = struct {
             .probe_rtt => {
                 // Reduce cwnd to find true minimum RTT
                 self.congestion_window = @max(4 * self.max_datagram_size, self.congestion_window * 3 / 4);
-                
+
                 // Exit after probing for one RTT
                 if (now - self.cycle_start_time > self.min_rtt) {
                     if (self.bytes_in_flight <= self.getBdp()) {
@@ -424,10 +424,10 @@ pub const BbrCongestionController = struct {
             },
         }
     }
-    
+
     fn updateCongestionWindow(self: *Self) void {
         const bdp = self.getBdp();
-        
+
         switch (self.state) {
             .startup => {
                 self.congestion_window = @max(self.congestion_window, @as(u64, @intFromFloat(@as(f64, @floatFromInt(bdp)) * self.cwnd_gain)));
@@ -443,18 +443,18 @@ pub const BbrCongestionController = struct {
             },
         }
     }
-    
+
     fn getBdp(self: *const Self) u64 {
         // Bandwidth-Delay Product
         return @as(u64, @intFromFloat(self.max_bandwidth * @as(f64, @floatFromInt(self.min_rtt)) / 1_000_000.0));
     }
-    
+
     fn getPreviousBandwidth(self: *const Self) f64 {
         // Get bandwidth from previous sample
         const prev_idx = if (self.bandwidth_sample_idx == 0) 7 else self.bandwidth_sample_idx - 1;
         return self.bandwidth_samples[prev_idx];
     }
-    
+
     fn cyclePacingGain(self: *Self) void {
         // BBR cycles through pacing gains: [1.25, 0.75, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]
         const gains = [_]f64{ 1.25, 0.75, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0 };

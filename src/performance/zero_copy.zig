@@ -263,7 +263,7 @@ pub const ZeroCopyPool = struct {
 
     pub fn init(allocator: std.mem.Allocator, buffer_size: usize, max_buffers: usize) !ZeroCopyPool {
         return ZeroCopyPool{
-            .buffers = .{ },
+            .buffers = .{},
             .available_buffers = std.fifo.LinearFifo(usize, .Dynamic).init(allocator),
             .buffer_size = buffer_size,
             .max_buffers = max_buffers,
@@ -620,8 +620,8 @@ pub const BatchNetworkOps = struct {
 
     pub fn init(allocator: std.mem.Allocator, max_batch_size: usize) BatchNetworkOps {
         return BatchNetworkOps{
-            .send_batch = .{ },
-            .receive_batch = .{ },
+            .send_batch = .{},
+            .receive_batch = .{},
             .max_batch_size = max_batch_size,
             .allocator = allocator,
         };
@@ -829,8 +829,7 @@ pub const PerformanceMonitor = struct {
             return asm volatile ("rdtsc"
                 : [ret] "={rax}" (-> u64),
                 :
-                : .{ .rdx = true }
-            );
+                : .{ .rdx = true });
         }
         return 0;
     }
@@ -841,8 +840,7 @@ pub const PerformanceMonitor = struct {
             return asm volatile ("rdpmc"
                 : [ret] "={rax}" (-> u64),
                 : [index] "{rcx}" (index),
-                : .{ .rdx = true }
-            );
+                : .{ .rdx = true });
         }
         return 0;
     }
@@ -1109,9 +1107,9 @@ pub const ZeroCopyPacketPool = struct {
 
     pub fn init(allocator: std.mem.Allocator) !ZeroCopyPacketPool {
         return ZeroCopyPacketPool{
-            .large_buffers = .{ },
-            .medium_buffers = .{ },
-            .small_buffers = .{ },
+            .large_buffers = .{},
+            .medium_buffers = .{},
+            .small_buffers = .{},
             .available_large = std.fifo.LinearFifo(usize, .Dynamic).init(allocator),
             .available_medium = std.fifo.LinearFifo(usize, .Dynamic).init(allocator),
             .available_small = std.fifo.LinearFifo(usize, .Dynamic).init(allocator),
@@ -1427,7 +1425,7 @@ pub const ZeroCopyStreamProcessor = struct {
         return Self{
             .allocator = allocator,
             .buffer_pool = try BufferPool.init(allocator),
-            .scatter_gather_buffers = .{ },
+            .scatter_gather_buffers = .{},
         };
     }
 

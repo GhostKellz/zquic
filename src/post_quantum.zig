@@ -21,7 +21,7 @@ pub const Optimizations = @import("crypto/asm_optimizations.zig");
 
 // PQ-specific configuration
 pub const PQConfig = struct {
-    enable_hybrid_mode: bool = true,  // Use ML-KEM + X25519 hybrid
+    enable_hybrid_mode: bool = true, // Use ML-KEM + X25519 hybrid
     enable_hw_acceleration: bool = true,
     key_rotation_interval_ms: u32 = 3600000, // 1 hour
     max_key_age_ms: u32 = 86400000, // 24 hours

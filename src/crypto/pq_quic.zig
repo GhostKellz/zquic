@@ -15,8 +15,7 @@ fn secureZero(data: []u8) void {
     asm volatile (""
         :
         : [data] "m" (data),
-        : .{ .memory = true }
-    );
+        : .{ .memory = true });
 }
 
 // Import zcrypto v0.6.0 post-quantum modules

@@ -21,23 +21,23 @@ pub const CryptoBbrState = struct {
     bottleneck_bandwidth: u64, // bits per second
     round_trip_time: u64, // microseconds
     delivery_rate: u64, // bits per second
-    
+
     // State tracking
     phase: BbrPhase,
     cycle_index: u8,
     phase_start_time: u64,
-    
+
     // Bandwidth probing
     probe_rtt_start: u64,
     probe_rtt_duration: u64,
     min_rtt_timestamp: u64,
-    
+
     // Pacing and cwnd
     pacing_rate: u64,
     send_quantum: u32,
-    
+
     const Self = @This();
-    
+
     pub fn init() Self {
         return Self{
             .bottleneck_bandwidth = 100_000_000, // 100 Mbps initial for crypto
@@ -62,14 +62,14 @@ pub const CryptoCubicState = struct {
     c: f64, // scaling constant
     w_max: u64, // window size before last reduction
     k: f64, // time to reach w_max
-    
+
     // State tracking
     epoch_start: u64,
     ack_count: u32,
     tcp_cwnd: u64,
-    
+
     const Self = @This();
-    
+
     pub fn init() Self {
         return Self{
             .beta = 0.8, // More aggressive for crypto stability
@@ -98,40 +98,40 @@ pub const CryptoOptimizedCongestionController = struct {
     state: congestion.CongestionState,
     workload_type: CryptoWorkloadType,
     rtt_stats: congestion.RttStats,
-    
+
     // Algorithm-specific state
     bbr_state: CryptoBbrState,
     cubic_state: CryptoCubicState,
-    
+
     // Common parameters
     congestion_window: u64,
     ssthresh: u64,
     bytes_in_flight: u64,
     min_window: u64,
     max_window: u64,
-    
+
     // Performance tracking for crypto workloads
     packets_sent: u64,
     packets_acked: u64,
     packets_lost: u64,
     bytes_sent: u64,
     bytes_acked: u64,
-    
+
     // Crypto-specific metrics
     high_priority_packets: u64, // Trading orders, block announcements
     critical_packets: u64, // Consensus, liquidations
     burst_allowance: u64, // For sudden traffic spikes
     priority_window_boost: u64, // Extra window for critical traffic
-    
+
     // Performance optimizations
     fast_recovery_enabled: bool,
     adaptive_pacing: bool,
     burst_mitigation: bool,
-    
+
     allocator: std.mem.Allocator,
-    
+
     const Self = @This();
-    
+
     pub fn init(allocator: std.mem.Allocator, algorithm: congestion.CongestionAlgorithm, workload: CryptoWorkloadType) Self {
         var controller = Self{
             .algorithm = algorithm,
@@ -159,16 +159,16 @@ pub const CryptoOptimizedCongestionController = struct {
             .burst_mitigation = true,
             .allocator = allocator,
         };
-        
+
         // Configure for specific crypto workload
         controller.configureForWorkload();
         return controller;
     }
-    
+
     /// Configure congestion control parameters based on crypto workload
     fn configureForWorkload(self: *Self) void {
         const MSS = 1460; // Maximum segment size
-        
+
         switch (self.workload_type) {
             .high_frequency_trading => {
                 // Ultra-low latency configuration
@@ -219,56 +219,60 @@ pub const CryptoOptimizedCongestionController = struct {
             },
         }
     }
-    
+
     /// Process ACK and update congestion window with crypto optimizations
     pub fn onPacketAcked(self: *Self, packet_size: u32, rtt_sample: u64, priority: enum { normal, high, critical }) void {
         self.packets_acked += 1;
         self.bytes_acked += packet_size;
-        self.bytes_in_flight = if (self.bytes_in_flight >= packet_size) 
-            self.bytes_in_flight - packet_size else 0;
-        
+        self.bytes_in_flight = if (self.bytes_in_flight >= packet_size)
+            self.bytes_in_flight - packet_size
+        else
+            0;
+
         // Track priority packets for crypto workload analysis
         switch (priority) {
             .high => self.high_priority_packets += 1,
             .critical => self.critical_packets += 1,
             .normal => {},
         }
-        
+
         // Update RTT stats with crypto-specific smoothing
         self.rtt_stats.updateRtt(rtt_sample, 0);
-        
+
         switch (self.algorithm) {
             .bbr => self.cryptoBbrOnPacketAcked(packet_size, rtt_sample, priority),
             .cubic => self.cryptoCubicOnPacketAcked(packet_size, priority),
             .new_reno => self.cryptoNewRenoOnPacketAcked(packet_size, priority),
         }
     }
-    
+
     /// Process packet loss with crypto-aware recovery
     pub fn onPacketLost(self: *Self, packet_size: u32, priority: enum { normal, high, critical }) void {
         self.packets_lost += 1;
-        self.bytes_in_flight = if (self.bytes_in_flight >= packet_size) 
-            self.bytes_in_flight - packet_size else 0;
-        
+        self.bytes_in_flight = if (self.bytes_in_flight >= packet_size)
+            self.bytes_in_flight - packet_size
+        else
+            0;
+
         // More conservative loss response for critical crypto traffic
         const loss_severity = switch (priority) {
             .critical => 1.0, // Full reaction
             .high => 0.8, // Slightly less aggressive
             .normal => 0.6, // More conservative
         };
-        
+
         switch (self.algorithm) {
             .bbr => self.cryptoBbrOnPacketLost(packet_size, loss_severity),
             .cubic => self.cryptoCubicOnPacketLost(packet_size, loss_severity),
             .new_reno => self.cryptoNewRenoOnPacketLost(packet_size, loss_severity),
         }
     }
-    
+
     /// Check if we can send a packet with crypto priority handling
     pub fn canSend(self: *const Self, packet_size: u32, priority: enum { normal, high, critical }) bool {
         const base_window = self.congestion_window;
         var effective_window = base_window;
-        
+
         // Add priority boost for high/critical packets
         switch (priority) {
             .critical => effective_window += self.priority_window_boost * 2,
@@ -278,25 +282,25 @@ pub const CryptoOptimizedCongestionController = struct {
                 effective_window += self.burst_allowance;
             },
         }
-        
+
         return self.bytes_in_flight + packet_size <= effective_window;
     }
-    
+
     /// Update on packet sent
     pub fn onPacketSent(self: *Self, packet_size: u32) void {
         self.packets_sent += 1;
         self.bytes_sent += packet_size;
         self.bytes_in_flight += packet_size;
     }
-    
+
     /// Crypto-optimized BBR ACK processing
     fn cryptoBbrOnPacketAcked(self: *Self, packet_size: u32, rtt_sample: u64, priority: enum { normal, high, critical }) void {
         _ = packet_size;
         _ = priority;
-        
+
         // Update delivery rate with crypto-specific estimation
         self.bbr_state.delivery_rate = self.estimateCryptoDeliveryRate();
-        
+
         // More responsive bandwidth updates for crypto
         const bandwidth_gain = switch (self.workload_type) {
             .high_frequency_trading => 0.5, // Very responsive
@@ -305,22 +309,20 @@ pub const CryptoOptimizedCongestionController = struct {
             .mempool_gossip => 0.25, // Moderate
             .blockchain_sync => 0.2, // Conservative
         };
-        
-        self.bbr_state.bottleneck_bandwidth = @as(u64, @intFromFloat(
-            @as(f64, @floatFromInt(self.bbr_state.bottleneck_bandwidth)) * (1.0 - bandwidth_gain) +
-            @as(f64, @floatFromInt(self.bbr_state.delivery_rate)) * bandwidth_gain
-        ));
-        
+
+        self.bbr_state.bottleneck_bandwidth = @as(u64, @intFromFloat(@as(f64, @floatFromInt(self.bbr_state.bottleneck_bandwidth)) * (1.0 - bandwidth_gain) +
+            @as(f64, @floatFromInt(self.bbr_state.delivery_rate)) * bandwidth_gain));
+
         // Update RTT with crypto-aware filtering
         if (rtt_sample < self.bbr_state.round_trip_time or self.bbr_state.round_trip_time == 0) {
             self.bbr_state.round_trip_time = rtt_sample;
             const ts = std.posix.clock_gettime(std.posix.CLOCK.REALTIME) catch unreachable;
             self.bbr_state.min_rtt_timestamp = (@as(i128, ts.sec) * std.time.ns_per_s + ts.nsec) / 1000;
         }
-        
+
         self.updateCryptoBbrState();
     }
-    
+
     /// Crypto-optimized CUBIC ACK processing
     fn cryptoCubicOnPacketAcked(self: *Self, packet_size: u32, priority: enum { normal, high, critical }) void {
         // Priority-aware window growth
@@ -329,7 +331,7 @@ pub const CryptoOptimizedCongestionController = struct {
             .high => 2, // Moderate growth
             .normal => 1, // Standard growth
         };
-        
+
         if (self.state == .slow_start) {
             self.congestion_window += packet_size * growth_multiplier;
             if (self.congestion_window >= self.ssthresh) {
@@ -338,10 +340,10 @@ pub const CryptoOptimizedCongestionController = struct {
         } else {
             self.cryptoCubicUpdate(growth_multiplier);
         }
-        
+
         self.congestion_window = @min(self.congestion_window, self.max_window);
     }
-    
+
     /// Crypto-optimized New Reno ACK processing
     fn cryptoNewRenoOnPacketAcked(self: *Self, packet_size: u32, priority: enum { normal, high, critical }) void {
         // Priority-aware growth similar to CUBIC
@@ -350,7 +352,7 @@ pub const CryptoOptimizedCongestionController = struct {
             .high => 1.5,
             .normal => 1.0,
         };
-        
+
         if (self.state == .slow_start) {
             self.congestion_window += @as(u64, @intFromFloat(@as(f64, @floatFromInt(packet_size)) * growth_factor));
             if (self.congestion_window >= self.ssthresh) {
@@ -360,10 +362,10 @@ pub const CryptoOptimizedCongestionController = struct {
             const increase = @as(u64, @intFromFloat(@as(f64, @floatFromInt(packet_size * packet_size)) / @as(f64, @floatFromInt(self.congestion_window)) * growth_factor));
             self.congestion_window += increase;
         }
-        
+
         self.congestion_window = @min(self.congestion_window, self.max_window);
     }
-    
+
     /// Crypto-aware BBR loss processing
     fn cryptoBbrOnPacketLost(self: *Self, packet_size: u32, loss_severity: f64) void {
         _ = packet_size;
@@ -371,44 +373,44 @@ pub const CryptoOptimizedCongestionController = struct {
         // BBR doesn't react to individual losses, but we can adjust delivery rate estimates
         self.bbr_state.delivery_rate = @as(u64, @intFromFloat(@as(f64, @floatFromInt(self.bbr_state.delivery_rate)) * 0.95));
     }
-    
+
     /// Crypto-aware CUBIC loss processing
     fn cryptoCubicOnPacketLost(self: *Self, packet_size: u32, loss_severity: f64) void {
         _ = packet_size;
-        
+
         self.cubic_state.w_max = @as(f64, @floatFromInt(self.congestion_window));
-        
+
         // Adjust reduction based on loss severity for crypto workloads
         const reduction_factor = self.cubic_state.beta * loss_severity;
         self.congestion_window = @as(u64, @intFromFloat(@as(f64, @floatFromInt(self.congestion_window)) * (1.0 - reduction_factor)));
         self.congestion_window = @max(self.congestion_window, self.min_window);
         self.ssthresh = self.congestion_window;
-        
+
         if (self.fast_recovery_enabled) {
             self.state = .recovery;
         }
-        
+
         // Reset CUBIC epoch
         const ts = std.posix.clock_gettime(std.posix.CLOCK.REALTIME) catch unreachable;
         self.cubic_state.epoch_start = (@as(i128, ts.sec) * std.time.ns_per_s + ts.nsec) / 1000;
         self.cubic_state.k = std.math.cbrt((self.cubic_state.w_max * reduction_factor) / self.cubic_state.c);
     }
-    
+
     /// Crypto-aware New Reno loss processing
     fn cryptoNewRenoOnPacketLost(self: *Self, packet_size: u32, loss_severity: f64) void {
         _ = packet_size;
-        
+
         const reduction = @as(u64, @intFromFloat(@as(f64, @floatFromInt(self.congestion_window)) * 0.5 * loss_severity));
         self.ssthresh = @max(self.congestion_window - reduction, self.min_window);
         self.congestion_window = self.ssthresh;
         self.state = .recovery;
     }
-    
+
     /// Update BBR state machine with crypto optimizations
     fn updateCryptoBbrState(self: *Self) void {
         const ts = std.posix.clock_gettime(std.posix.CLOCK.REALTIME) catch unreachable;
         const now = (@as(i128, ts.sec) * std.time.ns_per_s + ts.nsec) / 1000;
-        
+
         switch (self.bbr_state.phase) {
             .startup => {
                 // Crypto-aware startup exit
@@ -419,7 +421,7 @@ pub const CryptoOptimizedCongestionController = struct {
                     .mempool_gossip => 1.2, // Moderate
                     .blockchain_sync => 1.25, // Conservative
                 };
-                
+
                 if (self.bbr_state.delivery_rate < @as(u64, @intFromFloat(@as(f64, @floatFromInt(self.bbr_state.bottleneck_bandwidth)) * exit_threshold))) {
                     self.bbr_state.phase = .drain;
                     self.bbr_state.phase_start_time = now;
@@ -446,11 +448,11 @@ pub const CryptoOptimizedCongestionController = struct {
                 }
             },
         }
-        
+
         // Update congestion window with crypto BDP
         const bdp = self.getCryptoBdp();
         self.congestion_window = @max(bdp, self.min_window);
-        
+
         // Update pacing rate with adaptive pacing
         if (self.adaptive_pacing) {
             const pacing_gain = switch (self.bbr_state.phase) {
@@ -462,33 +464,33 @@ pub const CryptoOptimizedCongestionController = struct {
             self.bbr_state.pacing_rate = @as(u64, @intFromFloat(@as(f64, @floatFromInt(self.bbr_state.bottleneck_bandwidth)) * pacing_gain));
         }
     }
-    
+
     /// Crypto-optimized CUBIC window update
     fn cryptoCubicUpdate(self: *Self, growth_multiplier: u32) void {
         const ts = std.posix.clock_gettime(std.posix.CLOCK.REALTIME) catch unreachable;
         const now = (@as(i128, ts.sec) * std.time.ns_per_s + ts.nsec) / 1000;
         const t = @as(f64, @floatFromInt(now - self.cubic_state.epoch_start)) / 1_000_000.0;
-        
+
         // CUBIC function with crypto optimizations
         const cubic_window = self.cubic_state.c * std.math.pow(f64, t - self.cubic_state.k, 3) + self.cubic_state.w_max;
-        
+
         // TCP-friendly rate with growth multiplier
         self.cubic_state.tcp_cwnd += 1460 * growth_multiplier;
-        
+
         const target_window = @max(@as(u64, @intFromFloat(@max(cubic_window, 0))), self.cubic_state.tcp_cwnd);
-        
+
         if (target_window > self.congestion_window) {
             self.congestion_window = @min(target_window, self.max_window);
         }
     }
-    
+
     /// Estimate delivery rate optimized for crypto workloads
     fn estimateCryptoDeliveryRate(self: *const Self) u64 {
         if (self.rtt_stats.smoothed_rtt == 0) return self.bbr_state.delivery_rate;
-        
+
         // Crypto-optimized delivery rate estimation
         const base_rate = (self.bytes_acked * 8 * 1_000_000) / self.rtt_stats.smoothed_rtt;
-        
+
         // Adjust for crypto workload characteristics
         const workload_factor = switch (self.workload_type) {
             .high_frequency_trading => 1.2, // Boost for low latency
@@ -497,14 +499,14 @@ pub const CryptoOptimizedCongestionController = struct {
             .mempool_gossip => 0.9, // Slightly conservative
             .consensus_voting => 1.3, // Aggressive for time-critical
         };
-        
+
         return @as(u64, @intFromFloat(@as(f64, @floatFromInt(base_rate)) * workload_factor));
     }
-    
+
     /// Get crypto-optimized bandwidth-delay product
     fn getCryptoBdp(self: *const Self) u64 {
         const base_bdp = (self.bbr_state.bottleneck_bandwidth * self.bbr_state.round_trip_time) / (8 * 1_000_000);
-        
+
         // Crypto workload BDP adjustments
         const bdp_multiplier = switch (self.workload_type) {
             .high_frequency_trading => 0.5, // Small BDP for low latency
@@ -513,10 +515,10 @@ pub const CryptoOptimizedCongestionController = struct {
             .mempool_gossip => 1.5, // Larger for bursts
             .consensus_voting => 0.75, // Moderate for responsiveness
         };
-        
+
         return @as(u64, @intFromFloat(@as(f64, @floatFromInt(base_bdp)) * bdp_multiplier));
     }
-    
+
     /// Get current pacing rate with crypto optimizations
     pub fn getPacingRate(self: *const Self) u64 {
         return switch (self.algorithm) {
@@ -535,7 +537,7 @@ pub const CryptoOptimizedCongestionController = struct {
             },
         };
     }
-    
+
     /// Get comprehensive crypto congestion control statistics
     pub fn getCryptoStats(self: *const Self) struct {
         algorithm: congestion.CongestionAlgorithm,
@@ -553,18 +555,21 @@ pub const CryptoOptimizedCongestionController = struct {
         burst_allowance: u64,
         bbr_phase: ?BbrPhase,
     } {
-        const loss_rate = if (self.packets_sent > 0) 
+        const loss_rate = if (self.packets_sent > 0)
             @as(f64, @floatFromInt(self.packets_lost)) / @as(f64, @floatFromInt(self.packets_sent))
-        else 0.0;
-        
+        else
+            0.0;
+
         const hp_ratio = if (self.packets_acked > 0)
             @as(f64, @floatFromInt(self.high_priority_packets)) / @as(f64, @floatFromInt(self.packets_acked))
-        else 0.0;
-        
+        else
+            0.0;
+
         const crit_ratio = if (self.packets_acked > 0)
             @as(f64, @floatFromInt(self.critical_packets)) / @as(f64, @floatFromInt(self.packets_acked))
-        else 0.0;
-        
+        else
+            0.0;
+
         return .{
             .algorithm = self.algorithm,
             .workload_type = self.workload_type,
