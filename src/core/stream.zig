@@ -1,6 +1,6 @@
 //! QUIC Stream with async I/O support
 //!
-//! ZQUIC v0.9.3 - Stream management without external dependencies
+//! ZQUIC v0.9.4 - Stream management without external dependencies
 
 const std = @import("std");
 const Error = @import("../utils/error.zig");

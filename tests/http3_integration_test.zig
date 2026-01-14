@@ -367,13 +367,14 @@ test "integration: static middleware serves files" {
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
+    const io = std.testing.io;
     var tmp_dir = std.testing.tmpDir(.{});
     defer tmp_dir.cleanup();
 
-    try tmp_dir.dir.makePath("static");
-    try tmp_dir.dir.writeFile(.{ .sub_path = "static/index.txt", .data = "hello quic" });
+    try tmp_dir.dir.createDirPath(io, "static");
+    try tmp_dir.dir.writeFile(io, .{ .sub_path = "static/index.txt", .data = "hello quic" });
 
-    const root_path = try tmp_dir.dir.realpathAlloc(allocator, "static");
+    const root_path: [:0]const u8 = try tmp_dir.dir.realPathFileAlloc(io, "static", allocator);
     defer allocator.free(root_path);
 
     var server = try Http3.Http3Server.init(allocator, .{

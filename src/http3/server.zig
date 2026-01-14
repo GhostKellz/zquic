@@ -1,6 +1,6 @@
 //! HTTP/3 Server Implementation
 //!
-//! ZQUIC v0.9.3 - High-performance HTTP/3 server without external dependencies
+//! ZQUIC v0.9.4 - High-performance HTTP/3 server without external dependencies
 
 const std = @import("std");
 const Error = @import("../utils/error.zig");

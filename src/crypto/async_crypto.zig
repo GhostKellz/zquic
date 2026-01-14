@@ -1,6 +1,6 @@
 //! Asynchronous Cryptographic Operations for ZQUIC
 //!
-//! ZQUIC v0.9.3 - Non-blocking cryptographic processing without external dependencies
+//! ZQUIC v0.9.4 - Non-blocking cryptographic processing without external dependencies
 
 const std = @import("std");
 const Error = @import("../utils/error.zig");

@@ -17,10 +17,21 @@ pub fn sleep(ns: u64) void {
             const clamped = @min(raw_ms, std.math.maxInt(u32));
             std.os.windows.Sleep(@intCast(clamped));
         },
+        .linux => {
+            const linux = std.os.linux;
+            const req = linux.timespec{
+                .sec = @intCast(ns / std.time.ns_per_s),
+                .nsec = @intCast(ns % std.time.ns_per_s),
+            };
+            _ = linux.nanosleep(&req, null);
+        },
         else => {
+            // For other POSIX platforms, use clock_nanosleep or similar
             const seconds = ns / std.time.ns_per_s;
             const nanoseconds = ns % std.time.ns_per_s;
-            std.posix.nanosleep(seconds, nanoseconds);
+            _ = seconds;
+            _ = nanoseconds;
+            @compileError("sleep not implemented for this platform");
         },
     }
 }

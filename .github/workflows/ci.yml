@@ -6,9 +6,6 @@ on:
   pull_request:
     branches: [ main ]
 
-env:
-  ZIG_VERSION: 0.16.0-dev.1484+d0ba6642b
-
 jobs:
   lint:
     name: "Lint & API Checks"
@@ -26,15 +23,8 @@ jobs:
             zig-out
           key: ${{ runner.os }}-zig-${{ hashFiles('build.zig', 'build.zig.zon', 'src/**/*.zig', 'tests/**/*.zig', 'examples/**/*.zig') }}
 
-      - name: Verify Zig toolchain
-        run: |
-          set -euo pipefail
-          INSTALLED=$(zig version)
-          echo "Using Zig ${INSTALLED}"
-          if [ "$INSTALLED" != "$ZIG_VERSION" ]; then
-            echo "::error::Expected Zig $ZIG_VERSION but found $INSTALLED"
-            exit 1
-          fi
+      - name: Show Zig version
+        run: zig version
 
       - name: Format check
         run: |
@@ -67,15 +57,8 @@ jobs:
             zig-out
           key: ${{ runner.os }}-zig-${{ hashFiles('build.zig', 'build.zig.zon', 'src/**/*.zig', 'tests/**/*.zig', 'examples/**/*.zig') }}
 
-      - name: Verify Zig toolchain
-        run: |
-          set -euo pipefail
-          INSTALLED=$(zig version)
-          echo "Using Zig ${INSTALLED}"
-          if [ "$INSTALLED" != "$ZIG_VERSION" ]; then
-            echo "::error::Expected Zig $ZIG_VERSION but found $INSTALLED"
-            exit 1
-          fi
+      - name: Show Zig version
+        run: zig version
 
       - name: Run dev/test.sh
         run: |
@@ -99,15 +82,8 @@ jobs:
             zig-out
           key: ${{ runner.os }}-zig-${{ hashFiles('build.zig', 'build.zig.zon', 'src/**/*.zig', 'tests/**/*.zig', 'examples/**/*.zig') }}
 
-      - name: Verify Zig toolchain
-        run: |
-          set -euo pipefail
-          INSTALLED=$(zig version)
-          echo "Using Zig ${INSTALLED}"
-          if [ "$INSTALLED" != "$ZIG_VERSION" ]; then
-            echo "::error::Expected Zig $ZIG_VERSION but found $INSTALLED"
-            exit 1
-          fi
+      - name: Show Zig version
+        run: zig version
 
       - name: Run smoke tests
         run: |
@@ -129,15 +105,8 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Verify Zig toolchain
-        run: |
-          set -euo pipefail
-          INSTALLED=$(zig version)
-          echo "Using Zig ${INSTALLED}"
-          if [ "$INSTALLED" != "$ZIG_VERSION" ]; then
-            echo "::error::Expected Zig $ZIG_VERSION but found $INSTALLED"
-            exit 1
-          fi
+      - name: Show Zig version
+        run: zig version
 
       - name: Build Release via dev script
         run: |

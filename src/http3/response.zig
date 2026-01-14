@@ -303,12 +303,18 @@ pub const Response = struct {
 
     /// Send file content (basic implementation)
     pub fn sendFile(self: *Self, file_path: []const u8) !void {
-        const file = if (std.fs.path.isAbsolute(file_path))
-            std.fs.openFileAbsolute(file_path, .{})
-        else
-            std.fs.cwd().openFile(file_path, .{});
+        const posix = std.posix;
+        const linux = std.os.linux;
 
-        const file_handle = file catch |err| switch (err) {
+        // Convert path to null-terminated
+        var path_buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
+        const path_z = std.fmt.bufPrintZ(&path_buf, "{s}", .{file_path}) catch {
+            self.setStatus(.uri_too_long);
+            try self.text("Path too long");
+            return;
+        };
+
+        const fd = posix.openat(posix.AT.FDCWD, path_z, .{}, 0) catch |err| switch (err) {
             error.FileNotFound => {
                 self.setStatus(.not_found);
                 try self.text("File not found");
@@ -316,18 +322,27 @@ pub const Response = struct {
             },
             else => return err,
         };
-        defer file_handle.close();
+        defer posix.close(fd);
 
         // Determine content type from extension
         const content_type = getContentTypeFromPath(file_path);
         try self.headers.setContentType(content_type);
 
-        // Read and write file content
-        const file_size = try file_handle.getEndPos();
+        // Get file size via statx (using EMPTY_PATH to stat the open fd)
+        var statx_buf: linux.Statx = undefined;
+        const statx_rc = linux.statx(fd, "", linux.AT.EMPTY_PATH, .{ .SIZE = true }, &statx_buf);
+        if (linux.errno(statx_rc) != .SUCCESS) {
+            return error.AccessDenied;
+        }
+        const file_size: usize = @intCast(statx_buf.size);
+
+        // Read file content
         try self.body.resize(self.allocator, file_size);
         var total_read: usize = 0;
         while (total_read < file_size) {
-            const bytes_read = try file_handle.read(self.body.items[total_read..]);
+            const bytes_read = posix.read(fd, self.body.items[total_read..]) catch |err| {
+                return err;
+            };
             if (bytes_read == 0) break;
             total_read += bytes_read;
         }

@@ -5,9 +5,6 @@ on:
     - cron: '30 7 * * *'
   workflow_dispatch:
 
-env:
-  ZIG_VERSION: 0.16.0-dev.1484+d0ba6642b
-
 jobs:
   nightly:
     name: "Nightly validation"
@@ -25,15 +22,8 @@ jobs:
             zig-out
           key: ${{ runner.os }}-zig-nightly-${{ hashFiles('build.zig', 'build.zig.zon', 'src/**/*.zig', 'tests/**/*.zig', 'examples/**/*.zig') }}
 
-      - name: Verify Zig toolchain
-        run: |
-          set -euo pipefail
-          INSTALLED=$(zig version)
-          echo "Using Zig ${INSTALLED}"
-          if [ "$INSTALLED" != "$ZIG_VERSION" ]; then
-            echo "::error::Expected Zig $ZIG_VERSION but found $INSTALLED"
-            exit 1
-          fi
+      - name: Show Zig version
+        run: zig version
 
       - name: Full test sweep
         run: |

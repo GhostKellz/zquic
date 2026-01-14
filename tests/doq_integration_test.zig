@@ -6,13 +6,14 @@ const zquic = @import("zquic");
 const DoQ = zquic.DoQ;
 const Error = zquic.Error;
 
-fn writeTempCertFiles(allocator: std.mem.Allocator) !struct { cert: []const u8, key: []const u8, tmp: std.testing.TmpDir } {
+fn writeTempCertFiles(allocator: std.mem.Allocator) !struct { cert: [:0]const u8, key: [:0]const u8, tmp: std.testing.TmpDir } {
+    const io = std.testing.io;
     var tmp_dir = std.testing.tmpDir(.{});
-    try tmp_dir.dir.writeFile(.{ .sub_path = "cert.pem", .data = "dummy-cert" });
-    try tmp_dir.dir.writeFile(.{ .sub_path = "key.pem", .data = "dummy-key" });
+    try tmp_dir.dir.writeFile(io, .{ .sub_path = "cert.pem", .data = "dummy-cert" });
+    try tmp_dir.dir.writeFile(io, .{ .sub_path = "key.pem", .data = "dummy-key" });
 
-    const cert_path = try tmp_dir.dir.realpathAlloc(allocator, "cert.pem");
-    const key_path = try tmp_dir.dir.realpathAlloc(allocator, "key.pem");
+    const cert_path = try tmp_dir.dir.realPathFileAlloc(io, "cert.pem", allocator);
+    const key_path = try tmp_dir.dir.realPathFileAlloc(io, "key.pem", allocator);
 
     return .{ .cert = cert_path, .key = key_path, .tmp = tmp_dir };
 }

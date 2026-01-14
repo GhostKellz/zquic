@@ -88,7 +88,7 @@ pub const StreamState = enum(u8) {
     closed = 4,
 };
 
-pub const version = "0.9.0";
+pub const version = "0.9.4";
 pub const quic_version = 0x00000001; // QUIC version 1 (RFC 9000)
 
 /// Initialize the ZQUIC core library

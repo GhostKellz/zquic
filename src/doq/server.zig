@@ -1,6 +1,6 @@
 //! DNS-over-QUIC Server Implementation (RFC 9250)
 //!
-//! ZQUIC v0.9.3 - Post-quantum secure DoQ server without external dependencies
+//! ZQUIC v0.9.4 - Post-quantum secure DoQ server without external dependencies
 
 const std = @import("std");
 const zquic_core = @import("zquic_core");
@@ -311,17 +311,32 @@ pub const DoQServer = struct {
 
     fn loadCertificates(self: *DoQServer) !void {
         // Load TLS certificates for post-quantum crypto
-        const cert_file = std.fs.cwd().openFile(self.config.cert_path, .{}) catch |err| {
+        // Use posix to check if certificate files exist
+        const posix = std.posix;
+
+        var cert_path_buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
+        const cert_path_z = std.fmt.bufPrintZ(&cert_path_buf, "{s}", .{self.config.cert_path}) catch {
+            std.log.err("DoQ: Certificate path too long: {s}", .{self.config.cert_path});
+            return error.InvalidArgument;
+        };
+
+        const cert_fd = posix.openat(posix.AT.FDCWD, cert_path_z, .{}, 0) catch |err| {
             std.log.err("DoQ: Failed to load certificate {s}: {}", .{ self.config.cert_path, err });
             return err;
         };
-        cert_file.close();
+        posix.close(cert_fd);
 
-        const key_file = std.fs.cwd().openFile(self.config.key_path, .{}) catch |err| {
+        var key_path_buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
+        const key_path_z = std.fmt.bufPrintZ(&key_path_buf, "{s}", .{self.config.key_path}) catch {
+            std.log.err("DoQ: Key path too long: {s}", .{self.config.key_path});
+            return error.InvalidArgument;
+        };
+
+        const key_fd = posix.openat(posix.AT.FDCWD, key_path_z, .{}, 0) catch |err| {
             std.log.err("DoQ: Failed to load private key {s}: {}", .{ self.config.key_path, err });
             return err;
         };
-        key_file.close();
+        posix.close(key_fd);
 
         std.log.info("DoQ: Loaded certificates with post-quantum crypto support", .{});
     }

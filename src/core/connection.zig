@@ -1,6 +1,6 @@
 //! QUIC Connection with async channel support
 //!
-//! ZQUIC v0.9.3 - High-performance connection management without external dependencies
+//! ZQUIC v0.9.4 - High-performance connection management without external dependencies
 
 const std = @import("std");
 const Error = @import("../utils/error.zig");
