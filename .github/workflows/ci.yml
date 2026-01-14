@@ -6,9 +6,6 @@ on:
   pull_request:
     branches: [ main ]
 
-env:
-  ZIG_LOCAL_CACHE_DIR: /tmp/zig-cache
-
 jobs:
   lint:
     name: "Lint & API Checks"
@@ -18,8 +15,11 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Setup cache dir
-        run: mkdir -p /tmp/zig-cache
+      - name: Setup cache on tmpfs
+        run: |
+          rm -rf .zig-cache
+          mkdir -p /tmp/zig-cache
+          ln -sf /tmp/zig-cache .zig-cache
 
       - name: Show Zig version
         run: zig version
@@ -47,8 +47,11 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Setup cache dir
-        run: mkdir -p /tmp/zig-cache
+      - name: Setup cache on tmpfs
+        run: |
+          rm -rf .zig-cache
+          mkdir -p /tmp/zig-cache
+          ln -sf /tmp/zig-cache .zig-cache
 
       - name: Show Zig version
         run: zig version
@@ -67,8 +70,11 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Setup cache dir
-        run: mkdir -p /tmp/zig-cache
+      - name: Setup cache on tmpfs
+        run: |
+          rm -rf .zig-cache
+          mkdir -p /tmp/zig-cache
+          ln -sf /tmp/zig-cache .zig-cache
 
       - name: Show Zig version
         run: zig version
@@ -93,8 +99,11 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Setup cache dir
-        run: mkdir -p /tmp/zig-cache
+      - name: Setup cache on tmpfs
+        run: |
+          rm -rf .zig-cache
+          mkdir -p /tmp/zig-cache
+          ln -sf /tmp/zig-cache .zig-cache
 
       - name: Show Zig version
         run: zig version

@@ -18,7 +18,10 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Setup cache dir
-        run: mkdir -p /tmp/zig-cache
+        run: |
+          rm -rf .zig-cache
+          mkdir -p /tmp/zig-cache
+          ln -sf /tmp/zig-cache .zig-cache
 
       - name: Show Zig version
         run: zig version
