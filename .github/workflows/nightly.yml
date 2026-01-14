@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
 
 env:
-  ZIG_LOCAL_CACHE_DIR: /tmp/zig-cache
+  ZIG_GLOBAL_CACHE_DIR: /tmp/zig-global-cache
 
 jobs:
   nightly:
@@ -17,11 +17,11 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Setup cache dir
+      - name: Setup cache on tmpfs
         run: |
-          rm -rf .zig-cache
-          mkdir -p /tmp/zig-cache
-          ln -sf /tmp/zig-cache .zig-cache
+          rm -rf .zig-cache zig-out /home/runner/.cache/zig
+          mkdir -p /tmp/zig-local-cache /tmp/zig-global-cache
+          ln -sfn /tmp/zig-local-cache .zig-cache
 
       - name: Show Zig version
         run: zig version
