@@ -5,6 +5,9 @@ on:
     - cron: '30 7 * * *'
   workflow_dispatch:
 
+env:
+  ZIG_LOCAL_CACHE_DIR: /tmp/zig-cache
+
 jobs:
   nightly:
     name: "Nightly validation"
@@ -14,19 +17,11 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Cache zig artifacts
-        uses: actions/cache@v4
-        with:
-          path: |
-            .zig-cache
-            zig-out
-          key: ${{ runner.os }}-zig-nightly-${{ hashFiles('build.zig', 'build.zig.zon', 'src/**/*.zig', 'tests/**/*.zig', 'examples/**/*.zig') }}
+      - name: Setup cache dir
+        run: mkdir -p /tmp/zig-cache
 
       - name: Show Zig version
         run: zig version
-
-      - name: Clean stale cache
-        run: rm -rf .zig-cache zig-out
 
       - name: Full test sweep
         run: |
