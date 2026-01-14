@@ -18,12 +18,15 @@ jobs:
         uses: actions/cache@v4
         with:
           path: |
-            zig-cache
+            .zig-cache
             zig-out
           key: ${{ runner.os }}-zig-nightly-${{ hashFiles('build.zig', 'build.zig.zon', 'src/**/*.zig', 'tests/**/*.zig', 'examples/**/*.zig') }}
 
       - name: Show Zig version
         run: zig version
+
+      - name: Clean stale cache
+        run: rm -rf .zig-cache zig-out
 
       - name: Full test sweep
         run: |

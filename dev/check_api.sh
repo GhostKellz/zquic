@@ -44,8 +44,10 @@ fi
 echo ""
 
 echo "[5] Build validation:"
-if zig build 2>&1 | grep -q "error:"; then
-    echo "  Build FAILED - check errors above"
+build_output=$(zig build 2>&1)
+if echo "$build_output" | grep -q "error:"; then
+    echo "  Build FAILED:"
+    echo "$build_output"
     exit 1
 else
     echo "  Build OK ✓"
