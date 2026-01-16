@@ -36,6 +36,10 @@
             .url = "https://github.com/ghostkellz/zcrypto/archive/main.tar.gz",
             .hash = "zcrypto-0.9.7-rgQAI9HqDgDI4FNzBrbJRki6g2K-3KTcPHPmyLVRxo0d",
         },
+        .zsync = .{
+            .url = "https://github.com/ghostkellz/zsync/archive/main.tar.gz",
+            .hash = "zsync-0.7.4-KAuheYHjFgAB-W9RvATLcMJyl_1jUtrBZoqXt4eaQN44",
+        },
     },
     // Specifies the set of files and directories that are included in this package.
     // Only files and directories listed here are included in the `hash` that
