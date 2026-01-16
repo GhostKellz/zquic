@@ -11,6 +11,7 @@
 
 const std = @import("std");
 const Error = @import("../utils/error.zig");
+const Time = @import("../utils/time.zig");
 const zcrypto = @import("zcrypto");
 
 /// TLS 1.3 version constant
@@ -456,14 +457,12 @@ pub const SessionTicket = struct {
     }
 
     pub fn isValid(self: *const Self) bool {
-        const ts = std.posix.clock_gettime(std.posix.CLOCK.REALTIME) catch unreachable;
-        const now = ts.sec;
+        const now = Time.nowSeconds();
         return now >= self.issued_at and now < self.issued_at + self.lifetime;
     }
 
     pub fn getAge(self: *const Self) u32 {
-        const ts = std.posix.clock_gettime(std.posix.CLOCK.REALTIME) catch unreachable;
-        const now = ts.sec;
+        const now = Time.nowSeconds();
         const age = @as(u32, @intCast(now - self.issued_at));
         return age +% self.age_add;
     }

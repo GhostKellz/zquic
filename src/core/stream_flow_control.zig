@@ -11,6 +11,7 @@
 
 const std = @import("std");
 const Error = @import("../utils/error.zig");
+const Time = @import("../utils/time.zig");
 const Frame = @import("quic_frames.zig").Frame;
 const MaxDataFrame = @import("quic_frames.zig").MaxDataFrame;
 const MaxStreamDataFrame = @import("quic_frames.zig").MaxStreamDataFrame;
@@ -116,8 +117,7 @@ pub const StreamFlowControl = struct {
     pub fn consumeSendWindow(self: *StreamFlowControl, bytes: u64) !void {
         if (!self.canSend(bytes)) {
             self.is_blocked = true;
-            const ts = std.posix.clock_gettime(std.posix.CLOCK.REALTIME) catch unreachable;
-            self.blocked_since = ts.sec;
+            self.blocked_since = Time.nowSeconds();
             return Error.ZquicError.FlowControlBlocked;
         }
 
@@ -212,8 +212,7 @@ pub const ConnectionFlowControl = struct {
     pub fn consumeSendWindow(self: *ConnectionFlowControl, bytes: u64) !void {
         if (!self.canSend(bytes)) {
             self.is_blocked = true;
-            const ts = std.posix.clock_gettime(std.posix.CLOCK.REALTIME) catch unreachable;
-            self.blocked_since = ts.sec;
+            self.blocked_since = Time.nowSeconds();
             return Error.ZquicError.FlowControlBlocked;
         }
 
@@ -404,7 +403,9 @@ pub const StreamScheduler = struct {
                     child.parent_stream_id = stream_info.parent_stream_id;
                     if (stream_info.parent_stream_id) |parent_id| {
                         if (self.streams.getPtr(parent_id)) |parent| {
-                            parent.addChild(child_id) catch {};
+                            parent.addChild(child_id) catch |err| {
+                                std.log.debug("StreamPriorityTree: Failed to reparent child {}: {}", .{ child_id, err });
+                            };
                         }
                     }
                 }
@@ -458,7 +459,9 @@ pub const StreamScheduler = struct {
         for (self.ready_streams.items, 0..) |id, i| {
             if (id == stream_id) {
                 _ = self.ready_streams.swapRemove(i);
-                self.blocked_streams.append(self.allocator, stream_id) catch {};
+                self.blocked_streams.append(self.allocator, stream_id) catch |err| {
+                    std.log.err("Flow control: Failed to track blocked stream {}: {}", .{ stream_id, err });
+                };
                 break;
             }
         }
@@ -469,7 +472,9 @@ pub const StreamScheduler = struct {
         for (self.blocked_streams.items, 0..) |id, i| {
             if (id == stream_id) {
                 _ = self.blocked_streams.swapRemove(i);
-                self.ready_streams.append(self.allocator, stream_id) catch {};
+                self.ready_streams.append(self.allocator, stream_id) catch |err| {
+                    std.log.err("Flow control: Failed to track ready stream {}: {}", .{ stream_id, err });
+                };
                 break;
             }
         }
@@ -605,8 +610,7 @@ pub const StreamScheduler = struct {
     pub fn recordStreamScheduled(self: *StreamScheduler, stream_id: u64, bytes_sent: u64) void {
         if (self.streams.getPtr(stream_id)) |stream_info| {
             stream_info.bytes_scheduled += bytes_sent;
-            const ts = std.posix.clock_gettime(std.posix.CLOCK.REALTIME) catch unreachable;
-            stream_info.last_scheduled = ts.sec;
+            stream_info.last_scheduled = Time.nowSeconds();
 
             // Update deficit for DRR
             if (self.algorithm == .deficit_round_robin) {

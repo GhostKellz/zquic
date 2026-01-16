@@ -760,10 +760,14 @@ fn proxyHandler(req: *Request, res: *Response) !void {
 
     // Forward headers (simplified)
     if (req.getHeader("content-type")) |content_type| {
-        backend_request.headers.append("content-type", content_type) catch {};
+        backend_request.headers.append("content-type", content_type) catch |err| {
+            std.log.debug("Wraith: Failed to forward content-type header: {}", .{err});
+        };
     }
     if (req.getHeader("authorization")) |auth| {
-        backend_request.headers.append("authorization", auth) catch {};
+        backend_request.headers.append("authorization", auth) catch |err| {
+            std.log.debug("Wraith: Failed to forward authorization header: {}", .{err});
+        };
     }
 
     // Send request body if present
@@ -805,7 +809,9 @@ fn proxyHandler(req: *Request, res: *Response) !void {
     // Copy response headers (simplified)
     var header_iter = backend_request.response.iterateHeaders();
     while (header_iter.next()) |header| {
-        res.setHeader(header.name, header.value) catch {};
+        res.setHeader(header.name, header.value) catch |err| {
+            std.log.debug("Wraith: Failed to copy response header '{}': {}", .{ header.name, err });
+        };
     }
 
     // Add proxy headers

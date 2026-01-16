@@ -10,6 +10,7 @@
 
 const std = @import("std");
 const Error = @import("../utils/error.zig");
+const Time = @import("../utils/time.zig");
 
 /// Congestion control algorithm types
 pub const CongestionControlType = enum {
@@ -680,8 +681,7 @@ pub const BBR = struct {
 
         if (cc.metrics.min_rtt > rtt) {
             cc.metrics.min_rtt = rtt;
-            const ts = std.posix.clock_gettime(std.posix.CLOCK.REALTIME) catch unreachable;
-            self.min_rtt_timestamp = (@as(i128, ts.sec) * std.time.ns_per_s + ts.nsec) / 1000;
+            self.min_rtt_timestamp = Time.nowMicros();
         }
 
         // Update smoothed RTT
@@ -791,7 +791,9 @@ pub const AdaptiveCongestionControl = struct {
         cc.metrics = current_cc.metrics;
 
         // Consider algorithm switching
-        self.considerAlgorithmSwitch(ack_info.time_acked) catch {};
+        self.considerAlgorithmSwitch(ack_info.time_acked) catch |err| {
+            std.log.debug("CongestionControl: Algorithm switch evaluation failed: {}", .{err});
+        };
     }
 
     fn onPacketLost(cc: *CongestionControl, loss_info: LossInfo) void {

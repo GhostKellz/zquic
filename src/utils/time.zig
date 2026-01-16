@@ -46,6 +46,20 @@ pub fn nowSeconds() i64 {
 pub fn nowMicros() i64 {
     const instant = std.time.Instant.now() catch return 0;
 
-    const micros = @as(i128, instant.timestamp.sec) * std.time.us_per_s + instant.timestamp.nsec / std.time.ns_per_us;
+    const micros = @as(i128, instant.timestamp.sec) * std.time.us_per_s + @divTrunc(instant.timestamp.nsec, std.time.ns_per_us);
     return @intCast(micros);
+}
+
+/// Return current timestamp in nanoseconds without propagating errors.
+/// Returns 0 on clock failure (safe fallback for production).
+pub fn nowNanos() i128 {
+    const instant = std.time.Instant.now() catch return 0;
+    return @as(i128, instant.timestamp.sec) * std.time.ns_per_s + instant.timestamp.nsec;
+}
+
+/// Return current timestamp as timespec without propagating errors.
+/// Returns zero timespec on failure.
+pub fn nowTimespec() std.posix.timespec {
+    const instant = std.time.Instant.now() catch return .{ .sec = 0, .nsec = 0 };
+    return instant.timestamp;
 }

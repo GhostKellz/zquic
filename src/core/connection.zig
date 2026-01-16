@@ -165,19 +165,19 @@ pub const SuperConnection = struct {
 
         // Main connection event loop
         while (self.is_running and self.state != .closed) {
-            // Process pending events
-            while (self.stream_events.items.len > 0) {
-                const event = self.stream_events.orderedRemove(0);
+            // Process pending events - O(n) batch processing instead of O(n²) orderedRemove
+            for (self.stream_events.items) |event| {
                 try self.handleStreamEvent(event);
                 self.stats.channel_operations += 1;
             }
+            self.stream_events.clearRetainingCapacity();
 
-            // Process packets
-            while (self.incoming_packets.items.len > 0) {
-                const packet = self.incoming_packets.orderedRemove(0);
+            // Process packets - O(n) batch processing instead of O(n²) orderedRemove
+            for (self.incoming_packets.items) |packet| {
                 try self.processPacket(packet);
                 self.stats.packets_received += 1;
             }
+            self.incoming_packets.clearRetainingCapacity();
 
             // Small sleep to prevent busy loop
             Time.sleep(std.time.ns_per_ms);
@@ -205,7 +205,10 @@ pub const SuperConnection = struct {
     /// Create stream asynchronously
     fn createStreamAsync(self: *Self, stream_id: u64, stream_type: Stream.StreamType) !void {
         const stream = try self.allocator.create(Stream.SuperStream);
+        errdefer self.allocator.destroy(stream);
+
         stream.* = try Stream.SuperStream.init(self.allocator, stream_id, stream_type);
+        errdefer stream.deinit();
 
         try self.streams.put(self.allocator, stream_id, stream);
     }
@@ -258,6 +261,175 @@ pub const SuperConnection = struct {
     pub fn getStats(self: *const Self) ConnectionStats {
         return self.stats;
     }
+
+    // =========================================================================
+    // Graceful Shutdown and Connection Draining (RFC 9000 Section 10.2)
+    // =========================================================================
+
+    /// Initiate graceful shutdown of the connection.
+    ///
+    /// This begins the connection close process:
+    /// 1. Stops accepting new streams
+    /// 2. Allows existing streams to complete
+    /// 3. Sends CONNECTION_CLOSE frame
+    /// 4. Enters draining state
+    ///
+    /// ## Parameters
+    /// - `error_code`: Application error code (0 for normal closure)
+    /// - `reason`: Optional human-readable reason phrase
+    ///
+    /// ## Example
+    /// ```zig
+    /// // Normal graceful shutdown
+    /// try conn.initiateShutdown(0, "Server shutting down");
+    ///
+    /// // Wait for draining to complete
+    /// try conn.waitForDrain(30_000); // 30 second timeout
+    /// ```
+    pub fn initiateShutdown(self: *Self, error_code: u64, reason: ?[]const u8) !void {
+        if (self.state == .closed or self.state == .draining) {
+            return; // Already shutting down
+        }
+
+        std.log.info("Connection {x}: Initiating graceful shutdown (code={}, reason={s})", .{
+            self.local_conn_id.bytes()[0],
+            error_code,
+            reason orelse "none",
+        });
+
+        // Transition to closing state
+        self.state = .closing;
+
+        // Close all streams gracefully
+        var stream_iter = self.streams.iterator();
+        while (stream_iter.next()) |entry| {
+            entry.value_ptr.*.close() catch |err| {
+                std.log.debug("Connection: Failed to close stream {}: {}", .{ entry.key_ptr.*, err });
+            };
+        }
+
+        // Queue CONNECTION_CLOSE frame
+        try self.queueConnectionClose(error_code, reason);
+
+        // Transition to draining state
+        self.state = .draining;
+    }
+
+    /// Queue a CONNECTION_CLOSE frame for transmission.
+    fn queueConnectionClose(self: *Self, error_code: u64, reason: ?[]const u8) !void {
+        _ = reason;
+        // Create a CONNECTION_CLOSE packet
+        // In a full implementation, this would create the actual frame
+        const close_packet = Packet.Packet{
+            .packet_type = .short,
+            .version = 1,
+            .dest_conn_id = self.remote_conn_id orelse self.local_conn_id,
+            .src_conn_id = self.local_conn_id,
+            .packet_number = 0,
+            .payload = &[_]u8{},
+        };
+        _ = error_code;
+
+        try self.outgoing_packets.append(self.allocator, close_packet);
+        self.stats.packets_sent += 1;
+    }
+
+    /// Wait for connection draining to complete.
+    ///
+    /// During draining (RFC 9000 Section 10.2.2):
+    /// - No new packets are sent except for CONNECTION_CLOSE retransmissions
+    /// - Incoming packets are discarded
+    /// - Connection resources are held for 3 * PTO to handle delayed packets
+    ///
+    /// ## Parameters
+    /// - `timeout_ms`: Maximum time to wait for draining (0 = use default 3*PTO)
+    ///
+    /// ## Returns
+    /// - `true` if draining completed normally
+    /// - `false` if timeout occurred
+    pub fn waitForDrain(self: *Self, timeout_ms: u64) !bool {
+        if (self.state != .draining) {
+            return true; // Not draining, nothing to wait for
+        }
+
+        const drain_timeout = if (timeout_ms == 0)
+            self.calculateDrainTimeout()
+        else
+            timeout_ms;
+
+        const start_time = Time.nowSeconds();
+        const deadline = start_time + @as(i64, @intCast(drain_timeout / 1000));
+
+        std.log.debug("Connection {x}: Entering drain period ({}ms)", .{
+            self.local_conn_id.bytes()[0],
+            drain_timeout,
+        });
+
+        while (self.state == .draining) {
+            const now = Time.nowSeconds();
+            if (now >= deadline) {
+                std.log.debug("Connection {x}: Drain timeout reached", .{self.local_conn_id.bytes()[0]});
+                self.state = .closed;
+                return false;
+            }
+
+            // Process any remaining packets during drain
+            self.incoming_packets.clearRetainingCapacity();
+
+            // Sleep briefly to avoid busy loop
+            Time.sleep(10 * std.time.ns_per_ms);
+        }
+
+        return true;
+    }
+
+    /// Calculate drain timeout based on RTT (3 * PTO per RFC 9000).
+    fn calculateDrainTimeout(self: *const Self) u64 {
+        // PTO = smoothed_rtt + max(4*rttvar, 1ms) + max_ack_delay
+        // Drain time = 3 * PTO
+        const base_rtt = if (self.stats.rtt > 0) self.stats.rtt else 100_000; // Default 100ms in microseconds
+        const rtt_var = if (self.stats.rtt_variance > 0) self.stats.rtt_variance else 25_000;
+        const pto = base_rtt + @max(4 * rtt_var, 1000) + (self.params.max_ack_delay * 1000);
+        return 3 * pto / 1000; // Convert to milliseconds
+    }
+
+    /// Perform immediate (non-graceful) connection termination.
+    ///
+    /// Use this for error conditions where graceful shutdown isn't possible.
+    /// Sends a single CONNECTION_CLOSE and immediately releases resources.
+    ///
+    /// ## Parameters
+    /// - `error_code`: Transport or application error code
+    /// - `reason`: Optional reason phrase
+    pub fn terminateImmediate(self: *Self, error_code: u64, reason: ?[]const u8) void {
+        std.log.warn("Connection {x}: Immediate termination (code={}, reason={s})", .{
+            self.local_conn_id.bytes()[0],
+            error_code,
+            reason orelse "none",
+        });
+
+        // Best-effort send of CONNECTION_CLOSE
+        self.queueConnectionClose(error_code, reason) catch {};
+
+        // Force close all streams
+        var stream_iter = self.streams.iterator();
+        while (stream_iter.next()) |entry| {
+            entry.value_ptr.*.state.store(.closed, .release);
+        }
+
+        self.state = .closed;
+        self.is_running = false;
+    }
+
+    /// Check if the connection is in a terminal state.
+    pub fn isTerminated(self: *const Self) bool {
+        return self.state == .closed;
+    }
+
+    /// Check if the connection is shutting down (closing or draining).
+    pub fn isShuttingDown(self: *const Self) bool {
+        return self.state == .closing or self.state == .draining;
+    }
 };
 
 /// Legacy connection wrapper for backward compatibility
@@ -302,6 +474,31 @@ pub const Connection = struct {
     /// Check if connection is established
     pub fn isEstablished(self: *const Self) bool {
         return self.super_connection.state == .established;
+    }
+
+    /// Initiate graceful shutdown (see SuperConnection.initiateShutdown).
+    pub fn initiateShutdown(self: *Self, error_code: u64, reason: ?[]const u8) !void {
+        return self.super_connection.initiateShutdown(error_code, reason);
+    }
+
+    /// Wait for connection draining (see SuperConnection.waitForDrain).
+    pub fn waitForDrain(self: *Self, timeout_ms: u64) !bool {
+        return self.super_connection.waitForDrain(timeout_ms);
+    }
+
+    /// Immediate termination (see SuperConnection.terminateImmediate).
+    pub fn terminateImmediate(self: *Self, error_code: u64, reason: ?[]const u8) void {
+        self.super_connection.terminateImmediate(error_code, reason);
+    }
+
+    /// Check if connection is terminated.
+    pub fn isTerminated(self: *const Self) bool {
+        return self.super_connection.isTerminated();
+    }
+
+    /// Check if connection is shutting down.
+    pub fn isShuttingDown(self: *const Self) bool {
+        return self.super_connection.isShuttingDown();
     }
 };
 

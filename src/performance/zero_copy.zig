@@ -314,7 +314,9 @@ pub const ZeroCopyPool = struct {
         for (self.buffers.items, 0..) |*pooled_buffer, i| {
             if (pooled_buffer.data.ptr == buffer.data.ptr) {
                 pooled_buffer.reset();
-                self.available_buffers.writeItem(i) catch {};
+                self.available_buffers.writeItem(i) catch |err| {
+                    std.log.warn("ZeroCopyPool: Failed to return buffer to pool: {}", .{err});
+                };
                 return;
             }
         }
@@ -1171,7 +1173,9 @@ pub const ZeroCopyPacketPool = struct {
         for (self.large_buffers.items, 0..) |*pooled_buffer, i| {
             if (pooled_buffer.data.ptr == buffer.data.ptr) {
                 pooled_buffer.reset();
-                self.available_large.writeItem(i) catch {};
+                self.available_large.writeItem(i) catch |err| {
+                    std.log.warn("ZeroCopyPacketPool: Failed to return large buffer: {}", .{err});
+                };
                 return;
             }
         }
@@ -1179,7 +1183,9 @@ pub const ZeroCopyPacketPool = struct {
         for (self.medium_buffers.items, 0..) |*pooled_buffer, i| {
             if (pooled_buffer.data.ptr == buffer.data.ptr) {
                 pooled_buffer.reset();
-                self.available_medium.writeItem(i) catch {};
+                self.available_medium.writeItem(i) catch |err| {
+                    std.log.warn("ZeroCopyPacketPool: Failed to return medium buffer: {}", .{err});
+                };
                 return;
             }
         }
@@ -1187,7 +1193,9 @@ pub const ZeroCopyPacketPool = struct {
         for (self.small_buffers.items, 0..) |*pooled_buffer, i| {
             if (pooled_buffer.data.ptr == buffer.data.ptr) {
                 pooled_buffer.reset();
-                self.available_small.writeItem(i) catch {};
+                self.available_small.writeItem(i) catch |err| {
+                    std.log.warn("ZeroCopyPacketPool: Failed to return small buffer: {}", .{err});
+                };
                 return;
             }
         }

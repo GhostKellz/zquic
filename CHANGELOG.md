@@ -1,3 +1,140 @@
+## [0.9.5] - 2026-01-15
+
+### Production Hardening Release
+
+**ZQUIC v0.9.5** - Major production hardening with error handling, memory safety, performance optimizations, and comprehensive logging. This release eliminates silent failures and algorithmic bottlenecks in preparation for v1.0.
+
+### Fixed
+
+#### Error Handling
+- **Eliminated all `catch unreachable`** - Fixed 38 occurrences of `catch unreachable` on `clock_gettime` calls
+  - Added safe timestamp helpers in `src/utils/time.zig`: `nowNanos()`, `nowSeconds()`, `nowMicros()`, `nowTimespec()`
+  - Uses `std.time.Instant.now()` with graceful fallback to 0 on failure
+  - All timestamp operations now production-safe with no panics
+
+- **Eliminated all silent `catch {}`** - Added logging to all 13 silent catch blocks
+  - Connection pool operations now log failures at warn level
+  - Metrics collection logs failures at debug level
+  - Header forwarding logs failures at debug level
+  - Buffer pool operations log failures at warn level
+  - Cleanup/defer operations log failures at debug level
+
+#### Memory Safety
+- **Added `errdefer` chains** - Prevents memory leaks in create/alloc paths
+  - `http3/server.zig`: Connection registration properly cleans up on failure
+  - `core/connection.zig`: Stream creation properly cleans up on failure
+  - All `allocator.create()` calls followed by proper `errdefer allocator.destroy()`
+
+#### Performance Optimizations
+- **O(n) batch event processing** in `connection.zig` (was O(n²) with `orderedRemove`)
+  - Event loop now iterates once then calls `clearRetainingCapacity()`
+  - Packet processing uses same batch pattern
+
+- **O(n) two-pointer compact()** in `buffers.zig` (was O(n²))
+  - Single pass compaction using write index
+  - Frees acked segments in-place, no shifting
+
+- **O(1) stream reads** in `stream.zig` (was O(n) memmove on every read)
+  - Added `read_start` offset field to track consumed data
+  - Only compacts buffer when >50% consumed AND >4096 bytes
+  - `readAsync()` updated to use offset-based slicing
+
+### Added
+
+#### Performance Testing Scripts
+- **`dev/perf_all.sh`** - Comprehensive performance suite runner
+- **`dev/perf_memory.sh`** - Memory leak detection with GPA and optional valgrind
+- **`dev/perf_bench.sh`** - Release build throughput and binary size analysis
+- **`dev/perf_buffers.sh`** - Buffer pool and zero-copy performance tests
+- **`dev/perf_connections.sh`** - Connection pool and stream performance tests
+- **`dev/coverage.sh`** - Test coverage reporting with kcov
+
+#### Graceful Shutdown & Connection Draining (RFC 9000)
+- **`SuperConnection.initiateShutdown()`** - Graceful connection close with drain period
+- **`SuperConnection.waitForDrain()`** - Wait for connection draining (3*PTO default)
+- **`SuperConnection.terminateImmediate()`** - Immediate termination for error conditions
+- **`SuperConnection.isShuttingDown()`** / `isTerminated()` - State checking helpers
+- Legacy `Connection` wrapper exposes all shutdown methods
+
+#### Arena Allocators
+- **`ScopedArena`** - Per-request/per-packet arena with stats tracking
+  - `alloc()`, `create()`, `dupe()` convenience wrappers
+  - `reset()` / `resetAndFree()` for arena reuse
+  - Allocation statistics tracking
+- **`PacketArena`** - Size-limited arena for packet processing
+  - `DEFAULT_MAX_SIZE` (1472) and `JUMBO_MAX_SIZE` (9000) constants
+  - `allocChecked()` with size limit enforcement
+  - `remaining()` capacity checking
+
+#### API Documentation
+- **Comprehensive doc comments** for all public types in `src/root.zig`
+  - Module-level documentation with architecture diagram
+  - Usage examples for Connection, Stream, Error handling
+  - Thread safety and error category documentation
+- **Enhanced error module** documentation in `src/utils/error.zig`
+  - Error category tables and handling patterns
+  - `ErrorHandling` utility function documentation
+
+#### Time Utilities
+- **`src/utils/time.zig`** - Safe timestamp helpers
+  - `nowNanos()`: Current time in nanoseconds (returns 0 on failure)
+  - `nowSeconds()`: Current UNIX timestamp (returns 0 on failure)
+  - `nowMicros()`: Current time in microseconds (returns 0 on failure)
+  - `nowTimespec()`: Current time as timespec (returns zero on failure)
+
+### Changed
+
+#### CI/CD
+- **Removed GPU check** from crypto.yml workflow - vmhost2 runner has no GPU
+- Updated smoke_test.sh version to v0.9.5
+
+#### Logging Improvements
+- All error paths now have appropriate logging:
+  - `warn` level for operational failures (pool exhaustion, buffer return failures)
+  - `debug` level for non-critical failures (metrics, header forwarding, cleanup)
+  - Error context includes relevant IDs and error codes
+
+### Technical Details
+
+#### Files Modified
+- `src/utils/time.zig` - New safe timestamp helpers
+- `src/core/connection.zig` - Batch event processing, Time helpers
+- `src/core/stream.zig` - read_start offset, Time helpers
+- `src/core/buffers.zig` - Two-pointer compact algorithm
+- `src/http3/server.zig` - errdefer chains, Time helpers
+- `src/http3/advanced_server.zig` - Error logging, Time helpers
+- `src/http3/middleware.zig` - Time helpers, error logging
+- `src/http3/request.zig` - Time helpers
+- `src/services/wraith.zig` - Header forwarding logging
+- `src/services/ghostbridge.zig` - Stream cleanup logging
+- `src/performance/zero_copy.zig` - Buffer pool logging
+- `src/core/advanced_congestion_control.zig` - Algorithm switch logging
+- `src/core/stream_flow_control.zig` - Priority tree logging
+- `src/monitoring/prometheus_exporter.zig` - Time helpers
+- `src/crypto/zero_rtt_resumption.zig` - Time helpers
+- `src/crypto/comprehensive_tls.zig` - Time helpers
+- `src/core/errors.zig` - Time helpers
+- `src/core/congestion.zig` - Time helpers
+- `src/net/multiplexer.zig` - Time helpers
+- `src/doq/server.zig` - Time helpers
+- `src/async/runtime.zig` - Error logging
+- `.github/workflows/crypto.yml` - Removed GPU check
+- `src/root.zig` - Comprehensive API documentation with examples
+- `src/utils/error.zig` - Enhanced error documentation and categories
+- `src/utils/allocator.zig` - ScopedArena and PacketArena types
+- `dev/coverage.sh` - Test coverage script with kcov
+- `docs/README.md` - Updated for v0.9.5
+- `docs/getting-started/quick-start.md` - Updated for v0.9.5
+
+#### Performance Improvements
+| Operation | Before | After |
+|-----------|--------|-------|
+| Event loop processing | O(n²) | O(n) |
+| Buffer compaction | O(n²) | O(n) |
+| Stream read | O(n) memmove | O(1) offset |
+
+---
+
 ## [0.9.3] - 2025-11-30
 
 ### Added

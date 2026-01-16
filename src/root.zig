@@ -1,111 +1,391 @@
-//! ZQUIC — Modular QUIC/HTTP3 Library for Zig v0.9.0
+//! ZQUIC — High-Performance QUIC/HTTP3 Library for Zig
 //!
-//! zquic is a high-performance, modular QUIC (HTTP/3 transport layer)
-//! implementation written in pure Zig. Designed for flexibility:
-//! from minimal embedded QUIC clients to full-featured enterprise servers.
+//! A modular, production-ready QUIC (RFC 9000) and HTTP/3 (RFC 9114) implementation
+//! written in pure Zig. Designed for flexibility from minimal embedded clients to
+//! full-featured enterprise servers with post-quantum cryptography.
 //!
-//! Features are enabled/disabled at build time for optimal binary size:
-//! - Core QUIC: Always included (~1MB)
-//! - HTTP/3: Web server support (+1MB)
-//! - DoQ: DNS-over-QUIC (+0.5MB)
-//! - Services: GhostBridge/Wraith (+2MB)
-//! - VPN: zcrypto VPN features (+0.5MB)
-//! - Post-Quantum: zcrypto PQ features (+1.5MB)
-//! - Monitoring: Performance tracking (+0.2MB)
+//! ## Quick Start
+//!
+//! ```zig
+//! const zquic = @import("zquic");
+//!
+//! // Create a QUIC connection
+//! var conn = try zquic.Connection.init(allocator, .client, .{});
+//! defer conn.deinit();
+//!
+//! // Create a stream for data transfer
+//! var stream = try conn.createStream(.client_bidirectional);
+//! _ = try stream.write("Hello, QUIC!", false);
+//! ```
+//!
+//! ## Feature Modules
+//!
+//! Features are enabled/disabled at build time via `zig build` options:
+//!
+//! | Feature | Build Flag | Size | Description |
+//! |---------|------------|------|-------------|
+//! | Core QUIC | Always included | ~1MB | RFC 9000 transport, streams, crypto |
+//! | HTTP/3 | `-Denable_http3=true` | +1MB | RFC 9114 web server support |
+//! | DoQ | `-Denable_doq=true` | +0.5MB | DNS-over-QUIC (RFC 9250) |
+//! | Services | `-Denable_services=true` | +2MB | GhostBridge gRPC, Wraith proxy |
+//! | VPN | `-Denable_vpn=true` | +0.5MB | Mesh VPN routing |
+//! | Post-Quantum | `-Denable_post_quantum=true` | +1.5MB | ML-KEM-768, SLH-DSA |
+//! | Monitoring | `-Denable_monitoring=true` | +0.2MB | Prometheus metrics |
+//!
+//! ## Architecture
+//!
+//! ```
+//! ┌─────────────────────────────────────────────────────────────┐
+//! │                      Application Layer                       │
+//! │  ┌─────────┐ ┌─────────┐ ┌─────────┐ ┌─────────┐ ┌─────────┐│
+//! │  │ HTTP/3  │ │   DoQ   │ │Services │ │   VPN   │ │Monitoring││
+//! │  └────┬────┘ └────┬────┘ └────┬────┘ └────┬────┘ └────┬────┘│
+//! ├───────┴──────────┴──────────┴──────────┴──────────┴────────┤
+//! │                       Core QUIC Layer                        │
+//! │  ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌──────────────────┐│
+//! │  │Connection│ │  Stream  │ │  Crypto  │ │ Flow/Congestion  ││
+//! │  └──────────┘ └──────────┘ └──────────┘ └──────────────────┘│
+//! ├──────────────────────────────────────────────────────────────┤
+//! │                      Network Layer                           │
+//! │  ┌──────────┐ ┌──────────┐ ┌──────────────────────────────┐ │
+//! │  │   UDP    │ │Multiplexer│ │      Async Runtime         │ │
+//! │  └──────────┘ └──────────┘ └──────────────────────────────┘ │
+//! └──────────────────────────────────────────────────────────────┘
+//! ```
+//!
+//! ## Thread Safety
+//!
+//! - Connection and Stream operations use atomic state for lock-free metrics
+//! - Buffer pools are thread-safe with mutex protection
+//! - The async runtime supports multi-threaded worker pools
+//!
+//! ## Error Handling
+//!
+//! All fallible operations return `Error.ZquicError` which provides:
+//! - Network errors: `NetworkError`, `ConnectionReset`, `WouldBlock`
+//! - Protocol errors: `ProtocolViolation`, `FlowControlError`
+//! - Resource errors: `OutOfMemory`, `ConnectionLimitReached`
+//!
+//! ## Version Information
+//!
+//! - Library version: 0.9.5
+//! - QUIC version: RFC 9000 (v1)
+//! - Zig compatibility: 0.16.0-dev+
 
 const std = @import("std");
 const build_options = @import("build_options");
 
-// Core QUIC module (always available)
+// ============================================================================
+// Core QUIC Module (Always Available)
+// ============================================================================
+
+/// Core QUIC implementation module containing all fundamental types.
+/// This module is always available regardless of build configuration.
 pub const core = @import("core.zig");
 
-// Re-export core components for convenience
+// ============================================================================
+// Primary Type Exports
+// ============================================================================
+
+/// QUIC connection manager handling handshakes, streams, and packet I/O.
+///
+/// A Connection represents a single QUIC connection between two endpoints.
+/// It manages multiple streams, handles cryptographic handshakes, and
+/// provides flow control and congestion management.
+///
+/// ## Example
+/// ```zig
+/// var conn = try Connection.init(allocator, .client, .{});
+/// defer conn.deinit();
+///
+/// // Create streams for data transfer
+/// var stream = try conn.createStream(.client_bidirectional);
+/// ```
 pub const Connection = core.Connection;
+
+/// QUIC packet structure for parsing and serialization.
+///
+/// Handles all QUIC packet types: Initial, Handshake, 0-RTT, and 1-RTT.
+/// Provides methods for encoding/decoding packet headers and payloads.
 pub const Packet = core.Packet;
+
+/// Bidirectional or unidirectional data stream within a connection.
+///
+/// Streams provide ordered, reliable byte delivery over QUIC. Each stream
+/// has independent flow control and can be created/closed independently.
+///
+/// ## Stream Types
+/// - `client_bidirectional`: Client-initiated, two-way communication
+/// - `server_bidirectional`: Server-initiated, two-way communication
+/// - `client_unidirectional`: Client-initiated, one-way to server
+/// - `server_unidirectional`: Server-initiated, one-way to client
 pub const Stream = core.Stream;
+
+/// Stream and connection-level flow control manager.
+///
+/// Implements QUIC flow control (RFC 9000 Section 4) to prevent
+/// buffer overflow and ensure fair bandwidth allocation.
 pub const FlowControl = core.FlowControl;
+
+/// Congestion control algorithms (New Reno, CUBIC, BBR).
+///
+/// Manages send rate to avoid network congestion. Supports multiple
+/// algorithms optimized for different workloads (trading, bulk transfer).
 pub const Congestion = core.Congestion;
+
+/// TLS 1.3 cryptographic operations for QUIC.
+///
+/// Handles key derivation, packet protection, and header encryption
+/// using AES-GCM or ChaCha20-Poly1305 cipher suites.
 pub const Crypto = core.Crypto;
+
+/// Enhanced cryptographic layer with post-quantum support.
+///
+/// Extends base crypto with hybrid key exchange (X25519 + ML-KEM-768)
+/// and quantum-safe signatures (SLH-DSA).
 pub const EnhancedCrypto = core.EnhancedCrypto;
+
+/// TLS 1.3 handshake state machine for QUIC.
+///
+/// Manages the cryptographic handshake process including:
+/// - ClientHello/ServerHello exchange
+/// - Key schedule computation
+/// - Certificate validation
+/// - 0-RTT early data handling
 pub const Handshake = core.Handshake;
+
+/// Cryptographic key management and rotation.
+///
+/// Handles traffic secrets, key updates, and proper cleanup
+/// of sensitive key material.
 pub const Keys = core.Keys;
+
+/// Low-level UDP socket operations.
+///
+/// Platform-specific UDP implementation with non-blocking I/O,
+/// configurable buffer sizes, and packet info reception.
 pub const Udp = core.Udp;
+
+/// UDP connection multiplexer for handling multiple QUIC connections.
+///
+/// Demultiplexes incoming packets to the correct connection based
+/// on connection IDs. Supports connection migration and pooling.
 pub const UdpMultiplexer = core.UdpMultiplexer;
+
+/// Generic socket abstraction layer.
 pub const Socket = core.Socket;
+
+/// IPv6 address handling utilities.
 pub const IPv6 = core.IPv6;
+
+/// Async runtime for non-blocking I/O operations.
+///
+/// Provides event loop, timer management, and connection pooling
+/// for high-performance async networking.
 pub const AsyncRuntime = core.AsyncRuntime;
+
+/// Connection load balancer with multiple strategies.
+///
+/// Supports round-robin, least-connections, weighted, and
+/// latency-based load balancing with circuit breaker protection.
 pub const LoadBalancer = core.LoadBalancer;
+
+/// Memory allocator utilities and arena support.
 pub const Allocator = core.Allocator;
+
+/// Unified error types for all ZQUIC operations.
+///
+/// Categories include:
+/// - Network: `NetworkError`, `ConnectionReset`, `WouldBlock`
+/// - Protocol: `ProtocolViolation`, `FlowControlError`, `StreamError`
+/// - Resource: `OutOfMemory`, `ConnectionLimitReached`, `SendQueueFull`
 pub const Error = core.Error;
+
+/// Packet encryption and decryption operations.
 pub const PacketCrypto = core.PacketCrypto;
+
+/// Result of packet processing with parsed headers and payload.
 pub const ProcessedPacket = core.ProcessedPacket;
+
+/// High-performance bulk packet processor for batch operations.
 pub const BulkPacketProcessor = core.BulkPacketProcessor;
+
+/// Memory pool for packet buffer allocation to reduce allocator pressure.
 pub const PacketMemoryPool = core.PacketMemoryPool;
 
-// Feature modules (conditionally available based on build configuration)
+// ============================================================================
+// Feature Modules (Conditionally Available)
+// ============================================================================
+
+/// HTTP/3 server and client implementation (RFC 9114).
+///
+/// Requires: `-Denable_http3=true`
+///
+/// Provides:
+/// - HTTP/3 server with middleware support
+/// - QPACK header compression
+/// - Request/response handling
+/// - Static file serving
 pub const http3 = if (build_options.enable_http3) @import("http3.zig") else struct {};
+
+/// DNS-over-QUIC implementation (RFC 9250).
+///
+/// Requires: `-Denable_doq=true`
+///
+/// Provides encrypted DNS resolution over QUIC transport.
 pub const doq = if (build_options.enable_doq) @import("doq.zig") else struct {};
+
+/// VPN routing and mesh networking support.
+///
+/// Requires: `-Denable_vpn=true`
+///
+/// Provides:
+/// - Packet routing with NAT
+/// - Network interface management
+/// - Mesh topology support
 pub const vpn = if (build_options.enable_vpn) @import("vpn.zig") else struct {};
+
+/// GhostBridge gRPC and Wraith reverse proxy services.
+///
+/// Requires: `-Denable_services=true`
+///
+/// Provides:
+/// - GhostBridge: gRPC-over-QUIC relay
+/// - Wraith: High-performance reverse proxy
 pub const services = if (build_options.enable_services) @import("services.zig") else struct {};
+
+/// Post-quantum cryptography integration via zcrypto.
+///
+/// Requires: `-Denable_post_quantum=true`
+///
+/// Provides:
+/// - ML-KEM-768 key encapsulation
+/// - SLH-DSA digital signatures
+/// - Hybrid key exchange (classical + PQ)
 pub const post_quantum = if (build_options.enable_post_quantum) @import("post_quantum.zig") else struct {};
-// FFI support removed for v0.9.0-RC1 to reduce complexity
+
+/// Prometheus metrics and performance monitoring.
+///
+/// Requires: `-Denable_monitoring=true`
+///
+/// Provides:
+/// - Connection/stream metrics
+/// - Latency histograms
+/// - Prometheus export endpoint
 pub const monitoring = if (build_options.enable_monitoring) @import("monitoring.zig") else struct {};
 
-// HTTP/3 convenience exports (when enabled)
+// ============================================================================
+// Convenience Aliases
+// ============================================================================
+
+/// HTTP/3 module alias (when enabled).
 pub const Http3 = if (build_options.enable_http3) http3 else struct {};
 
-// DoQ convenience exports (when enabled)
+/// DoQ module alias (when enabled).
 pub const DoQ = if (build_options.enable_doq) doq else struct {};
 
-// Services convenience exports (when enabled)
+/// GhostBridge service alias (when enabled).
 pub const Services = if (build_options.enable_services) services.GhostBridge else struct {};
 
-// Post-Quantum convenience exports (when enabled)
+/// Post-quantum crypto alias (when enabled).
 pub const PostQuantum = if (build_options.enable_post_quantum) post_quantum.PostQuantum else struct {};
+
+/// Post-quantum cipher suite selection.
 pub const PQCipherSuite = if (build_options.enable_post_quantum) post_quantum.PQCipherSuite else struct {};
+
+/// Post-quantum key exchange operations.
 pub const PQKeyExchange = if (build_options.enable_post_quantum) post_quantum.PQKeyExchange else struct {};
+
+/// Post-quantum QUIC context for hybrid connections.
 pub const PQQuicContext = if (build_options.enable_post_quantum) post_quantum.PQQuicContext else struct {};
+
+/// Post-quantum authentication and signatures.
 pub const PQAuthentication = if (build_options.enable_post_quantum) post_quantum.PQAuthentication else struct {};
 
-// Assembly optimizations (when post-quantum is enabled)
+/// CPU-specific optimizations for crypto operations.
 pub const Optimizations = if (build_options.enable_post_quantum) post_quantum.Optimizations else struct {};
+
+/// Runtime CPU feature detection and optimizer selection.
 pub const CpuOptimizer = if (build_options.enable_post_quantum) post_quantum.CpuOptimizer else struct {};
+
+/// SIMD-optimized Blake3 hashing.
 pub const OptimizedBlake3 = if (build_options.enable_post_quantum) post_quantum.OptimizedBlake3 else struct {};
+
+/// SIMD-optimized ChaCha20-Poly1305 AEAD.
 pub const OptimizedChaCha20Poly1305 = if (build_options.enable_post_quantum) post_quantum.OptimizedChaCha20Poly1305 else struct {};
+
+/// Optimized bulk packet processor with SIMD.
 pub const OptimizedPacketProcessor = if (build_options.enable_post_quantum) post_quantum.OptimizedPacketProcessor else struct {};
 
-// VPN convenience exports (when enabled)
+/// VPN packet router (when enabled).
 pub const VpnRouter = if (build_options.enable_vpn) vpn.VpnRouter else struct {};
 
-// FFI support removed for v0.9.0-RC1 to reduce complexity
-// Use zcrypto module directly for cryptographic operations
-
-// Legacy compatibility aliases
+/// GhostBridge configuration (when enabled).
 pub const BridgeConfig = if (build_options.enable_services) services.BridgeConfig else struct {};
-pub const pq = post_quantum; // Legacy alias for post_quantum
 
-// Convenience exports for common algorithms (when post-quantum enabled)
+/// Legacy alias for post_quantum module.
+pub const pq = post_quantum;
+
+/// Kyber/ML-KEM key encapsulation (when available).
 pub const kyber = if (build_options.enable_post_quantum and @hasDecl(post_quantum, "kyber")) post_quantum.kyber else struct {};
+
+/// Dilithium/ML-DSA signatures (when available).
 pub const dilithium = if (build_options.enable_post_quantum and @hasDecl(post_quantum, "dilithium")) post_quantum.dilithium else struct {};
 
-// These are always available through zcrypto
+// ============================================================================
+// ZCrypto Exports
+// ============================================================================
+
 const zcrypto = @import("zcrypto");
+
+/// X25519 Diffie-Hellman key exchange.
 pub const x25519 = if (@hasDecl(zcrypto, "kex")) zcrypto.kex.X25519 else struct {};
+
+/// Ed25519 digital signatures.
 pub const ed25519 = if (@hasDecl(zcrypto, "kex")) zcrypto.kex.Ed25519 else struct {};
 
-// Version information
+// ============================================================================
+// Version Information
+// ============================================================================
+
+/// Library version string (e.g., "0.9.5").
 pub const version = core.version;
+
+/// Supported QUIC protocol version.
 pub const quic_version = core.quic_version;
 
-// Build configuration information
+// ============================================================================
+// Build Configuration
+// ============================================================================
+
+/// Build-time feature configuration information.
+///
+/// Use this to check which features are available at runtime:
+/// ```zig
+/// if (zquic.build_config.http3_enabled) {
+///     // HTTP/3 code path
+/// }
+/// ```
 pub const build_config = struct {
+    /// True if HTTP/3 support is compiled in.
     pub const http3_enabled = build_options.enable_http3;
+
+    /// True if DNS-over-QUIC support is compiled in.
     pub const doq_enabled = build_options.enable_doq;
+
+    /// True if VPN routing support is compiled in.
     pub const vpn_enabled = build_options.enable_vpn;
+
+    /// True if GhostBridge/Wraith services are compiled in.
     pub const services_enabled = build_options.enable_services;
+
+    /// True if post-quantum cryptography is compiled in.
     pub const post_quantum_enabled = build_options.enable_post_quantum;
+
+    /// True if Prometheus monitoring is compiled in.
     pub const monitoring_enabled = build_options.enable_monitoring;
 
+    /// Print build configuration to debug output.
     pub fn printConfig() void {
         std.debug.print("zquic v{s} build configuration:\n", .{version});
         std.debug.print("  HTTP/3: {}\n", .{http3_enabled});
@@ -117,24 +397,54 @@ pub const build_config = struct {
     }
 };
 
-/// Initialize the ZQUIC library with a given allocator
-pub fn init(allocator: std.mem.Allocator) Error.ZquicError!void {
-    // Initialize core first
-    try core.init(allocator);
+// ============================================================================
+// Library Lifecycle
+// ============================================================================
 
-    // Initialize feature modules as needed
-    // (Most modules don't need initialization, but this provides extension points)
+/// Initialize the ZQUIC library.
+///
+/// Call this once at application startup before using any ZQUIC types.
+/// Initializes internal state, thread pools, and crypto subsystems.
+///
+/// ## Parameters
+/// - `allocator`: Memory allocator for all ZQUIC operations
+///
+/// ## Errors
+/// - `OutOfMemory`: Failed to allocate required resources
+/// - `InitializationError`: Internal initialization failed
+///
+/// ## Example
+/// ```zig
+/// var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+/// defer _ = gpa.deinit();
+///
+/// try zquic.init(gpa.allocator());
+/// defer zquic.deinit();
+/// ```
+pub fn init(allocator: std.mem.Allocator) Error.ZquicError!void {
+    try core.init(allocator);
 }
 
-/// Deinitialize the ZQUIC library
+/// Deinitialize the ZQUIC library.
+///
+/// Call this at application shutdown to clean up resources.
+/// All connections should be closed before calling this.
 pub fn deinit() void {
-    // Deinitialize in reverse order
     core.deinit();
 }
 
-/// Get a summary of enabled features
+/// Get a list of enabled feature names.
+///
+/// Returns a compile-time constant slice of feature name strings
+/// based on the build configuration.
+///
+/// ## Example
+/// ```zig
+/// for (zquic.getEnabledFeatures()) |feature| {
+///     std.debug.print("Enabled: {s}\n", .{feature});
+/// }
+/// ```
 pub fn getEnabledFeatures() []const []const u8 {
-    // Return compile-time known feature list
     const features = comptime blk: {
         var list: []const []const u8 = &[_][]const u8{};
         if (build_options.enable_http3) list = list ++ &[_][]const u8{"http3"};
@@ -148,11 +458,14 @@ pub fn getEnabledFeatures() []const []const u8 {
     return features;
 }
 
+// ============================================================================
+// Tests
+// ============================================================================
+
 test "zquic modular library initialization" {
     try init(std.testing.allocator);
     defer deinit();
 
-    // Test that we can get feature list
     const features = getEnabledFeatures();
     try std.testing.expect(features.len >= 0);
 }

@@ -5,7 +5,7 @@
 
 set -e
 
-echo "=== ZQUIC v0.9.4 Smoke Test ==="
+echo "=== ZQUIC v0.9.5 Smoke Test ==="
 echo "Zig version: $(zig version)"
 echo ""
 

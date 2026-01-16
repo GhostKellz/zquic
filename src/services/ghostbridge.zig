@@ -373,7 +373,9 @@ pub const GrpcConnection = struct {
 
     pub fn sendUnaryRequest(self: *GrpcConnection, method: GrpcMethod, request_data: []const u8) !GrpcResponse {
         const stream = try self.createStream(method);
-        defer self.closeStream(stream.stream_id) catch {};
+        defer self.closeStream(stream.stream_id) catch |err| {
+            std.log.debug("GrpcConnection: Failed to close stream {} during cleanup: {}", .{ stream.stream_id, err });
+        };
 
         // Send request
         try stream.sendMessage(.request, request_data);

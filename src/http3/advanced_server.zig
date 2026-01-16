@@ -334,12 +334,15 @@ pub const ConnectionPool = struct {
     }
 
     pub fn returnConnection(self: *ConnectionPool, connection: *Connection) void {
+        const Time = @import("../utils/time.zig");
         for (self.connections.items, 0..) |*conn, i| {
             if (conn.connection == connection) {
                 conn.in_use = false;
-                conn.last_used = (try std.time.Instant.now()).timestamp.sec;
+                conn.last_used = Time.nowSeconds();
                 conn.request_count += 1;
-                self.available_connections.append(self.allocator, i) catch {};
+                self.available_connections.append(self.allocator, i) catch |err| {
+                    std.log.warn("ConnectionPool: Failed to mark connection available: {}", .{err});
+                };
                 break;
             }
         }
@@ -1130,10 +1133,14 @@ pub const MetricsCollector = struct {
     }
 
     pub fn recordRequest(self: *MetricsCollector, duration: u64, status_code: u16) void {
-        self.request_durations.append(self.allocator, duration) catch {};
+        self.request_durations.append(self.allocator, duration) catch |err| {
+            std.log.debug("MetricsCollector: Failed to record duration: {}", .{err});
+        };
 
         const count = self.status_codes.get(status_code) orelse 0;
-        self.status_codes.put(self.allocator, status_code, count + 1) catch {};
+        self.status_codes.put(self.allocator, status_code, count + 1) catch |err| {
+            std.log.debug("MetricsCollector: Failed to record status code: {}", .{err});
+        };
     }
 
     pub fn getAverageResponseTime(self: *const MetricsCollector) f64 {

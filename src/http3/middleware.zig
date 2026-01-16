@@ -4,6 +4,7 @@
 
 const std = @import("std");
 const Error = @import("../utils/error.zig");
+const Time = @import("../utils/time.zig");
 const Request = @import("request.zig").Request;
 const Response = @import("response.zig").Response;
 const Router = @import("router.zig");
@@ -34,15 +35,15 @@ pub const CorsMiddleware = struct {
             .allocator = allocator,
         };
 
-        // Default values
-        cors_middleware.addOrigin("*") catch {};
-        cors_middleware.addMethod("GET") catch {};
-        cors_middleware.addMethod("POST") catch {};
-        cors_middleware.addMethod("PUT") catch {};
-        cors_middleware.addMethod("DELETE") catch {};
-        cors_middleware.addMethod("OPTIONS") catch {};
-        cors_middleware.addHeader("Content-Type") catch {};
-        cors_middleware.addHeader("Authorization") catch {};
+        // Default values - log if allocation fails
+        cors_middleware.addOrigin("*") catch |err| std.log.warn("CORS: Failed to add default origin: {}", .{err});
+        cors_middleware.addMethod("GET") catch |err| std.log.warn("CORS: Failed to add GET method: {}", .{err});
+        cors_middleware.addMethod("POST") catch |err| std.log.warn("CORS: Failed to add POST method: {}", .{err});
+        cors_middleware.addMethod("PUT") catch |err| std.log.warn("CORS: Failed to add PUT method: {}", .{err});
+        cors_middleware.addMethod("DELETE") catch |err| std.log.warn("CORS: Failed to add DELETE method: {}", .{err});
+        cors_middleware.addMethod("OPTIONS") catch |err| std.log.warn("CORS: Failed to add OPTIONS method: {}", .{err});
+        cors_middleware.addHeader("Content-Type") catch |err| std.log.warn("CORS: Failed to add Content-Type header: {}", .{err});
+        cors_middleware.addHeader("Authorization") catch |err| std.log.warn("CORS: Failed to add Authorization header: {}", .{err});
 
         return cors_middleware;
     }
@@ -165,8 +166,7 @@ pub const LoggingMiddleware = struct {
 
         return struct {
             fn handle(request: *Request, response: *Response, next: NextFn) Error.ZquicError!void {
-                const ts_start = std.posix.clock_gettime(std.posix.CLOCK.REALTIME) catch unreachable;
-                const start_time = @divTrunc((@as(i128, ts_start.sec) * std.time.ns_per_s + ts_start.nsec), 1000);
+                const start_time = Time.nowMicros();
 
                 // Log request
                 std.log.info("HTTP/3 {s} {s} - Stream {}", .{ request.method.toString(), request.path, request.context.stream_id });
@@ -174,9 +174,7 @@ pub const LoggingMiddleware = struct {
                 try next(request, response);
 
                 // Log response
-                const ts_end = std.posix.clock_gettime(std.posix.CLOCK.REALTIME) catch unreachable;
-                const end_time = @divTrunc((@as(i128, ts_end.sec) * std.time.ns_per_s + ts_end.nsec), 1000);
-                const duration = end_time - start_time;
+                const duration = Time.nowMicros() - start_time;
                 std.log.info("HTTP/3 {s} {s} {} - {}μs", .{ request.method.toString(), request.path, response.status.getCode(), duration });
             }
         }.handle;

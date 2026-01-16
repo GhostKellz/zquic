@@ -58,7 +58,6 @@ pub const SuperServerStats = struct {
     const Self = @This();
 
     pub fn init() Self {
-        const ts = std.posix.clock_gettime(std.posix.CLOCK.REALTIME) catch unreachable;
         return Self{
             .connections_active = std.atomic.Value(u32).init(0),
             .connections_total = std.atomic.Value(u64).init(0),
@@ -67,7 +66,7 @@ pub const SuperServerStats = struct {
             .bytes_sent = std.atomic.Value(u64).init(0),
             .bytes_received = std.atomic.Value(u64).init(0),
             .errors_count = std.atomic.Value(u64).init(0),
-            .start_time = ts.sec,
+            .start_time = Time.nowSeconds(),
             .peak_rps = std.atomic.Value(u64).init(0),
             .avg_response_time_us = std.atomic.Value(u64).init(0),
         };
@@ -75,8 +74,7 @@ pub const SuperServerStats = struct {
 
     /// Get uptime in seconds
     pub fn uptime(self: *const Self) i64 {
-        const ts = std.posix.clock_gettime(std.posix.CLOCK.REALTIME) catch unreachable;
-        return ts.sec - self.start_time;
+        return Time.nowSeconds() - self.start_time;
     }
 
     /// Increment request counter atomically
@@ -159,11 +157,10 @@ pub const ConnectionContext = struct {
     const Self = @This();
 
     pub fn init(allocator: std.mem.Allocator, connection: *Connection) Self {
-        const ts = std.posix.clock_gettime(std.posix.CLOCK.REALTIME) catch unreachable;
         return Self{
             .connection = connection,
             .active_requests = .{},
-            .last_activity = ts.sec,
+            .last_activity = Time.nowSeconds(),
             .allocator = allocator,
         };
     }
@@ -178,13 +175,11 @@ pub const ConnectionContext = struct {
     }
 
     pub fn updateActivity(self: *Self) void {
-        const ts = std.posix.clock_gettime(std.posix.CLOCK.REALTIME) catch unreachable;
-        self.last_activity = ts.sec;
+        self.last_activity = Time.nowSeconds();
     }
 
     pub fn isExpired(self: *const Self, timeout_ms: u32) bool {
-        const ts = std.posix.clock_gettime(std.posix.CLOCK.REALTIME) catch unreachable;
-        const now = ts.sec;
+        const now = Time.nowSeconds();
         return (now - self.last_activity) > (timeout_ms / 1000);
     }
 };
@@ -199,11 +194,10 @@ pub const ActiveRequest = struct {
     const Self = @This();
 
     pub fn init(allocator: std.mem.Allocator, stream_id: u64, connection_id: []const u8) Self {
-        const ts = std.posix.clock_gettime(std.posix.CLOCK.REALTIME) catch unreachable;
         return Self{
             .request = Request.init(allocator, stream_id, connection_id),
             .response = Response.init(allocator, stream_id),
-            .start_time = @intCast(@divTrunc((@as(i128, ts.sec) * std.time.ns_per_s + ts.nsec), 1000)),
+            .start_time = Time.nowMicros(),
             .allocator = allocator,
         };
     }
@@ -214,9 +208,7 @@ pub const ActiveRequest = struct {
     }
 
     pub fn duration(self: *const Self) i64 {
-        const ts = std.posix.clock_gettime(std.posix.CLOCK.REALTIME) catch unreachable;
-        const now: i64 = @intCast(@divTrunc((@as(i128, ts.sec) * std.time.ns_per_s + ts.nsec), 1000));
-        return now - self.start_time;
+        return Time.nowMicros() - self.start_time;
     }
 };
 
@@ -328,7 +320,11 @@ pub const Http3Server = struct {
     /// Register a new connection
     pub fn registerConnection(self: *Self, connection: *Connection) ![]const u8 {
         const conn_id = try self.allocator.dupe(u8, connection.super_connection.local_conn_id.bytes());
+        errdefer self.allocator.free(conn_id);
+
         const context = try self.allocator.create(ConnectionContext);
+        errdefer self.allocator.destroy(context);
+
         context.* = ConnectionContext.init(self.allocator, connection);
 
         try self.connections.put(self.allocator, conn_id, context);

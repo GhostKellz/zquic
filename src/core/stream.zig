@@ -4,6 +4,7 @@
 
 const std = @import("std");
 const Error = @import("../utils/error.zig");
+const Time = @import("../utils/time.zig");
 
 /// Stream ID and direction utilities
 pub const StreamId = struct {
@@ -76,13 +77,11 @@ pub const DataChunk = struct {
     timestamp: u64,
 
     pub fn init(data: []const u8, offset: u64, fin: bool) DataChunk {
-        const ts = std.posix.clock_gettime(std.posix.CLOCK.REALTIME) catch unreachable;
-        const timestamp = @as(i128, ts.sec) * std.time.ns_per_s + ts.nsec;
         return DataChunk{
             .data = data,
             .offset = offset,
             .fin = fin,
-            .timestamp = @intCast(timestamp),
+            .timestamp = @intCast(Time.nowNanos()),
         };
     }
 };
@@ -96,6 +95,7 @@ pub const SuperStream = struct {
 
     // Data buffers
     read_buffer: std.ArrayListUnmanaged(u8),
+    read_start: usize, // Offset to avoid memmove on every read
     write_buffer: std.ArrayListUnmanaged(u8),
 
     // Flow control state (atomic for lock-free access)
@@ -119,6 +119,7 @@ pub const SuperStream = struct {
 
             // Initialize buffers
             .read_buffer = .{},
+            .read_start = 0,
             .write_buffer = .{},
 
             // Initialize flow control (generous initial windows for high throughput)
@@ -128,10 +129,7 @@ pub const SuperStream = struct {
             .bytes_received = std.atomic.Value(u64).init(0),
 
             .peak_throughput = std.atomic.Value(u64).init(0),
-            .last_activity = std.atomic.Value(i64).init(blk: {
-                const ts = std.posix.clock_gettime(std.posix.CLOCK.REALTIME) catch unreachable;
-                break :blk ts.sec;
-            }),
+            .last_activity = std.atomic.Value(i64).init(Time.nowSeconds()),
         };
     }
 
@@ -141,22 +139,25 @@ pub const SuperStream = struct {
         self.write_buffer.deinit(self.allocator);
     }
 
-    /// Read data from stream
+    /// Read data from stream - O(1) using read_start offset instead of O(n) memmove
     pub fn read(self: *Self, buffer: []u8) !usize {
-        if (self.read_buffer.items.len == 0) {
+        const available = self.read_buffer.items.len - self.read_start;
+        if (available == 0) {
             return 0;
         }
 
-        const copy_len = @min(buffer.len, self.read_buffer.items.len);
-        @memcpy(buffer[0..copy_len], self.read_buffer.items[0..copy_len]);
+        const copy_len = @min(buffer.len, available);
+        @memcpy(buffer[0..copy_len], self.read_buffer.items[self.read_start..][0..copy_len]);
+        self.read_start += copy_len;
 
-        // Remove read data from buffer
-        if (copy_len < self.read_buffer.items.len) {
-            const remaining = self.read_buffer.items.len - copy_len;
-            @memcpy(self.read_buffer.items[0..remaining], self.read_buffer.items[copy_len..]);
+        // Compact buffer when >50% consumed to prevent unbounded growth
+        if (self.read_start > self.read_buffer.items.len / 2 and self.read_start > 4096) {
+            const remaining = self.read_buffer.items.len - self.read_start;
+            if (remaining > 0) {
+                @memcpy(self.read_buffer.items[0..remaining], self.read_buffer.items[self.read_start..]);
+            }
             self.read_buffer.shrinkRetainingCapacity(remaining);
-        } else {
-            self.read_buffer.clearRetainingCapacity();
+            self.read_start = 0;
         }
 
         _ = self.bytes_received.fetchAdd(copy_len, .acq_rel);
@@ -179,8 +180,9 @@ pub const SuperStream = struct {
     /// Zero-copy async read - returns reference to data, no copying
     pub fn readAsync(self: *Self) !DataChunk {
         const offset = self.bytes_received.load(.acquire);
-        if (self.read_buffer.items.len > 0) {
-            return DataChunk.init(self.read_buffer.items, offset, false);
+        const available = self.read_buffer.items.len - self.read_start;
+        if (available > 0) {
+            return DataChunk.init(self.read_buffer.items[self.read_start..], offset, false);
         }
         return DataChunk.init(&[_]u8{}, offset, false);
     }

@@ -4,6 +4,7 @@
 
 const std = @import("std");
 const Error = @import("../utils/error.zig");
+const Time = @import("../utils/time.zig");
 const QpackDecoder = @import("qpack.zig").QpackDecoder;
 const HeaderField = @import("qpack.zig").HeaderField;
 
@@ -155,17 +156,12 @@ pub const RequestContext = struct {
         return Self{
             .stream_id = stream_id,
             .connection_id = connection_id,
-            .start_time = blk: {
-                const ts = std.posix.clock_gettime(std.posix.CLOCK.REALTIME) catch unreachable;
-                break :blk @intCast(@divTrunc((@as(i128, ts.sec) * std.time.ns_per_s + ts.nsec), 1000));
-            },
+            .start_time = Time.nowMicros(),
         };
     }
 
     pub fn elapsedMicros(self: *const Self) i64 {
-        const ts = std.posix.clock_gettime(std.posix.CLOCK.REALTIME) catch unreachable;
-        const now: i64 = @intCast(@divTrunc((@as(i128, ts.sec) * std.time.ns_per_s + ts.nsec), 1000));
-        return now - self.start_time;
+        return Time.nowMicros() - self.start_time;
     }
 };
 

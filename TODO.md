@@ -1,48 +1,41 @@
 # ZQUIC Roadmap
 
-## Phase 1: Test Infrastructure
+## Phase 1: Test Infrastructure ✓
 - [x] Create unit tests for `src/core/` modules
 - [x] Create unit tests for `src/crypto/` modules
 - [x] Create integration tests for client/server handshake
 - [x] Add fuzz testing for packet parsing
-- [ ] Set up test coverage reporting
+- [ ] Set up test coverage reporting (kcov or similar)
 - [x] Create `dev/test.sh` script for running all tests
 
-## Phase 2: Documentation Cleanup
-- [ ] Update README.md (remove stale badges, fix asset paths)
+## Phase 2: Documentation Cleanup (In Progress)
+- [x] Update README.md (version refs updated to v0.9.5)
 - [ ] Audit and update `docs/` content for accuracy
 - [ ] Add inline doc comments to all public APIs
-- [ ] Create CONTRIBUTING.md with development guidelines
-- [ ] Document build flags and configuration options
+- [x] Create CONTRIBUTING.md with development guidelines
+- [x] Document build flags and configuration options (`docs/getting-started/build-config.md`)
 
-### Phase 2 Execution Plan
-1. **README refresh:** remove obsolete build badges, link new integration tests, and consolidate feature matrix once HTTP/3/services notes are stable.
-2. **Docs audit sweep:** prioritize `docs/getting-started/` and `docs/architecture/` folders, logging mismatches in a tracking table before touching long-tail guides.
-3. **Inline API comments:** start with `src/core/` and `src/http3/` exports, using succinct `///` doc comments only for public symbols surfaced via `src/root.zig`.
-4. **CONTRIBUTING revamp:** merge existing CONTRIBUTING.md stubs with `dev/` script explanations so contributor workflow (format/test/build) is explicit.
-5. **Build flag reference:** extend `docs/getting-started/build-config.md` with a table covering `-Dhttp3`, `-Dservices`, `-Dpost-quantum`, etc., noting default values and related tests.
-
-## Phase 3: Error Handling Audit
-- [ ] Audit all error paths for proper cleanup
-- [ ] Ensure no resource leaks on error conditions
-- [ ] Add error context/tracing for debugging
+## Phase 3: Error Handling Audit ✓ (v0.9.5)
+- [x] Audit all error paths for proper cleanup (added errdefer chains)
+- [x] Ensure no resource leaks on error conditions (errdefer on create/alloc)
+- [x] Add error context/tracing for debugging (logging with IDs and error codes)
 - [ ] Standardize error types across modules
-- [ ] Add proper error logging hooks
+- [x] Add proper error logging hooks (all catch {} blocks now log)
 
-## Phase 4: Memory Safety
-- [ ] Audit all allocator usage patterns
-- [ ] Add memory leak detection in debug builds
-- [ ] Verify all `deinit()` paths are called
+## Phase 4: Memory Safety ✓ (v0.9.5)
+- [x] Audit all allocator usage patterns (errdefer added throughout)
+- [x] Add memory leak detection in debug builds (`dev/perf_memory.sh`)
+- [x] Verify all `deinit()` paths are called (reviewed in hardening)
 - [ ] Add arena allocators where appropriate
-- [ ] Profile memory usage under load
+- [x] Profile memory usage under load (`dev/perf_all.sh`)
 
-## Phase 5: Performance Optimization
-- [ ] Profile hot paths with `zig build -Doptimize=ReleaseFast`
+## Phase 5: Performance Optimization ✓ (v0.9.5)
+- [x] Profile hot paths with `zig build -Doptimize=ReleaseFast` (`dev/perf_bench.sh`)
 - [ ] Optimize packet serialization/parsing
-- [ ] Reduce allocations in critical paths
-- [ ] Add zero-copy receive path
+- [x] Reduce allocations in critical paths (O(n²) → O(n) fixes)
+- [x] Add zero-copy receive path (stream.zig read_start offset)
 - [ ] Benchmark against quinn (Rust QUIC)
-- [ ] Create `benchmarks/` directory with reproducible benchmarks
+- [x] Create `benchmarks/` directory with reproducible benchmarks (`dev/perf_*.sh`)
 
 ## Phase 6: Protocol Compliance
 - [ ] Run against QUIC interop test suite
@@ -60,12 +53,12 @@
 - [ ] Implement address validation tokens
 - [ ] Add amplification attack mitigations
 
-## Phase 8: Production Readiness
+## Phase 8: Production Readiness (Partial ✓)
 - [ ] Add graceful shutdown handling
 - [ ] Implement connection draining
 - [ ] Add health check endpoints
 - [ ] Create production deployment guide
-- [ ] Add metrics export (Prometheus format)
+- [x] Add metrics export (Prometheus format) - `src/monitoring/prometheus_exporter.zig`
 - [ ] Stress test with 10K+ concurrent connections
 
 ## Phase 9: API Stabilization
@@ -84,16 +77,41 @@
 
 ---
 
-## Current Status: v0.9.3
+## Current Status: v0.9.5
 
-**Completed:**
-- [x] Zig 0.16.0-dev compatibility
+**Completed in v0.9.5 (Production Hardening):**
+- [x] Eliminated all `catch unreachable` (38 occurrences fixed)
+- [x] Eliminated all silent `catch {}` (13 blocks now have logging)
+- [x] Added errdefer chains for memory safety
+- [x] Fixed O(n²) orderedRemove → O(n) batch processing
+- [x] Fixed O(n²) compact() → O(n) two-pointer algorithm
+- [x] Fixed O(n) memmove → O(1) read_start offset
+- [x] Added safe Time utilities in `src/utils/time.zig`
+- [x] Added performance testing scripts (`dev/perf_*.sh`)
+- [x] Removed GPU check from CI (vmhost2 has no GPU)
+
+**Previously Completed:**
+- [x] Zig 0.16.0-dev.2193+ compatibility
 - [x] Clean build (6 binaries, zero errors)
 - [x] Modular architecture (core, crypto, http3, doq, vpn, services)
-- [x] Post-quantum crypto integration via zcrypto
-- [x] Local dev scripts in `dev/`
+- [x] Post-quantum crypto integration via zcrypto (ML-KEM-768 + SLH-DSA)
+- [x] Local dev scripts in `dev/` (19 scripts total)
 - [x] Internal async runtime (zsync fully removed)
+- [x] CI workflows operational on self-hosted runner (vmhost2)
+- [x] CONTRIBUTING.md with full contributor workflow
+- [x] Build flag documentation in `docs/getting-started/build-config.md`
 
-**Known Issues:**
-- Need service-level integration tests under `tests/` (DoQ remaining; HTTP/3 + services covered)
-- CI workflows disabled; re-enable GitHub Actions for regression coverage
+**Integration Tests:**
+- [x] `tests/handshake_integration_test.zig`
+- [x] `tests/http3_integration_test.zig`
+- [x] `tests/doq_integration_test.zig`
+- [x] `tests/services_integration_test.zig`
+- [x] `tests/zcrypto_integration_test.zig`
+- [x] `tests/packet_fuzz_test.zig`
+
+**Next Priority:**
+- Inline doc comments for public APIs (`src/root.zig` exports)
+- Test coverage reporting setup (kcov or similar)
+- Docs content audit (`docs/getting-started/`, `docs/architecture/`)
+- Protocol compliance testing (RFC 9000/9001/9002/9114)
+- Security hardening audit

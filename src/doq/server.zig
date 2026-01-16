@@ -67,12 +67,11 @@ const DoQConnection = struct {
     connected_at: i64,
 
     pub fn init(connection: *Connection, server: *DoQServer, allocator: std.mem.Allocator) DoQConnection {
-        const ts = std.posix.clock_gettime(std.posix.CLOCK.REALTIME) catch unreachable;
         return DoQConnection{
             .connection = connection,
             .server = server,
             .allocator = allocator,
-            .connected_at = ts.sec,
+            .connected_at = Time.nowSeconds(),
         };
     }
 
@@ -244,13 +243,12 @@ pub const DoQServer = struct {
             return Error.ZquicError.InvalidArgument;
         }
 
-        const ts = std.posix.clock_gettime(std.posix.CLOCK.REALTIME) catch unreachable;
         return DoQServer{
             .config = config,
             .stats = DoQServerStats{},
             .allocator = allocator,
             .pending_queries = .{},
-            .start_time = ts.sec,
+            .start_time = Time.nowSeconds(),
             .metrics = null,
         };
     }
@@ -304,8 +302,7 @@ pub const DoQServer = struct {
     /// Get server statistics
     pub fn getStats(self: *DoQServer) DoQServerStats {
         var stats = self.stats;
-        const ts = std.posix.clock_gettime(std.posix.CLOCK.REALTIME) catch unreachable;
-        stats.uptime_seconds = @intCast(ts.sec - self.start_time);
+        stats.uptime_seconds = @intCast(Time.nowSeconds() - self.start_time);
         return stats;
     }
 
@@ -349,8 +346,7 @@ pub const DoQServer = struct {
     }
 
     fn processQueries(self: *DoQServer) !void {
-        const ts = std.posix.clock_gettime(std.posix.CLOCK.REALTIME) catch unreachable;
-        const current_time = ts.sec;
+        const current_time = Time.nowSeconds();
 
         // Clean up expired queries (older than 30 seconds)
         var i: usize = 0;

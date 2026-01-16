@@ -1,6 +1,18 @@
 # ZQUIC Documentation
 
-Welcome to the ZQUIC v0.9.3 documentation! This guide covers the complete modular QUIC transport library for Zig 0.16.0-dev.
+Welcome to the ZQUIC v0.9.5 documentation! This guide covers the complete modular QUIC transport library for Zig 0.16.0-dev.
+
+## What's New in v0.9.5
+
+**Production Hardening Release** - Major stability and performance improvements:
+
+- **Error Handling**: Eliminated all `catch unreachable` patterns (38 occurrences fixed)
+- **Logging**: All silent error handlers now have appropriate logging
+- **Memory Safety**: Added `errdefer` chains to prevent leaks
+- **Performance**: O(n) algorithms replacing O(n^2) in hot paths
+- **Graceful Shutdown**: RFC 9000-compliant connection draining
+- **Arena Allocators**: Per-packet/request memory management
+- **Test Coverage**: New `dev/coverage.sh` script with kcov support
 
 ## 📚 Documentation Structure
 

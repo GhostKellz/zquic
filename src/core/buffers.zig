@@ -337,17 +337,22 @@ pub const SendBuffer = struct {
         return unacked.toOwnedSlice(allocator);
     }
 
-    /// Remove acknowledged segments to free memory
+    /// Remove acknowledged segments to free memory - O(n) instead of O(n²)
     pub fn compact(self: *Self) BufferError!void {
-        var i: usize = 0;
-        while (i < self.segments.items.len) {
-            if (self.segments.items[i].acked) {
-                const segment = self.segments.orderedRemove(i);
+        // Two-pointer compaction: keep unacked segments, free acked ones
+        var write_idx: usize = 0;
+        for (self.segments.items) |segment| {
+            if (segment.acked) {
+                // Free the acked segment's data
                 self.allocator.free(segment.data);
             } else {
-                i += 1;
+                // Keep unacked segment - move to write position
+                self.segments.items[write_idx] = segment;
+                write_idx += 1;
             }
         }
+        // Shrink to only contain unacked segments
+        self.segments.shrinkRetainingCapacity(write_idx);
     }
 
     /// Get total bytes in buffer

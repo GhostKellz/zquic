@@ -6,6 +6,7 @@
 const std = @import("std");
 const zcrypto = @import("zcrypto");
 const Error = @import("../utils/error.zig");
+const Time = @import("../utils/time.zig");
 
 /// Session ticket for 0-RTT resumption
 pub const SessionTicket = struct {
@@ -19,14 +20,12 @@ pub const SessionTicket = struct {
     const Self = @This();
 
     pub fn isValid(self: *const Self) bool {
-        const ts = std.posix.clock_gettime(std.posix.CLOCK.REALTIME) catch unreachable;
-        const now = ts.sec;
+        const now = Time.nowSeconds();
         return now >= self.creation_time and now <= self.expiry_time;
     }
 
     pub fn isExpired(self: *const Self) bool {
-        const ts = std.posix.clock_gettime(std.posix.CLOCK.REALTIME) catch unreachable;
-        return ts.sec > self.expiry_time;
+        return Time.nowSeconds() > self.expiry_time;
     }
 };
 

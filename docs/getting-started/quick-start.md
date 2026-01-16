@@ -1,6 +1,6 @@
 # Quick Start Guide
 
-Get up and running with ZQUIC v0.9.3 in minutes!
+Get up and running with ZQUIC v0.9.5 in minutes!
 
 ## 🚀 Installation
 
@@ -95,7 +95,7 @@ fn handleHome(req: *zquic.Http3.Request, res: *zquic.Http3.Response) !void {
     _ = req; // unused
     try res.json(.{
         .message = "Hello, QUIC World!",
-        .version = "v0.9.3",
+        .version = "v0.9.5",
         .quantum_safe = true,
     });
 }
@@ -214,7 +214,7 @@ const config = zquic.Http3.ServerConfig{
 ./dev/test.sh   # zig build test + integration-tests + fuzz-tests
 ```
 
-**🎉 Congratulations!** You now have a quantum-safe QUIC server running with ZQUIC v0.9.3!
+**🎉 Congratulations!** You now have a quantum-safe QUIC server running with ZQUIC v0.9.5!
 
 ## ⚙️ Zig 0.16 Migration Notes
 

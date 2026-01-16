@@ -1,4 +1,4 @@
-# ZQUIC — Production-Ready QUIC Transport for Zig v0.9.3
+# ZQUIC — Production-Ready QUIC Transport for Zig v0.9.5
 
 [![Built with Zig](https://img.shields.io/badge/Built%20with-Zig-yellow.svg?logo=zig)](https://ziglang.org/)
 [![Zig Version](https://img.shields.io/badge/Zig-v0.16.0--dev-orange.svg)](https://ziglang.org/)
@@ -7,7 +7,7 @@
 [![QUIC](https://img.shields.io/badge/QUIC-v1-blue.svg)](#feature-highlights)
 [![HTTP/3](https://img.shields.io/badge/HTTP%2F3-enabled-blue.svg)](#feature-highlights)
 
-ZQUIC 0.9.3 is a **modular, high-performance QUIC transport stack** built entirely in Zig 0.16.0-dev. It ships with a native async runtime (no external deps), hybrid post-quantum TLS via `zcrypto` 0.9.5, and a suite of HTTP/3, DoQ, VPN, and service layers tuned for Ghost production workloads.
+ZQUIC 0.9.5 is a **modular, high-performance QUIC transport stack** built entirely in Zig 0.16.0-dev. It ships with a native async runtime (no external deps), hybrid post-quantum TLS via `zcrypto` 0.9.5, and a suite of HTTP/3, DoQ, VPN, and service layers tuned for Ghost production workloads.
 
 > ✅ Builds cleanly with Zig 0.16.0-dev.1484+ on Linux/macOS/Windows and passes the `dev/test.sh` suite.
 
@@ -142,7 +142,7 @@ The `dev/` scripts wrap the raw `zig` commands and provide the configuration we 
 ## 🎯 Production Readiness Status
 
 
-### ✅ 0.9.3 Checklist
+### ✅ 0.9.5 Checklist
 
 | Component | Status | Notes |
 |-----------|--------|-------|
@@ -205,7 +205,7 @@ pub fn main() !void {
 }
 
 fn homeHandler(req: *zquic.Http3.Request, res: *zquic.Http3.Response) !void {
-    try res.json(.{ .status = "online", .quantum_safe = true, .version = "v0.9.3" });
+    try res.json(.{ .status = "online", .quantum_safe = true, .version = "v0.9.5" });
 }
 
 fn getDataHandler(req: *zquic.Http3.Request, res: *zquic.Http3.Response) !void {

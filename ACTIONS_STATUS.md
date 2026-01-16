@@ -1,10 +1,14 @@
 # GitHub Actions Status
 
-**Last Updated:** 2025-12-03
+**Last Updated:** 2026-01-15
 
-## Current Status: Offline (Temporarily)
+## Current Status: Online
 
-GitHub Actions self-hosted runners are currently offline due to infrastructure changes.
+Self-hosted runner operational on **vmhost2**:
+- Persistent runner on dedicated VM (separate from temporary docker runners)
+- Ubuntu 24.04 LTS with Zig 0.16.0-dev
+- Installed as systemd service
+- No GPU (CPU-only workloads)
 
 ## Infrastructure Changes
 

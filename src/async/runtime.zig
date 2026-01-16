@@ -95,7 +95,9 @@ pub const ConnectionPool = struct {
 
         for (self.connections.items, 0..) |c, i| {
             if (c == conn) {
-                self.available.append(self.allocator, i) catch {};
+                self.available.append(self.allocator, i) catch |err| {
+                    std.log.err("ConnectionPool: Failed to release connection slot {}: {}", .{ i, err });
+                };
                 break;
             }
         }
@@ -168,7 +170,9 @@ pub const QuicRuntime = struct {
 
             // Process multiplexer if available
             if (self.multiplexer) |*m| {
-                _ = m.processSendQueue() catch {};
+                _ = m.processSendQueue() catch |err| {
+                    std.log.warn("Runtime: Send queue processing failed: {}", .{err});
+                };
             }
         }
     }

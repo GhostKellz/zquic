@@ -12,6 +12,7 @@
 //! - Error recovery utilities
 
 const std = @import("std");
+const Time = @import("../utils/time.zig");
 
 /// Core ZQUIC errors that can occur at any layer
 pub const ZquicError = error{
@@ -240,10 +241,7 @@ pub const ErrorContext = struct {
             .transport_error = null,
             .app_error = null,
             .context_data = null,
-            .timestamp = blk: {
-                const ts = std.posix.clock_gettime(std.posix.CLOCK.REALTIME) catch unreachable;
-                break :blk ts.sec;
-            },
+            .timestamp = Time.nowSeconds(),
         };
     }
 

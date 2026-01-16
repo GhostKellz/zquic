@@ -1,9 +1,47 @@
-//! Error definitions for ZQUIC library
+//! Error Definitions for ZQUIC Library
+//!
+//! This module provides a unified error handling system for all ZQUIC operations.
+//! Errors are organized into categories for easier handling and debugging.
+//!
+//! ## Error Categories
+//!
+//! | Category | Errors | Description |
+//! |----------|--------|-------------|
+//! | Connection | `ConnectionClosed`, `ConnectionTimeout`, etc. | Connection lifecycle errors |
+//! | Protocol | `ProtocolViolation`, `InvalidPacket`, etc. | RFC 9000 protocol errors |
+//! | Crypto | `CryptoError`, `TlsError`, etc. | Cryptographic operation failures |
+//! | Network | `NetworkError`, `WouldBlock`, etc. | Socket and I/O errors |
+//! | Resource | `OutOfMemory`, `ResourceExhausted`, etc. | Resource allocation failures |
+//!
+//! ## Error Handling Pattern
+//!
+//! ```zig
+//! const result = connection.send(data) catch |err| {
+//!     if (ErrorHandling.isRecoverable(err)) {
+//!         // Retry later
+//!         return;
+//!     }
+//!     std.log.err("Fatal error: {s}", .{ErrorHandling.errorToString(err)});
+//!     return err;
+//! };
+//! ```
+//!
+//! ## Transport Error Codes
+//!
+//! The `TransportError` enum maps to RFC 9000 Section 20 error codes.
+//! Use `transportErrorToZquicError()` to convert protocol errors.
 
 const std = @import("std");
 const builtin = @import("builtin");
 
-/// ZQUIC-specific error types
+/// ZQUIC unified error type covering all library operations.
+///
+/// Errors are grouped by category for easier handling:
+/// - **Connection**: Lifecycle and state errors
+/// - **Protocol**: QUIC/HTTP3 protocol violations
+/// - **Crypto**: TLS and cryptographic failures
+/// - **Network**: Socket and I/O errors
+/// - **Resource**: Memory and system resource errors
 pub const ZquicError = error{
     // Connection errors
     ConnectionClosed,

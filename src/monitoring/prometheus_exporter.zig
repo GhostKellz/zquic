@@ -4,6 +4,7 @@
 //! and renders them using the Prometheus text-based exposition format.
 
 const std = @import("std");
+const Time = @import("../utils/time.zig");
 
 pub const PrometheusMetrics = struct {
     allocator: std.mem.Allocator,
@@ -32,10 +33,9 @@ pub const PrometheusMetrics = struct {
     const Self = @This();
 
     pub fn init(allocator: std.mem.Allocator) Self {
-        const ts = std.posix.clock_gettime(std.posix.CLOCK.REALTIME) catch unreachable;
         return Self{
             .allocator = allocator,
-            .start_time = ts.sec,
+            .start_time = Time.nowSeconds(),
             .http3_requests_total = std.atomic.Value(u64).init(0),
             .http3_errors_total = std.atomic.Value(u64).init(0),
             .http3_bytes_in_total = std.atomic.Value(u64).init(0),
@@ -104,8 +104,7 @@ pub const PrometheusMetrics = struct {
     }
 
     pub fn uptimeSeconds(self: *const Self) u64 {
-        const ts = std.posix.clock_gettime(std.posix.CLOCK.REALTIME) catch unreachable;
-        return @intCast(ts.sec - self.start_time);
+        return @intCast(Time.nowSeconds() - self.start_time);
     }
 
     pub fn render(self: *Self, allocator: std.mem.Allocator) ![]u8 {

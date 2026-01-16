@@ -4,6 +4,7 @@
 
 const std = @import("std");
 const Error = @import("../utils/error.zig");
+const Time = @import("../utils/time.zig");
 const Connection = @import("../core/connection.zig");
 const Packet = @import("../core/packet.zig");
 const UdpSocket = @import("udp.zig").UdpSocket;
@@ -88,8 +89,7 @@ pub const UdpMultiplexer = struct {
         }
 
         const conn_id_hash = self.hashConnectionId(&connection_id);
-        const ts = std.posix.clock_gettime(std.posix.CLOCK.REALTIME) catch unreachable;
-        const current_time = (@as(i128, ts.sec) * std.time.ns_per_s + ts.nsec) / 1000;
+        const current_time = Time.nowMicros();
 
         const entry = ConnectionEntry{
             .connection_id = connection_id,
@@ -119,8 +119,7 @@ pub const UdpMultiplexer = struct {
 
         if (self.connections.getPtr(conn_id_hash)) |entry| {
             // Update last activity
-            const ts = std.posix.clock_gettime(std.posix.CLOCK.REALTIME) catch unreachable;
-            entry.last_activity = (@as(i128, ts.sec) * std.time.ns_per_s + ts.nsec) / 1000;
+            entry.last_activity = Time.nowMicros();
 
             // Create packet and route to connection
             const full_packet = Packet.Packet.init(packet, packet_data);
@@ -163,8 +162,7 @@ pub const UdpMultiplexer = struct {
         if (connection_id) |conn_id| {
             const conn_id_hash = self.hashConnectionId(&conn_id);
             if (self.connections.getPtr(conn_id_hash)) |entry| {
-                const ts = std.posix.clock_gettime(std.posix.CLOCK.REALTIME) catch unreachable;
-                entry.last_activity = (@as(i128, ts.sec) * std.time.ns_per_s + ts.nsec) / 1000;
+                entry.last_activity = Time.nowMicros();
             }
         }
     }
@@ -202,8 +200,7 @@ pub const UdpMultiplexer = struct {
 
     /// Clean up expired connections
     pub fn cleanupExpiredConnections(self: *Self) u32 {
-        const ts = std.posix.clock_gettime(std.posix.CLOCK.REALTIME) catch unreachable;
-        const current_time = (@as(i128, ts.sec) * std.time.ns_per_s + ts.nsec) / 1000;
+        const current_time = Time.nowMicros();
         const timeout_us = @as(i64, self.config.connection_timeout_ms) * 1000;
 
         var expired_connections = std.ArrayList(u64).init(self.allocator);
