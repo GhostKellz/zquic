@@ -160,6 +160,12 @@ pub const Handshake = core.Handshake;
 /// of sensitive key material.
 pub const Keys = core.Keys;
 
+/// SSH/QUIC integration for SSH-derived secret injection.
+///
+/// Allows SSH key exchange to replace TLS handshake, enabling
+/// QUIC connections to use SSH-derived secrets per draft-denis-ssh-quic.
+pub const SshQuic = core.SshQuic;
+
 /// Low-level UDP socket operations.
 ///
 /// Platform-specific UDP implementation with non-blocking I/O,

@@ -29,6 +29,7 @@ pub const Crypto = @import("crypto/tls.zig");
 pub const EnhancedCrypto = @import("crypto/enhanced_tls.zig");
 pub const Handshake = @import("crypto/handshake.zig");
 pub const Keys = @import("crypto/keys.zig");
+pub const SshQuic = @import("crypto/ssh_quic.zig");
 
 /// Core connection states
 pub const ConnectionState = enum {
