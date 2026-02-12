@@ -207,6 +207,12 @@ pub const Allocator = core.Allocator;
 /// - Resource: `OutOfMemory`, `ConnectionLimitReached`, `SendQueueFull`
 pub const Error = core.Error;
 
+/// Time utilities for portable clock access.
+///
+/// Provides platform-independent time functions compatible with Zig 0.16.0-dev,
+/// including `nowSeconds()`, `nowMicros()`, `nowNanos()`, and `sleep()`.
+pub const Time = core.Time;
+
 /// Packet encryption and decryption operations.
 pub const PacketCrypto = core.PacketCrypto;
 

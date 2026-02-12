@@ -1,15 +1,16 @@
-# ZQUIC — Production-Ready QUIC Transport for Zig v0.9.5
+# ZQUIC — Production-Ready QUIC Transport for Zig v0.9.6
 
 [![Built with Zig](https://img.shields.io/badge/Built%20with-Zig-yellow.svg?logo=zig)](https://ziglang.org/)
-[![Zig Version](https://img.shields.io/badge/Zig-v0.16.0--dev-orange.svg)](https://ziglang.org/)
+[![Zig Version](https://img.shields.io/badge/Zig-v0.16.0--dev.2535+-orange.svg)](https://ziglang.org/)
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
 [![Post-Quantum](https://img.shields.io/badge/crypto-post--quantum-green.svg)](https://github.com/ghostkellz/zcrypto)
 [![QUIC](https://img.shields.io/badge/QUIC-v1-blue.svg)](#feature-highlights)
 [![HTTP/3](https://img.shields.io/badge/HTTP%2F3-enabled-blue.svg)](#feature-highlights)
+[![SSH/QUIC](https://img.shields.io/badge/SSH%2FQUIC-draft-purple.svg)](#sshquic-integration)
 
-ZQUIC 0.9.5 is a **modular, high-performance QUIC transport stack** built entirely in Zig 0.16.0-dev. It ships with a native async runtime (no external deps), hybrid post-quantum TLS via `zcrypto` 0.9.5, and a suite of HTTP/3, DoQ, VPN, and service layers tuned for Ghost production workloads.
+ZQUIC 0.9.6 is a **modular, high-performance QUIC transport stack** built entirely in Zig 0.16.0-dev. It ships with a native async runtime (no external deps), hybrid post-quantum TLS via `zcrypto`, SSH/QUIC secret injection support, and a suite of HTTP/3, DoQ, VPN, and service layers tuned for Ghost production workloads.
 
-> ✅ Builds cleanly with Zig 0.16.0-dev.1484+ on Linux/macOS/Windows and passes the `dev/test.sh` suite.
+> ✅ Builds cleanly with Zig 0.16.0-dev.2535+ on Linux/macOS/Windows and passes the `dev/test.sh` suite.
 
 ## 🎯 Purpose & Vision
 
@@ -50,6 +51,29 @@ zig build
 - **Ed25519** and **Secp256k1** for compatibility
 - **Blake3** and **SHA256** cryptographic hashing
 - **Zero-knowledge proof** integration ready
+
+### 🔑 **SSH/QUIC Integration (v0.9.6)**
+- **SSH secret injection**: Bypass TLS handshake using SSH-derived secrets ([draft-denis-ssh-quic](https://datatracker.ietf.org/doc/draft-denis-ssh-quic/))
+- **Secure key handling**: Secrets passed by pointer, automatic zeroing on cleanup
+- **Bidirectional encryption**: Proper local/remote key separation for client ↔ server traffic
+- **TLS fallback**: `SshQuicContext` supports both SSH-injected and standard TLS modes
+- **Zero-copy secrets**: `initFromPtrs()` avoids unnecessary stack copies of sensitive material
+
+```zig
+// Example: Initialize QUIC with SSH-derived secrets
+var secrets = zquic.SshQuic.SshQuicSecrets.init(client_secret, server_secret);
+defer secrets.zeroize(); // Secure cleanup
+
+var ctx = try zquic.SshQuic.SshQuicContext.initWithSshSecrets(
+    allocator,
+    is_server,
+    &secrets,
+);
+defer ctx.deinit();
+
+// Ready to encrypt/decrypt without TLS handshake
+const ciphertext = try ctx.encrypt(plaintext, packet_number, allocator);
+```
 
 ### 🌐 **Advanced Transport Stack**
 - **Full QUIC v1 compliance**: connection management, streams, flow control

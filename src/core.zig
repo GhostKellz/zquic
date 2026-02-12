@@ -24,6 +24,9 @@ pub const Stream = @import("core/stream.zig");
 pub const FlowControl = @import("core/flow_control.zig");
 pub const Congestion = @import("core/congestion.zig");
 
+// Utilities
+pub const Time = @import("utils/time.zig");
+
 // Crypto and TLS 1.3 support
 pub const Crypto = @import("crypto/tls.zig");
 pub const EnhancedCrypto = @import("crypto/enhanced_tls.zig");

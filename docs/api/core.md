@@ -1,6 +1,6 @@
 # Core API Reference
 
-Complete API documentation for ZQUIC v0.9.0-RC1 core modules.
+Complete API documentation for ZQUIC v0.9.6 core modules.
 
 ## 📋 Quick Reference
 
@@ -9,13 +9,20 @@ const zquic = @import("zquic");
 
 // Core types
 const Connection = zquic.Connection;
-const Packet = zquic.Packet;  
+const Packet = zquic.Packet;
 const Stream = zquic.Stream;
 const Config = zquic.Config;
 
 // Crypto types
 const PacketCrypto = zquic.PacketCrypto;
 const TlsContext = zquic.TlsContext;
+
+// SSH/QUIC types (v0.9.6)
+const SshQuicSecrets = zquic.SshQuic.SshQuicSecrets;
+const SshQuicContext = zquic.SshQuic.SshQuicContext;
+
+// Time utilities
+const Time = zquic.Time;
 
 // HTTP/3 types
 const Http3Server = zquic.Http3.Http3Server;
@@ -255,6 +262,99 @@ pub const PacketCrypto = struct {
         server_key: *[32]u8,
     ) !void;
 };
+```
+
+### SSH/QUIC Integration (v0.9.6)
+
+SSH secret injection for QUIC connections, implementing [draft-denis-ssh-quic](https://datatracker.ietf.org/doc/draft-denis-ssh-quic/).
+
+#### SshQuicSecrets
+
+Container for SSH-derived secrets with secure memory handling.
+
+```zig
+pub const SshQuicSecrets = struct {
+    client_secret: [32]u8,
+    server_secret: [32]u8,
+
+    /// Initialize from SSH-derived secrets (copies values)
+    pub fn init(client_secret: [32]u8, server_secret: [32]u8) Self;
+
+    /// Initialize from pointers (avoids extra copies)
+    pub fn initFromPtrs(client_secret: *const [32]u8, server_secret: *const [32]u8) Self;
+
+    /// Derive QUIC crypto keys from SSH secrets
+    pub fn deriveKeys(self: *const Self) !struct { client: CryptoKeys, server: CryptoKeys };
+
+    /// Securely zero secrets after use
+    pub fn zeroize(self: *Self) void;
+};
+```
+
+#### SshQuicContext
+
+Extended TLS context supporting SSH secret injection.
+
+```zig
+pub const SshQuicContext = struct {
+    tls_ctx: TlsContext,
+    ssh_mode: bool,
+    local_keys: ?CryptoKeys,   // Keys for sending
+    remote_keys: ?CryptoKeys,  // Keys for receiving
+
+    /// Initialize with SSH-derived secrets (bypasses TLS handshake)
+    pub fn initWithSshSecrets(
+        allocator: std.mem.Allocator,
+        is_server: bool,
+        secrets: *const SshQuicSecrets,
+    ) !Self;
+
+    /// Initialize with normal TLS handshake
+    pub fn initWithTls(allocator: std.mem.Allocator, is_server: bool) Self;
+
+    /// Clean up (automatically zeros key material)
+    pub fn deinit(self: *Self) void;
+
+    /// Check if using SSH mode
+    pub fn isSshMode(self: *const Self) bool;
+
+    /// Check if ready to send/receive
+    pub fn isReady(self: *const Self) bool;
+
+    /// Encrypt data using local keys (for sending)
+    pub fn encrypt(self: *const Self, plaintext: []const u8, packet_number: u64, allocator: std.mem.Allocator) ![]u8;
+
+    /// Decrypt data using remote keys (for receiving)
+    pub fn decrypt(self: *const Self, ciphertext: []const u8, packet_number: u64, allocator: std.mem.Allocator) ![]u8;
+
+    /// Get underlying TLS context
+    pub fn getTlsContext(self: *Self) *TlsContext;
+};
+```
+
+**Usage Example:**
+
+```zig
+// After SSH key exchange, derive secrets per draft-denis-ssh-quic:
+// client_secret = HMAC-SHA256("ssh/quic client", mpint(K) || string(H))
+// server_secret = HMAC-SHA256("ssh/quic server", mpint(K) || string(H))
+
+var secrets = zquic.SshQuic.SshQuicSecrets.init(client_secret, server_secret);
+defer secrets.zeroize();  // Clear sensitive data when done
+
+var ctx = try zquic.SshQuic.SshQuicContext.initWithSshSecrets(
+    allocator,
+    is_server,
+    &secrets,
+);
+defer ctx.deinit();
+
+// Ready immediately - no TLS handshake needed
+std.debug.assert(ctx.isReady());
+
+// Encrypt/decrypt with proper key direction
+const ciphertext = try ctx.encrypt("Hello", 1, allocator);
+defer allocator.free(ciphertext);
 ```
 
 ## ⚙️ Flow Control

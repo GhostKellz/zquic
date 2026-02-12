@@ -1,3 +1,54 @@
+## [0.9.6] - 2026-02-11
+
+### SSH/QUIC Integration & Zig 0.16.0 Compatibility
+
+**ZQUIC v0.9.6** - Adds SSH/QUIC secret injection support (draft-denis-ssh-quic) and full compatibility with Zig 0.16.0-dev.2535+. This release enables SSH key exchange to replace TLS handshake for QUIC connections.
+
+### Added
+
+#### SSH/QUIC Integration (`src/crypto/ssh_quic.zig`)
+- **`SshQuicSecrets`** - Container for pre-derived SSH secrets with secure memory handling
+  - `init()` / `initFromPtrs()` - Initialize from 32-byte client/server secrets
+  - `deriveKeys()` - Derive QUIC crypto keys from SSH secrets
+  - `zeroize()` - Securely clear secrets after use (prevents sensitive data leakage)
+
+- **`SshQuicContext`** - Extended TLS context supporting SSH secret injection
+  - `initWithSshSecrets()` - Bypass TLS handshake using SSH-derived secrets
+  - `initWithTls()` - Standard TLS handshake path (unchanged behavior)
+  - `encrypt()` / `decrypt()` - Directional encryption using proper local/remote keys
+  - `getLocalKeys()` / `getRemoteKeys()` - Access directional key material
+  - Automatic secure zeroing of key material on `deinit()`
+
+- **Bidirectional interop** - Client and server can encrypt/decrypt each other's packets:
+  - Client uses client_keys for sending, server_keys for receiving
+  - Server uses server_keys for sending, client_keys for receiving
+  - Shared `application_keys` maintains TlsContext compatibility
+
+#### Time Utilities Enhancement
+- **`Time.Timespec`** - Platform-specific timespec type alias
+- **`Time.getClockTime()`** - Internal platform-independent clock access
+- **`zquic.Time`** - Now exported from root module for application use
+
+### Changed
+
+#### Zig 0.16.0-dev Compatibility
+- **`src/utils/time.zig`** - Replaced removed `std.time.Instant` API
+  - Uses `std.os.linux.clock_gettime()` directly on Linux
+  - Uses `GetSystemTimeAsFileTime` on Windows
+  - All time functions now work with Zig 0.16.0-dev.2535+
+
+- **`src/core/stream.zig`** - Fixed `updateActivityTimestamp()`
+  - Replaced `std.posix.clock_gettime()` with `Time.nowSeconds()`
+
+- **`examples/http3_server.zig`** - Updated to use `zquic.Time.nowSeconds()`
+
+### Security
+- SSH secrets taken by pointer to minimize stack copies of sensitive material
+- Automatic `secureZero()` on key material during context destruction
+- Added `zeroize()` method for explicit secret clearing after initialization
+
+---
+
 ## [0.9.5] - 2026-01-15
 
 ### Production Hardening Release

@@ -215,8 +215,8 @@ pub const SuperStream = struct {
     }
 
     fn updateActivityTimestamp(self: *Self) !void {
-        const ts = try std.posix.clock_gettime(std.posix.CLOCK.REALTIME);
-        self.last_activity.store(ts.sec, .release);
+        const sec = Time.nowSeconds();
+        self.last_activity.store(sec, .release);
     }
 
     /// Close the stream
