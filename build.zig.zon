@@ -33,12 +33,12 @@
     // internet connectivity.
     .dependencies = .{
         .zcrypto = .{
-            .url = "https://github.com/bresilla/zcrypto/archive/5e81af5723d7c6cdb27040a4e0ae6fbb548afdce.tar.gz",
-            .hash = "zcrypto-0.9.7-rgQAI9fqDgCtBXJDz-N2ywcSnQgzRoNjSdqdHdKubfi_",
+            .url = "https://github.com/ghostkellz/zcrypto/archive/main.tar.gz",
+            .hash = "zcrypto-0.9.8-rgQAIx3GDgBT3h0fHi3eUzlHyw05sfeCwtXL5sNshPHC",
         },
         .zsync = .{
             .url = "https://github.com/ghostkellz/zsync/archive/main.tar.gz",
-            .hash = "zsync-0.7.4-KAuheYHjFgAB-W9RvATLcMJyl_1jUtrBZoqXt4eaQN44",
+            .hash = "zsync-0.7.5-KAuhedbyFgA-4HLXM_afdk2aM0bQl45kmOKuUvCVl6p0",
         },
     },
     // Specifies the set of files and directories that are included in this package.
