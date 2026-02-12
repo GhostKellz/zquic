@@ -413,13 +413,13 @@ test "frame parser incremental data frame" {
     const first = bytes[0..split];
     const second = bytes[split..];
 
-    var frames_chunk1 = try parser.processData(first, std.testing.allocator);
+    const frames_chunk1 = try parser.processData(first, std.testing.allocator);
     defer {
         for (frames_chunk1) |f| f.deinit(std.testing.allocator);
     }
     try std.testing.expect(frames_chunk1.len == 0);
 
-    var frames_chunk2 = try parser.processData(second, std.testing.allocator);
+    const frames_chunk2 = try parser.processData(second, std.testing.allocator);
     defer {
         for (frames_chunk2) |f| f.deinit(std.testing.allocator);
     }
