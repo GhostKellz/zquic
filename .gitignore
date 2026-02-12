@@ -1,5 +1,7 @@
 .zig-cache/
 zig-out/
+zig-pkg/
+zig-global-cache/
 *.o
 *.exe
 archive/
