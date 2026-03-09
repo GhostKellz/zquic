@@ -321,7 +321,7 @@ pub const DoQServer = struct {
             std.log.err("DoQ: Failed to load certificate {s}: {}", .{ self.config.cert_path, err });
             return err;
         };
-        posix.close(cert_fd);
+        _ = posix.system.close(cert_fd);
 
         var key_path_buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
         const key_path_z = std.fmt.bufPrintZ(&key_path_buf, "{s}", .{self.config.key_path}) catch {
@@ -333,7 +333,7 @@ pub const DoQServer = struct {
             std.log.err("DoQ: Failed to load private key {s}: {}", .{ self.config.key_path, err });
             return err;
         };
-        posix.close(key_fd);
+        _ = posix.system.close(key_fd);
 
         std.log.info("DoQ: Loaded certificates with post-quantum crypto support", .{});
     }

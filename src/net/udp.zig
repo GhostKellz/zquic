@@ -15,7 +15,7 @@ pub const UdpSocket = struct {
 
     pub fn init(local_address: std.net.Address) !Self {
         const socket_fd = try posix.socket(local_address.any.family, posix.SOCK.DGRAM, posix.IPPROTO.UDP);
-        errdefer posix.close(socket_fd);
+        errdefer _ = posix.system.close(socket_fd);
 
         // Allow address reuse
         try posix.setsockopt(socket_fd, posix.SOL.SOCKET, posix.SO.REUSEADDR, &std.mem.toBytes(@as(c_int, 1)));
@@ -36,7 +36,7 @@ pub const UdpSocket = struct {
     }
 
     pub fn deinit(self: *Self) void {
-        posix.close(self.socket_fd);
+        _ = posix.system.close(self.socket_fd);
     }
 
     /// Set socket to non-blocking mode

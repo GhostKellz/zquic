@@ -322,7 +322,7 @@ pub const Response = struct {
             },
             else => return err,
         };
-        defer posix.close(fd);
+        defer _ = posix.system.close(fd);
 
         // Determine content type from extension
         const content_type = getContentTypeFromPath(file_path);
