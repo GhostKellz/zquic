@@ -64,10 +64,15 @@ jobs:
       - name: Fetch dependencies
         run: zig build --fetch
 
-      - name: Run dev/test.sh
+      - name: Run unit tests
         run: |
           set -euo pipefail
-          ./dev/test.sh
+          zig build test
+
+      - name: Run integration tests
+        run: |
+          set -euo pipefail
+          zig build integration-tests
 
   integration:
     name: "Integration smoke"
