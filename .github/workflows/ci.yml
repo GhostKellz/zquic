@@ -83,24 +83,36 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Setup cache on tmpfs
-        run: |
-          rm -rf .zig-cache zig-out /home/runner/.cache/zig
-          mkdir -p /tmp/zig-local-cache /tmp/zig-global-cache
-          ln -sfn /tmp/zig-local-cache .zig-cache
+      - name: Cache Zig build artifacts
+        uses: actions/cache@v4
+        with:
+          path: |
+            .zig-cache
+            /home/runner/.cache/zig
+          key: zig-${{ runner.os }}-${{ hashFiles('build.zig') }}
+          restore-keys: zig-${{ runner.os }}-
 
       - name: Show Zig version
         run: zig version
 
-      - name: Run smoke tests
+      # Unit job already builds/tests; keep this lean to avoid double builds.
+      - name: Build (minimal targets, debug speed)
         run: |
           set -euo pipefail
-          ./dev/smoke_test.sh
+          zig build \
+            -Doptimize=Debug \
+            -Dexamples=false \
+            -Dservices=false \
+            -Dvpn=false \
+            -Dpost-quantum=false \
+            -Dhttp3=false \
+            -Ddoq=false \
+            -Dmonitoring=false
 
-      - name: Run local test sweep
+      - name: List built binaries
         run: |
           set -euo pipefail
-          ./dev/test_local.sh
+          ls -lh zig-out/bin/
 
   release-build:
     name: "Release Build"
