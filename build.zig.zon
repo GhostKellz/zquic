@@ -25,7 +25,7 @@
     .fingerprint = 0x947d823db3ddb3da, // Changing this has security and trust implications.
     // Tracks the earliest Zig version that the package considers to be a
     // supported use case.
-    .minimum_zig_version = "0.16.0-dev.2682+02142a54d",
+    .minimum_zig_version = "0.16.0-dev.2736+3b515fbed",
     // This field is optional.
     // Each dependency must either provide a `url` and `hash`, or a `path`.
     // `zig build --fetch` can be used to fetch all dependencies of a package, recursively.
@@ -34,7 +34,7 @@
     .dependencies = .{
         .zcrypto = .{
             .url = "https://github.com/ghostkellz/zcrypto/archive/main.tar.gz",
-            .hash = "zcrypto-0.9.9-rgQAIxvaDgA8azXj9zdQkW_BZ_T030GdnCBF62bTZzWQ",
+            .hash = "zcrypto-0.9.9-rgQAI8baDgA6veq4_YuVsNPK_SnohEr0lI9yLU5571KM",
         },
         .zsync = .{
             .url = "https://github.com/ghostkellz/zsync/archive/main.tar.gz",
