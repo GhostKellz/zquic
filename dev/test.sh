@@ -20,14 +20,13 @@ run_step() {
     echo ""
 }
 
-run_step "[1/4] Building..." zig build
-run_step "[2/4] Running unit tests (zig build test)..." zig build test
-run_step "[3/4] Running integration tests..." zig build integration-tests
+run_step "[1/3] Running unit tests (zig build test)..." zig build test
+run_step "[2/3] Running integration tests..." zig build integration-tests
 
 if [ -n "${CI:-}" ]; then
     echo "CI detected; skipping fuzz harness to avoid long runtimes." && echo ""
 else
-    run_step "[4/4] Running fuzz harness..." zig build fuzz-tests
+    run_step "[3/3] Running fuzz harness..." zig build fuzz-tests
 fi
 
 echo "=== Test Complete ==="

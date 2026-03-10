@@ -2,13 +2,14 @@
 
 const std = @import("std");
 const zquic = @import("zquic");
-const process = std.process;
+const builtin = @import("builtin");
 const math = std.math;
 
 const PacketHeader = zquic.Packet.PacketHeader;
 
 fn scaledIterations(base: usize) usize {
-    if (process.hasEnvVar("CI")) {
+    // Keep compatibility across Zig versions: gate on presence of hasEnvVar.
+    if (@hasDecl(std.process, "hasEnvVar") and std.process.hasEnvVar("CI")) {
         return math.max(base / 8, 1);
     }
     return base;
