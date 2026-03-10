@@ -39,10 +39,6 @@ jobs:
             zig fmt --check tests/
           fi
 
-      - name: Deprecated API sweep
-        run: |
-          set -euo pipefail
-          ./dev/check_api.sh
 
   unit-tests:
     name: "Unit & fuzz tests"

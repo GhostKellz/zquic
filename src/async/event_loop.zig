@@ -5,6 +5,7 @@
 
 const std = @import("std");
 const posix = std.posix;
+const Time = @import("../utils/time.zig");
 
 /// Event types for the event loop
 pub const EventType = enum {
@@ -143,7 +144,7 @@ pub const Timer = struct {
     const Self = @This();
 
     pub fn init(delay_ms: u64, callback: *const fn (?*anyopaque) void, user_data: ?*anyopaque) Self {
-        const now = std.time.nanoTimestamp();
+        const now = Time.nowNanos();
         return Self{
             .deadline_ns = now + @as(i128, delay_ms) * std.time.ns_per_ms,
             .callback = callback,
@@ -154,7 +155,7 @@ pub const Timer = struct {
     }
 
     pub fn initRepeating(interval_ms: u64, callback: *const fn (?*anyopaque) void, user_data: ?*anyopaque) Self {
-        const now = std.time.nanoTimestamp();
+        const now = Time.nowNanos();
         const interval = @as(i128, interval_ms) * std.time.ns_per_ms;
         return Self{
             .deadline_ns = now + interval,
@@ -166,18 +167,18 @@ pub const Timer = struct {
     }
 
     pub fn isExpired(self: *const Self) bool {
-        return std.time.nanoTimestamp() >= self.deadline_ns;
+        return Time.nowNanos() >= self.deadline_ns;
     }
 
     pub fn fire(self: *Self) void {
         self.callback(self.user_data);
         if (self.repeating) {
-            self.deadline_ns = std.time.nanoTimestamp() + self.interval_ns;
+            self.deadline_ns = Time.nowNanos() + self.interval_ns;
         }
     }
 
     pub fn timeUntilDeadline(self: *const Self) i64 {
-        const now = std.time.nanoTimestamp();
+        const now = Time.nowNanos();
         const diff = self.deadline_ns - now;
         if (diff < 0) return 0;
         return @intCast(@divFloor(diff, std.time.ns_per_ms));
