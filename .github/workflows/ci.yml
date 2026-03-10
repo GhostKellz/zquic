@@ -7,7 +7,8 @@ on:
     branches: [ main ]
 
 env:
-  ZIG_GLOBAL_CACHE_DIR: /tmp/zig-global-cache
+  # Use per-job workspace-local Zig caches to avoid cross-job interference
+  ZIG_GLOBAL_CACHE_DIR: ${{ github.workspace }}/.zig-global-cache
 
 jobs:
   lint:
@@ -18,14 +19,12 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Setup cache on tmpfs
+      - name: Setup Zig cache dirs
         run: |
-          rm -rf .zig-cache zig-out /home/runner/.cache/zig
-          mkdir -p /tmp/zig-local-cache /tmp/zig-global-cache
-          ln -sfn /tmp/zig-local-cache .zig-cache
-          echo "Checking /tmp filesystem:"
-          df -T /tmp
-          ls -la .zig-cache
+          set -euo pipefail
+          rm -rf .zig-cache zig-out .zig-global-cache
+          mkdir -p .zig-cache .zig-global-cache
+          echo "ZIG_GLOBAL_CACHE_DIR=$PWD/.zig-global-cache" >> "$GITHUB_ENV"
 
       - name: Show Zig version
         run: zig version
@@ -52,11 +51,12 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Setup cache on tmpfs
+      - name: Setup Zig cache dirs
         run: |
-          rm -rf .zig-cache zig-out /home/runner/.cache/zig
-          mkdir -p /tmp/zig-local-cache /tmp/zig-global-cache
-          ln -sfn /tmp/zig-local-cache .zig-cache
+          set -euo pipefail
+          rm -rf .zig-cache zig-out .zig-global-cache
+          mkdir -p .zig-cache .zig-global-cache
+          echo "ZIG_GLOBAL_CACHE_DIR=$PWD/.zig-global-cache" >> "$GITHUB_ENV"
 
       - name: Show Zig version
         run: zig version
@@ -88,12 +88,17 @@ jobs:
         with:
           path: |
             .zig-cache
-            /home/runner/.cache/zig
-          key: zig-${{ runner.os }}-${{ hashFiles('build.zig') }}
-          restore-keys: zig-${{ runner.os }}-
+            .zig-global-cache
+          key: zig-${{ runner.os }}-${{ hashFiles('build.zig', 'build.zig.zon') }}
+          restore-keys: |
+            zig-${{ runner.os }}-
 
-      - name: Set Zig cache dir
-        run: echo "ZIG_GLOBAL_CACHE_DIR=/home/runner/.cache/zig" >> $GITHUB_ENV
+      - name: Setup Zig cache dirs
+        run: |
+          set -euo pipefail
+          rm -rf .zig-cache zig-out .zig-global-cache
+          mkdir -p .zig-cache .zig-global-cache
+          echo "ZIG_GLOBAL_CACHE_DIR=$PWD/.zig-global-cache" >> "$GITHUB_ENV"
 
       - name: Show Zig version
         run: zig version
@@ -106,24 +111,38 @@ jobs:
     runs-on: self-hosted
     needs: [unit-tests, integration]
     if: github.ref == 'refs/heads/main'
-    timeout-minutes: 10
+    timeout-minutes: 15
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Setup cache on tmpfs
+      - name: Setup Zig cache dirs
         run: |
-          rm -rf .zig-cache zig-out /home/runner/.cache/zig
-          mkdir -p /tmp/zig-local-cache /tmp/zig-global-cache
-          ln -sfn /tmp/zig-local-cache .zig-cache
+          set -euo pipefail
+          rm -rf .zig-cache zig-out .zig-global-cache
+          mkdir -p .zig-cache .zig-global-cache
+          echo "ZIG_GLOBAL_CACHE_DIR=$PWD/.zig-global-cache" >> "$GITHUB_ENV"
+
+      - name: Cache Zig build artifacts
+        uses: actions/cache@v4
+        with:
+          path: |
+            .zig-cache
+            .zig-global-cache
+          key: zig-release-${{ runner.os }}-${{ hashFiles('build.zig', 'build.zig.zon') }}
+          restore-keys: |
+            zig-release-${{ runner.os }}-
 
       - name: Show Zig version
         run: zig version
 
+      - name: Fetch dependencies
+        run: zig build --fetch
+
       - name: Build Release via dev script
         run: |
           set -euo pipefail
-          ./dev/build_release.sh
+          ./dev/build_release.sh -Dexamples=false -Dservices=false -Dvpn=false -Ddoq=false -Dhttp3=false -Dpost-quantum=false
 
       - name: Archive Release Artifacts
         uses: actions/upload-artifact@v4

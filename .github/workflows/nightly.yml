@@ -5,9 +5,6 @@ on:
     - cron: '30 7 * * *'
   workflow_dispatch:
 
-env:
-  ZIG_GLOBAL_CACHE_DIR: /tmp/zig-global-cache
-
 jobs:
   nightly:
     name: "Nightly validation"
@@ -17,11 +14,22 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Setup cache on tmpfs
+      - name: Cache Zig build artifacts
+        uses: actions/cache@v4
+        with:
+          path: |
+            .zig-cache
+            .zig-global-cache
+          key: zig-nightly-${{ runner.os }}-${{ hashFiles('build.zig', 'build.zig.zon') }}
+          restore-keys: |
+            zig-nightly-${{ runner.os }}-
+
+      - name: Setup Zig cache dirs
         run: |
-          rm -rf .zig-cache zig-out /home/runner/.cache/zig
-          mkdir -p /tmp/zig-local-cache /tmp/zig-global-cache
-          ln -sfn /tmp/zig-local-cache .zig-cache
+          set -euo pipefail
+          rm -rf .zig-cache .zig-global-cache zig-out
+          mkdir -p .zig-cache .zig-global-cache
+          echo "ZIG_GLOBAL_CACHE_DIR=$PWD/.zig-global-cache" >> "$GITHUB_ENV"
 
       - name: Show Zig version
         run: zig version

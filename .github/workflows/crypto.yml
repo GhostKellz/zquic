@@ -20,9 +20,17 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Setup Zig cache dirs
+        run: |
+          set -euo pipefail
+          rm -rf .zig-cache .zig-global-cache zig-out
+          mkdir -p .zig-cache .zig-global-cache
+          echo "ZIG_GLOBAL_CACHE_DIR=$PWD/.zig-global-cache" >> "$GITHUB_ENV"
+
       - name: Build with Crypto Support
         run: |
           set -euo pipefail
+          zig build --fetch
           echo "🔧 Building ZQUIC with crypto support..."
           zig build -Dpost-quantum=true
           
