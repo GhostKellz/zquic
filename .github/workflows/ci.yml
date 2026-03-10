@@ -30,6 +30,9 @@ jobs:
       - name: Show Zig version
         run: zig version
 
+      - name: Fetch dependencies
+        run: zig build --fetch
+
       - name: Format check
         run: |
           set -euo pipefail
@@ -57,6 +60,9 @@ jobs:
 
       - name: Show Zig version
         run: zig version
+
+      - name: Fetch dependencies
+        run: zig build --fetch
 
       - name: Run dev/test.sh
         run: |

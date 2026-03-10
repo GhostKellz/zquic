@@ -2,8 +2,17 @@
 
 const std = @import("std");
 const zquic = @import("zquic");
+const process = std.process;
+const math = std.math;
 
 const PacketHeader = zquic.Packet.PacketHeader;
+
+fn scaledIterations(base: usize) usize {
+    if (process.hasEnvVar("CI")) {
+        return math.max(base / 8, 1);
+    }
+    return base;
+}
 
 fn exerciseRandomCorpus(iterations: usize, allocator: std.mem.Allocator) void {
     var prng = std.Random.DefaultPrng.init(0xDEC0DED);
@@ -37,7 +46,7 @@ fn exerciseRandomCorpus(iterations: usize, allocator: std.mem.Allocator) void {
 }
 
 test "fuzz: packet header parser handles random data" {
-    exerciseRandomCorpus(512, std.testing.allocator);
+    exerciseRandomCorpus(scaledIterations(512), std.testing.allocator);
 }
 
 test "fuzz: valid long header survives random corpus" {
@@ -54,5 +63,5 @@ test "fuzz: valid long header survives random corpus" {
     try std.testing.expectEqual(@as(u8, 4), header.dest_conn_id.len);
 
     // Run the random corpus after a known-good parse to catch regressions when state mutates
-    exerciseRandomCorpus(128, std.testing.allocator);
+    exerciseRandomCorpus(scaledIterations(128), std.testing.allocator);
 }

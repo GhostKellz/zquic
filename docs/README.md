@@ -1,6 +1,15 @@
 # ZQUIC Documentation
 
-Welcome to the ZQUIC v0.9.5 documentation! This guide covers the complete modular QUIC transport library for Zig 0.16.0-dev.
+Welcome to the ZQUIC v0.9.6 documentation! This guide covers the complete modular QUIC transport library for Zig 0.16.0-dev.
+
+## What's New in v0.9.6
+
+**SSH/QUIC Integration & Zig 0.16.0 Compatibility**
+
+- **SSH/QUIC Secret Injection**: Bypass TLS handshake using SSH-derived secrets ([draft-denis-ssh-quic](https://datatracker.ietf.org/doc/draft-denis-ssh-quic/))
+- **Zig 0.16.0-dev.2535+**: Full compatibility with latest Zig development builds
+- **Secure Key Handling**: Automatic zeroing of sensitive key material
+- **Time Utilities**: Platform-independent `zquic.Time` module exported for application use
 
 ## What's New in v0.9.5
 
@@ -34,8 +43,10 @@ Welcome to the ZQUIC v0.9.5 documentation! This guide covers the complete modula
 
 ### Features
 - **[Post-Quantum Crypto](features/post-quantum.md)** - ML-KEM-768 + X25519 hybrid TLS
+- **[SSH/QUIC Integration](features/ssh_quic.md)** - SSH secret injection for QUIC (v0.9.6)
 - **[HTTP/3 Server](features/http3.md)** - Production HTTP/3 with QPACK
 - **[DNS-over-QUIC](features/doq.md)** - Secure DNS resolution
+- **[QUIC VPN](features/quic_vpn.md)** - Experimental QUIC-based mesh tunneling
 - **[Async Processing](features/async.md)** - Native runtime and worker pools (no external deps)
 
 ### Examples
@@ -55,6 +66,8 @@ Welcome to the ZQUIC v0.9.5 documentation! This guide covers the complete modula
 **Need API docs?** Check [Core API](api/core.md) or [HTTP/3 API](api/http3.md)
 
 **Building a server?** See [Server Examples](examples/server.md)
+
+**SSH/QUIC integration?** Read [SSH/QUIC Secret Injection](features/ssh_quic.md)
 
 **Post-quantum crypto?** Read [Post-Quantum Features](features/post-quantum.md)
 
