@@ -34,11 +34,11 @@
     .dependencies = .{
         .zcrypto = .{
             .url = "https://github.com/ghostkellz/zcrypto/archive/main.tar.gz",
-            .hash = "zcrypto-0.9.9-rgQAI8baDgA6veq4_YuVsNPK_SnohEr0lI9yLU5571KM",
+            .hash = "zcrypto-0.9.9-rgQAI8baDgBoZReZt2Cu-9XIRngQIYWVs5kfF0JsS31v",
         },
         .zsync = .{
             .url = "https://github.com/ghostkellz/zsync/archive/main.tar.gz",
-            .hash = "zsync-0.7.6-KAuheQ7zFgBr1D68UOVBm4ihty3dtqw_GPThxOSqPnlK",
+            .hash = "zsync-0.7.7-KAuhefiZGACgJRl7uJ1tvJrU9w74XtShEKyZun1ue0uJ",
         },
     },
     // Specifies the set of files and directories that are included in this package.
