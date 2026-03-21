@@ -34,9 +34,9 @@ fn buildHeaderFields(allocator: std.mem.Allocator, headers: []const struct { nam
 }
 
 test "integration: http3 server routes request to handler" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    defer _ = gpa.deinit();
-    const allocator = gpa.allocator();
+    var debug_allocator: std.heap.DebugAllocator(.{}) = .init;
+    defer _ = debug_allocator.deinit();
+    const allocator = debug_allocator.allocator();
 
     var server = try Http3.Http3Server.init(allocator, .{});
     defer server.deinit();
@@ -92,9 +92,9 @@ test "integration: http3 server routes request to handler" {
 }
 
 test "integration: middleware executes in order" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    defer _ = gpa.deinit();
-    const allocator = gpa.allocator();
+    var debug_allocator: std.heap.DebugAllocator(.{}) = .init;
+    defer _ = debug_allocator.deinit();
+    const allocator = debug_allocator.allocator();
 
     var server = try Http3.Http3Server.init(allocator, .{});
     defer server.deinit();
@@ -145,7 +145,7 @@ test "integration: middleware executes in order" {
     var response = Http3.Response.init(allocator, request.context.stream_id);
     defer response.deinit();
 
-    var call_log = MiddlewareLog{};
+    var call_log = MiddlewareLog.empty;
     defer call_log.deinit(allocator);
     MiddlewareTest.attachLog(&request, &call_log);
 
@@ -156,9 +156,9 @@ test "integration: middleware executes in order" {
 }
 
 test "integration: middleware short circuits handler" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    defer _ = gpa.deinit();
-    const allocator = gpa.allocator();
+    var debug_allocator: std.heap.DebugAllocator(.{}) = .init;
+    defer _ = debug_allocator.deinit();
+    const allocator = debug_allocator.allocator();
 
     var server = try Http3.Http3Server.init(allocator, .{});
     defer server.deinit();
@@ -206,7 +206,7 @@ test "integration: middleware short circuits handler" {
     var response = Http3.Response.init(allocator, request.context.stream_id);
     defer response.deinit();
 
-    var call_log = MiddlewareLog{};
+    var call_log = MiddlewareLog.empty;
     defer call_log.deinit(allocator);
     MiddlewareTest.attachLog(&request, &call_log);
 
@@ -218,9 +218,9 @@ test "integration: middleware short circuits handler" {
 }
 
 test "integration: route middleware isolation" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    defer _ = gpa.deinit();
-    const allocator = gpa.allocator();
+    var debug_allocator: std.heap.DebugAllocator(.{}) = .init;
+    defer _ = debug_allocator.deinit();
+    const allocator = debug_allocator.allocator();
 
     var server = try Http3.Http3Server.init(allocator, .{});
     defer server.deinit();
@@ -272,7 +272,7 @@ test "integration: route middleware isolation" {
     var alpha_response = Http3.Response.init(allocator, alpha_request.context.stream_id);
     defer alpha_response.deinit();
 
-    var alpha_log = MiddlewareLog{};
+    var alpha_log = MiddlewareLog.empty;
     defer alpha_log.deinit(allocator);
     MiddlewareTest.attachLog(&alpha_request, &alpha_log);
 
@@ -296,7 +296,7 @@ test "integration: route middleware isolation" {
     var beta_response = Http3.Response.init(allocator, beta_request.context.stream_id);
     defer beta_response.deinit();
 
-    var beta_log = MiddlewareLog{};
+    var beta_log = MiddlewareLog.empty;
     defer beta_log.deinit(allocator);
     MiddlewareTest.attachLog(&beta_request, &beta_log);
 
@@ -306,9 +306,9 @@ test "integration: route middleware isolation" {
 }
 
 test "integration: router error handler captures failures" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    defer _ = gpa.deinit();
-    const allocator = gpa.allocator();
+    var debug_allocator: std.heap.DebugAllocator(.{}) = .init;
+    defer _ = debug_allocator.deinit();
+    const allocator = debug_allocator.allocator();
 
     var server = try Http3.Http3Server.init(allocator, .{});
     defer server.deinit();
@@ -363,9 +363,9 @@ test "integration: router error handler captures failures" {
 }
 
 test "integration: static middleware serves files" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    defer _ = gpa.deinit();
-    const allocator = gpa.allocator();
+    var debug_allocator: std.heap.DebugAllocator(.{}) = .init;
+    defer _ = debug_allocator.deinit();
+    const allocator = debug_allocator.allocator();
 
     const io = std.testing.io;
     var tmp_dir = std.testing.tmpDir(.{});

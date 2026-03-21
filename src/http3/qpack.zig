@@ -14,7 +14,7 @@ pub const QpackDecoder = struct {
 
     pub fn init(_: std.mem.Allocator, max_capacity: u32) Self {
         return Self{
-            .dynamic_table = .{},
+            .dynamic_table = .empty,
             .max_table_capacity = max_capacity,
         };
     }
@@ -71,7 +71,7 @@ pub const QpackEncoder = struct {
 
     pub fn encode(self: *QpackEncoder, headers: []const HeaderField, allocator: std.mem.Allocator) Error.ZquicError![]u8 {
         _ = self;
-        var buffer: std.ArrayListUnmanaged(u8) = .{};
+        var buffer: std.ArrayListUnmanaged(u8) = .empty;
         defer buffer.deinit(allocator);
 
         try writeVarint(&buffer, allocator, headers.len);

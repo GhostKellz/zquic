@@ -232,8 +232,8 @@ pub const GrpcStream = struct {
             .method = method,
             .quic_stream = quic_stream,
             .state = .open,
-            .send_buffer = .{},
-            .recv_buffer = .{},
+            .send_buffer = .empty,
+            .recv_buffer = .empty,
             .allocator = allocator,
         };
         return stream;
@@ -333,7 +333,7 @@ pub const GrpcConnection = struct {
         conn.* = GrpcConnection{
             .connection_id = connection_id,
             .quic_connection = quic_connection,
-            .streams = .{},
+            .streams = .empty,
             .next_stream_id = 1,
             .allocator = allocator,
         };
@@ -435,8 +435,8 @@ pub const GhostBridge = struct {
         bridge.* = GhostBridge{
             .config = config,
             .server = null,
-            .services = .{},
-            .connections = .{},
+            .services = .empty,
+            .connections = .empty,
             .next_connection_id = 1,
             .stats = BridgeStats.init(),
             .allocator = allocator,

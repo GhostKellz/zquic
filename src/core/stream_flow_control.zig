@@ -284,7 +284,7 @@ pub const StreamPriorityInfo = struct {
             .incremental = false,
             .weight = priority.getWeight(),
             .parent_stream_id = null,
-            .children = .{},
+            .children = .empty,
             .bytes_scheduled = 0,
             .last_scheduled = 0,
             .deficit = 0.0,
@@ -362,9 +362,9 @@ pub const StreamScheduler = struct {
     pub fn init(alloc: std.mem.Allocator, algorithm: SchedulingAlgorithm) StreamScheduler {
         return StreamScheduler{
             .algorithm = algorithm,
-            .streams = .{},
-            .ready_streams = .{},
-            .blocked_streams = .{},
+            .streams = .empty,
+            .ready_streams = .empty,
+            .blocked_streams = .empty,
             .current_round_robin_index = 0,
             .quantum = 1500.0, // Default quantum size
             .virtual_time = 0.0,
@@ -567,7 +567,7 @@ pub const StreamScheduler = struct {
     }
 
     fn selectFromTree(self: *StreamScheduler, parent_stream_id: ?u64) ?u64 {
-        var candidates: std.ArrayListUnmanaged(u64) = .{};
+        var candidates: std.ArrayListUnmanaged(u64) = .empty;
         defer candidates.deinit(self.allocator);
 
         // Find streams with the specified parent
@@ -661,7 +661,7 @@ pub const FlowControlManager = struct {
     pub fn init(alloc: std.mem.Allocator, initial_max_data: u64, initial_max_stream_data: u64, scheduling_algorithm: StreamScheduler.SchedulingAlgorithm) FlowControlManager {
         return FlowControlManager{
             .connection_flow_control = ConnectionFlowControl.init(initial_max_data),
-            .stream_flow_controls = .{},
+            .stream_flow_controls = .empty,
             .scheduler = StreamScheduler.init(alloc, scheduling_algorithm),
             .initial_max_data = initial_max_data,
             .initial_max_stream_data = initial_max_stream_data,
@@ -755,7 +755,7 @@ pub const FlowControlManager = struct {
     }
 
     pub fn generateFlowControlUpdates(self: *FlowControlManager) ![]Frame {
-        var frames: std.ArrayListUnmanaged(Frame) = .{};
+        var frames: std.ArrayListUnmanaged(Frame) = .empty;
         errdefer frames.deinit(self.allocator);
 
         // Check connection-level flow control

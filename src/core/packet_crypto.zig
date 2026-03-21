@@ -257,10 +257,10 @@ pub const PacketCrypto = struct {
         const packet_number = try self.extractPacketNumber(packet_buffer[0..payload_start]);
 
         // Use hardware-accelerated in-place decryption
-        const encrypted_len = try self.quic_crypto.encryptPacket(packet_buffer[payload_start..], packet_number);
+        const decrypted_len = try self.quic_crypto.decryptPacket(packet_buffer[payload_start..used_length.*], packet_number);
 
         // Update used length after processing
-        used_length.* = payload_start + encrypted_len;
+        used_length.* = payload_start + decrypted_len;
 
         return level;
     }

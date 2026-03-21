@@ -984,7 +984,7 @@ pub const FrameParser = struct {
     }
 
     pub fn parseFrames(self: *FrameParser, data: []const u8) ![]Frame {
-        var frames: std.ArrayListUnmanaged(Frame) = .{};
+        var frames: std.ArrayListUnmanaged(Frame) = .empty;
         errdefer frames.deinit(self.allocator);
 
         var reader = Io.Reader.fixed(data);

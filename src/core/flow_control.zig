@@ -175,7 +175,7 @@ pub const FlowController = struct {
     pub fn init(allocator: std.mem.Allocator, initial_max_data: u64, peer_max_data: u64) Self {
         return Self{
             .connection_fc = ConnectionFlowControl.init(initial_max_data, peer_max_data),
-            .stream_fc_map = .{},
+            .stream_fc_map = .empty,
             .allocator = allocator,
         };
     }
@@ -243,7 +243,7 @@ pub const FlowController = struct {
 
     /// Get streams that need MAX_STREAM_DATA updates
     pub fn getStreamsNeedingUpdates(self: *Self, allocator: std.mem.Allocator) ![]u64 {
-        var streams_needing_updates: std.ArrayListUnmanaged(u64) = .{};
+        var streams_needing_updates: std.ArrayListUnmanaged(u64) = .empty;
 
         for (self.stream_fc_map.items) |*entry| {
             if (entry.fc.shouldSendMaxStreamData()) {

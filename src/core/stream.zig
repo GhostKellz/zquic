@@ -118,9 +118,9 @@ pub const SuperStream = struct {
             .allocator = allocator,
 
             // Initialize buffers
-            .read_buffer = .{},
+            .read_buffer = .empty,
             .read_start = 0,
-            .write_buffer = .{},
+            .write_buffer = .empty,
 
             // Initialize flow control (generous initial windows for high throughput)
             .send_window = std.atomic.Value(u64).init(1_048_576), // 1MB

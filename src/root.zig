@@ -427,10 +427,10 @@ pub const build_config = struct {
 ///
 /// ## Example
 /// ```zig
-/// var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-/// defer _ = gpa.deinit();
+/// var debug_allocator: std.heap.DebugAllocator(.{}) = .init;
+/// defer _ = debug_allocator.deinit();
 ///
-/// try zquic.init(gpa.allocator());
+/// try zquic.init(debug_allocator.allocator());
 /// defer zquic.deinit();
 /// ```
 pub fn init(allocator: std.mem.Allocator) Error.ZquicError!void {

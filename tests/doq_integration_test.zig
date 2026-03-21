@@ -19,9 +19,9 @@ fn writeTempCertFiles(allocator: std.mem.Allocator) !struct { cert: [:0]const u8
 }
 
 test "doq server initializes and exposes stats" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    defer _ = gpa.deinit();
-    const allocator = gpa.allocator();
+    var debug_allocator: std.heap.DebugAllocator(.{}) = .init;
+    defer _ = debug_allocator.deinit();
+    const allocator = debug_allocator.allocator();
 
     var temp = try writeTempCertFiles(allocator);
     defer {

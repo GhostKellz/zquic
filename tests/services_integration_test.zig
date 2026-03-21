@@ -20,9 +20,9 @@ fn nowSeconds() i64 {
 test "integration: ghostbridge manages services and connections" {
     if (!@hasDecl(zquic.services, "GhostBridge")) return error.SkipZigTest;
 
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    defer _ = gpa.deinit();
-    const allocator = gpa.allocator();
+    var debug_allocator: std.heap.DebugAllocator(.{}) = .init;
+    defer _ = debug_allocator.deinit();
+    const allocator = debug_allocator.allocator();
 
     const GhostBridge = zquic.services.GhostBridge;
     const GhostBridgeConfig = zquic.services.GhostBridgeConfig;
@@ -58,9 +58,9 @@ test "integration: ghostbridge manages services and connections" {
 test "ghostbridge stats uptime reflects helper timestamps" {
     if (!@hasDecl(zquic.services, "GhostBridge")) return error.SkipZigTest;
 
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    defer _ = gpa.deinit();
-    const allocator = gpa.allocator();
+    var debug_allocator: std.heap.DebugAllocator(.{}) = .init;
+    defer _ = debug_allocator.deinit();
+    const allocator = debug_allocator.allocator();
 
     const GhostBridge = zquic.services.GhostBridge;
     var bridge = try GhostBridge.init(allocator, .{});

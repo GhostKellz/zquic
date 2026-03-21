@@ -247,7 +247,7 @@ pub const DoQServer = struct {
             .config = config,
             .stats = DoQServerStats{},
             .allocator = allocator,
-            .pending_queries = .{},
+            .pending_queries = .empty,
             .start_time = Time.nowSeconds(),
             .metrics = null,
         };

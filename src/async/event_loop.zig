@@ -37,8 +37,8 @@ pub const EventLoop = struct {
 
     pub fn init(allocator: std.mem.Allocator) Self {
         return Self{
-            .handlers = .{},
-            .poll_fds = .{},
+            .handlers = .empty,
+            .poll_fds = .empty,
             .running = false,
             .allocator = allocator,
         };
@@ -194,7 +194,7 @@ pub const TimerWheel = struct {
 
     pub fn init(allocator: std.mem.Allocator) Self {
         return Self{
-            .timers = .{},
+            .timers = .empty,
             .allocator = allocator,
         };
     }

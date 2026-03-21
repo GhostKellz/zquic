@@ -90,6 +90,7 @@ pub const ZquicError = error{
     Http3Error,
     QpackError,
     HeaderError,
+    InvalidPath,
 
     // Service-specific errors
     BackendNotFound,

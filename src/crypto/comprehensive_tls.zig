@@ -8,11 +8,18 @@
 //! - Post-quantum cryptography support
 //! - Advanced cipher suite negotiation
 //! - Comprehensive certificate chain validation
+//!
+//! SECURITY NOTE: Some verification paths are still simplified.
+//! Set allow_simplified_verification = false for production builds.
 
 const std = @import("std");
 const Error = @import("../utils/error.zig");
 const Time = @import("../utils/time.zig");
 const zcrypto = @import("zcrypto");
+
+/// Security configuration: Set to false for production builds
+/// When false, simplified verification paths will return errors instead of succeeding
+pub const allow_simplified_verification = false;
 
 /// TLS 1.3 version constant
 pub const TLS_VERSION_1_3: u16 = 0x0304;
@@ -191,7 +198,7 @@ pub const TransportParameters = struct {
 
     pub fn init() TransportParameters {
         return TransportParameters{
-            .custom_parameters = .{},
+            .custom_parameters = .empty,
         };
     }
 
@@ -254,16 +261,16 @@ pub const CryptoKeys = struct {
 
     pub fn deinit(self: *Self) void {
         // Zero out sensitive key material
-        std.crypto.utils.secureZero(u8, self.client_write_key);
-        std.crypto.utils.secureZero(u8, self.server_write_key);
-        std.crypto.utils.secureZero(u8, self.client_write_iv);
-        std.crypto.utils.secureZero(u8, self.server_write_iv);
-        std.crypto.utils.secureZero(u8, self.client_hp_key);
-        std.crypto.utils.secureZero(u8, self.server_hp_key);
-        std.crypto.utils.secureZero(u8, self.update_secret);
+        std.crypto.secureZero(u8, self.client_write_key);
+        std.crypto.secureZero(u8, self.server_write_key);
+        std.crypto.secureZero(u8, self.client_write_iv);
+        std.crypto.secureZero(u8, self.server_write_iv);
+        std.crypto.secureZero(u8, self.client_hp_key);
+        std.crypto.secureZero(u8, self.server_hp_key);
+        std.crypto.secureZero(u8, self.update_secret);
 
         if (self.pq_shared_secret) |pq_secret| {
-            std.crypto.utils.secureZero(u8, pq_secret);
+            std.crypto.secureZero(u8, pq_secret);
             self.allocator.free(pq_secret);
         }
 
@@ -302,7 +309,7 @@ pub const CryptoKeys = struct {
         defer self.allocator.free(full_label);
 
         // Create HkdfLabel structure
-        var hkdf_label = std.ArrayListUnmanaged(u8){};
+        var hkdf_label: std.ArrayListUnmanaged(u8) = .empty;
         defer hkdf_label.deinit(self.allocator);
 
         // Length (2 bytes)
@@ -372,7 +379,7 @@ pub const Certificate = struct {
             .issuer = &[_]u8{},
             .not_before = 0,
             .not_after = std.math.maxInt(i64),
-            .extensions = .{},
+            .extensions = .empty,
             .allocator = allocator,
         };
     }
@@ -452,7 +459,7 @@ pub const SessionTicket = struct {
 
     pub fn deinit(self: *Self) void {
         self.allocator.free(self.ticket);
-        std.crypto.utils.secureZero(u8, self.resumption_secret);
+        std.crypto.secureZero(u8, self.resumption_secret);
         self.allocator.free(self.resumption_secret);
     }
 
@@ -531,13 +538,13 @@ pub const ComprehensiveTlsContext = struct {
             .handshake_keys = null,
             .application_keys = null,
             .zero_rtt_keys = null,
-            .certificate_chain = .{},
-            .peer_certificate_chain = .{},
+            .certificate_chain = .empty,
+            .peer_certificate_chain = .empty,
             .session_ticket = null,
             .resumption_secret = null,
             .max_early_data_size = 0,
             .early_data_accepted = false,
-            .handshake_transcript = .{},
+            .handshake_transcript = .empty,
             .private_key = null,
             .public_key = null,
             .peer_public_key = null,
@@ -581,12 +588,12 @@ pub const ComprehensiveTlsContext = struct {
 
         // Clean up sensitive key material
         if (self.resumption_secret) |secret| {
-            std.crypto.utils.secureZero(u8, secret);
+            std.crypto.secureZero(u8, secret);
             self.allocator.free(secret);
         }
 
         if (self.private_key) |key| {
-            std.crypto.utils.secureZero(u8, key);
+            std.crypto.secureZero(u8, key);
             self.allocator.free(key);
         }
 
@@ -599,12 +606,12 @@ pub const ComprehensiveTlsContext = struct {
         }
 
         if (self.shared_secret) |secret| {
-            std.crypto.utils.secureZero(u8, secret);
+            std.crypto.secureZero(u8, secret);
             self.allocator.free(secret);
         }
 
         if (self.pq_private_key) |key| {
-            std.crypto.utils.secureZero(u8, key);
+            std.crypto.secureZero(u8, key);
             self.allocator.free(key);
         }
 
@@ -617,7 +624,7 @@ pub const ComprehensiveTlsContext = struct {
         }
 
         if (self.pq_shared_secret) |secret| {
-            std.crypto.utils.secureZero(u8, secret);
+            std.crypto.secureZero(u8, secret);
             self.allocator.free(secret);
         }
 
@@ -747,30 +754,177 @@ pub const ComprehensiveTlsContext = struct {
 
     /// Process Certificate message
     fn processCertificate(self: *Self, message: []const u8) !void {
-        _ = message;
+        if (message.len < 3) {
+            return Error.ZquicError.CertificateError;
+        }
 
-        // Parse certificate chain
-        // This is simplified - full implementation would parse certificate_list
+        // Parse certificate chain length (3 bytes)
+        const cert_chain_len = (@as(u32, message[0]) << 16) | (@as(u32, message[1]) << 8) | @as(u32, message[2]);
+
+        if (cert_chain_len == 0 or message.len < 3 + cert_chain_len) {
+            return Error.ZquicError.CertificateError;
+        }
+
+        // Store certificate chain for verification
+        if (self.peer_certificate_chain.items.len > 0) {
+            // Clear existing chain
+            for (self.peer_certificate_chain.items) |cert| {
+                self.allocator.free(cert);
+            }
+            self.peer_certificate_chain.clearRetainingCapacity();
+        }
+
+        // Parse certificate entries
+        var offset: usize = 3;
+        while (offset < 3 + cert_chain_len) {
+            if (offset + 3 > message.len) break;
+
+            const cert_len = (@as(u32, message[offset]) << 16) | (@as(u32, message[offset + 1]) << 8) | @as(u32, message[offset + 2]);
+            offset += 3;
+
+            if (offset + cert_len > message.len) {
+                return Error.ZquicError.CertificateError;
+            }
+
+            // Store certificate
+            const cert_data = try self.allocator.dupe(u8, message[offset .. offset + cert_len]);
+            try self.peer_certificate_chain.append(self.allocator, cert_data);
+            offset += cert_len;
+
+            // Skip extensions (2 bytes length + data)
+            if (offset + 2 > message.len) break;
+            const ext_len = (@as(u16, message[offset]) << 8) | @as(u16, message[offset + 1]);
+            offset += 2 + ext_len;
+        }
+
+        if (self.peer_certificate_chain.items.len == 0) {
+            return Error.ZquicError.CertificateError;
+        }
 
         self.state = .wait_certificate_verify;
     }
 
     /// Process CertificateVerify message
     fn processCertificateVerify(self: *Self, message: []const u8) !void {
-        _ = message;
+        if (message.len < 4) {
+            return Error.ZquicError.CryptoError;
+        }
 
-        // Verify certificate signature
-        // This is simplified - full implementation would verify the signature
+        // Parse signature algorithm (2 bytes)
+        const sig_alg = (@as(u16, message[0]) << 8) | @as(u16, message[1]);
+
+        // Parse signature length (2 bytes)
+        const sig_len = (@as(u16, message[2]) << 8) | @as(u16, message[3]);
+
+        if (message.len < 4 + sig_len) {
+            return Error.ZquicError.CryptoError;
+        }
+
+        const signature = message[4 .. 4 + sig_len];
+
+        // Verify certificate signature using transcript hash
+        // Build the verification message: 64 spaces + context + 0x00 + transcript_hash
+        var verify_data: [130]u8 = undefined;
+        @memset(verify_data[0..64], 0x20); // 64 spaces
+
+        const context = if (self.is_server) "TLS 1.3, client CertificateVerify" else "TLS 1.3, server CertificateVerify";
+        @memcpy(verify_data[64 .. 64 + context.len], context);
+        verify_data[64 + context.len] = 0x00;
+
+        // Compute transcript hash
+        var transcript_hash: [32]u8 = undefined;
+        var hasher = std.crypto.hash.sha2.Sha256.init(.{});
+        hasher.update(self.handshake_transcript.items);
+        hasher.final(&transcript_hash);
+        @memcpy(verify_data[65 + context.len .. 97 + context.len], &transcript_hash);
+
+        // Verify signature based on algorithm
+        const verified = switch (sig_alg) {
+            0x0804 => blk: { // rsa_pss_rsae_sha256
+                // For production, would use actual RSA-PSS verification
+                if (!allow_simplified_verification) {
+                    return Error.ZquicError.CryptoError;
+                }
+                break :blk signature.len >= 256; // Basic length check
+            },
+            0x0403 => blk: { // ecdsa_secp256r1_sha256
+                // For production, would use actual ECDSA verification
+                if (!allow_simplified_verification) {
+                    return Error.ZquicError.CryptoError;
+                }
+                break :blk signature.len >= 64; // Basic length check
+            },
+            0x0807 => blk: { // ed25519
+                if (self.peer_certificate_chain.items.len == 0) {
+                    break :blk false;
+                }
+                // Extract public key from certificate (simplified)
+                // For production, would parse X.509 certificate properly
+                if (!allow_simplified_verification) {
+                    return Error.ZquicError.CryptoError;
+                }
+                break :blk signature.len == 64;
+            },
+            else => false,
+        };
+
+        if (!verified) {
+            return Error.ZquicError.CryptoError;
+        }
 
         self.state = .wait_finished;
     }
 
     /// Process Finished message
     fn processFinished(self: *Self, message: []const u8) !void {
-        _ = message;
+        if (message.len < 32) {
+            return Error.ZquicError.CryptoError;
+        }
 
-        // Verify finished message
-        // This is simplified - full implementation would verify HMAC
+        // Compute expected verify_data using HMAC
+        // finished_key = HKDF-Expand-Label(base_key, "finished", "", Hash.length)
+        // verify_data = HMAC(finished_key, Transcript-Hash(Handshake Context, Certificate*, CertificateVerify*))
+
+        // Get the handshake secret for computing finished key
+        const handshake_secret = self.handshake_keys.?.secret;
+
+        // Derive finished key using HKDF-Expand-Label
+        var finished_key: [32]u8 = undefined;
+        var hkdf_label: [64]u8 = undefined;
+
+        // Build HKDF label: length (2) + "tls13 " + label + context
+        hkdf_label[0] = 0;
+        hkdf_label[1] = 32; // Hash length
+        const label = "tls13 finished";
+        hkdf_label[2] = @intCast(label.len);
+        @memcpy(hkdf_label[3 .. 3 + label.len], label);
+        hkdf_label[3 + label.len] = 0; // Empty context
+
+        // HKDF-Expand
+        var hmac = std.crypto.auth.hmac.sha2.HmacSha256.init(&handshake_secret);
+        hmac.update(hkdf_label[0 .. 4 + label.len]);
+        hmac.update(&[_]u8{1}); // Counter
+        hmac.final(&finished_key);
+
+        // Compute transcript hash
+        var transcript_hash: [32]u8 = undefined;
+        var hasher = std.crypto.hash.sha2.Sha256.init(.{});
+        hasher.update(self.handshake_transcript.items);
+        hasher.final(&transcript_hash);
+
+        // Compute expected verify_data = HMAC(finished_key, transcript_hash)
+        var expected_verify_data: [32]u8 = undefined;
+        var verify_hmac = std.crypto.auth.hmac.sha2.HmacSha256.init(&finished_key);
+        verify_hmac.update(&transcript_hash);
+        verify_hmac.final(&expected_verify_data);
+
+        // Constant-time comparison of verify_data
+        if (!std.crypto.timing_safe.eql([32]u8, message[0..32].*, expected_verify_data)) {
+            return Error.ZquicError.CryptoError;
+        }
+
+        // Securely zero the finished key
+        std.crypto.secureZero(u8, &finished_key);
 
         self.state = .connected;
     }
@@ -796,13 +950,45 @@ pub const ComprehensiveTlsContext = struct {
 
     /// Validate session ticket for 0-RTT
     pub fn validateSessionTicket(self: *Self, ticket: SessionTicket) !bool {
-        _ = self; // Suppress unused parameter warning
+        // Check basic validity (expiry, structure)
         if (!ticket.isValid()) {
             return false;
         }
 
-        // Verify ticket authenticity
-        // This is simplified - full implementation would verify ticket MAC
+        // Verify ticket authenticity using HMAC
+        // The ticket should contain: encrypted_state || mac
+        const ticket_data = ticket.ticket_data orelse return false;
+
+        if (ticket_data.len < 32) {
+            return false; // Too short to contain MAC
+        }
+
+        // Extract MAC from end of ticket
+        const mac_offset = ticket_data.len - 32;
+        const encrypted_state = ticket_data[0..mac_offset];
+        const provided_mac = ticket_data[mac_offset..][0..32];
+
+        // Compute expected MAC using shared secret as key
+        const shared_secret = self.shared_secret orelse {
+            // No shared secret available for verification
+            if (!allow_simplified_verification) {
+                return false;
+            }
+            return true; // Allow in test mode
+        };
+
+        var expected_mac: [32]u8 = undefined;
+        var hmac = std.crypto.auth.hmac.sha2.HmacSha256.init(shared_secret);
+        hmac.update(encrypted_state);
+        hmac.final(&expected_mac);
+
+        // Constant-time comparison
+        if (!std.crypto.timing_safe.eql([32]u8, provided_mac.*, expected_mac)) {
+            return false;
+        }
+
+        // Verify ticket hasn't been replayed (would need anti-replay window)
+        // For now, basic expiry check is done by isValid()
 
         return true;
     }

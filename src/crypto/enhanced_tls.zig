@@ -6,14 +6,9 @@ const std = @import("std");
 const zcrypto = @import("zcrypto");
 const Error = @import("../utils/error.zig");
 
-// Utility function for secure memory zeroing
+// Utility function for secure memory zeroing - uses std library implementation
 fn secureZero(data: []u8) void {
-    @memset(data, 0);
-    // Prevent compiler optimization
-    asm volatile (""
-        :
-        : [data] "m" (data),
-        : .{ .memory = true });
+    std.crypto.secureZero(u8, data);
 }
 
 // Import specific zcrypto modules

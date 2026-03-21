@@ -8,45 +8,77 @@ const zcrypto = @import("zcrypto");
 const Error = @import("../utils/error.zig");
 const EnhancedTlsContext = @import("enhanced_tls.zig").EnhancedTlsContext;
 
-// Utility function for secure memory zeroing
+// Utility function for secure memory zeroing - uses std library implementation
 fn secureZero(data: []u8) void {
-    @memset(data, 0);
-    // Prevent compiler optimization
-    asm volatile (""
-        :
-        : [data] "m" (data),
-        : .{ .memory = true });
+    std.crypto.secureZero(u8, data);
 }
 
-// Import zcrypto v0.6.0 post-quantum modules
-// Note: These are placeholder imports until zcrypto v0.6.0 is fully implemented
+// Import zcrypto post-quantum modules (ML-KEM and ML-DSA)
 const MLKEMResult = struct {
     ciphertext: []const u8,
     shared_secret: []const u8,
 };
 
+/// Post-quantum key exchange using zcrypto ML-KEM
 const PostQuantum = struct {
     const MLKEMKeyExchange = struct {
+        const ML_KEM_768 = zcrypto.post_quantum.pq.ml_kem.ML_KEM_768;
+
         pub fn generateKeyPair(allocator: std.mem.Allocator, variant: anytype) !KeyPair {
-            _ = variant;
+            // Generate random seed for key generation using zcrypto's secure RNG
+            var seed: [32]u8 = undefined;
+            zcrypto.rand.fill(&seed);
+
+            // Currently only ML-KEM-768 is supported
+            const keypair = switch (variant) {
+                .ml_kem_768, .ml_kem_1024 => ML_KEM_768.KeyPair.generate(seed) catch {
+                    return Error.ZquicError.CryptoError;
+                },
+                else => return Error.ZquicError.CryptoError,
+            };
+
             return .{
-                .public_key = try allocator.dupe(u8, &[_]u8{1} ** 1184),
-                .secret_key = try allocator.dupe(u8, &[_]u8{2} ** 2400),
+                .public_key = try allocator.dupe(u8, &keypair.public_key),
+                .secret_key = try allocator.dupe(u8, &keypair.private_key),
             };
         }
 
         pub fn encapsulate(allocator: std.mem.Allocator, public_key: []const u8) !MLKEMResult {
-            _ = public_key;
+            // Use ML-KEM-768 by default
+            if (public_key.len != ML_KEM_768.PUBLIC_KEY_SIZE) {
+                return Error.ZquicError.CryptoError;
+            }
+
+            var pk_array: [ML_KEM_768.PUBLIC_KEY_SIZE]u8 = undefined;
+            @memcpy(&pk_array, public_key[0..ML_KEM_768.PUBLIC_KEY_SIZE]);
+
+            const result = ML_KEM_768.encapsulate(pk_array) catch {
+                return Error.ZquicError.CryptoError;
+            };
+
             return .{
-                .ciphertext = try allocator.dupe(u8, &[_]u8{3} ** 1088),
-                .shared_secret = try allocator.dupe(u8, &[_]u8{4} ** 32),
+                .ciphertext = try allocator.dupe(u8, &result.ciphertext),
+                .shared_secret = try allocator.dupe(u8, &result.shared_secret),
             };
         }
 
         pub fn decapsulate(allocator: std.mem.Allocator, secret_key: []const u8, ciphertext: []const u8) ![]const u8 {
-            _ = secret_key;
-            _ = ciphertext;
-            return try allocator.dupe(u8, &[_]u8{5} ** 32);
+            if (secret_key.len != ML_KEM_768.PRIVATE_KEY_SIZE or
+                ciphertext.len != ML_KEM_768.CIPHERTEXT_SIZE)
+            {
+                return Error.ZquicError.CryptoError;
+            }
+
+            var sk_array: [ML_KEM_768.PRIVATE_KEY_SIZE]u8 = undefined;
+            var ct_array: [ML_KEM_768.CIPHERTEXT_SIZE]u8 = undefined;
+            @memcpy(&sk_array, secret_key[0..ML_KEM_768.PRIVATE_KEY_SIZE]);
+            @memcpy(&ct_array, ciphertext[0..ML_KEM_768.CIPHERTEXT_SIZE]);
+
+            const shared_secret = ML_KEM_768.decapsulate(sk_array, ct_array) catch {
+                return Error.ZquicError.CryptoError;
+            };
+
+            return try allocator.dupe(u8, &shared_secret);
         }
     };
 };
@@ -454,21 +486,41 @@ pub const PQQuicContext = struct {
     }
 };
 
-/// Post-Quantum authentication for QUIC
+/// Post-Quantum authentication for QUIC using zcrypto SLH-DSA
 pub const PQAuthentication = struct {
+    /// SLH-DSA-128s constants from zcrypto
+    pub const SLH_DSA_128s = zcrypto.post_quantum.pq.slh_dsa.SLH_DSA_128s;
+    pub const SIGNATURE_SIZE = SLH_DSA_128s.SIGNATURE_SIZE;
+    pub const PUBLIC_KEY_SIZE = SLH_DSA_128s.PUBLIC_KEY_SIZE;
+    pub const PRIVATE_KEY_SIZE = SLH_DSA_128s.PRIVATE_KEY_SIZE;
+
     /// Sign data using SLH-DSA (post-quantum signature)
     pub fn signWithSlhDsa(
         data: []const u8,
         secret_key: []const u8,
         allocator: std.mem.Allocator,
     ) ![]u8 {
-        // TODO: Update to new zcrypto PQ API when available
-        // For now, return a stub signature that includes data hash for consistency
-        _ = data;
-        _ = secret_key;
-        const signature = [_]u8{3} ** 7856;
-        const result = try allocator.alloc(u8, signature.len);
-        @memcpy(result, signature);
+        // Validate secret key size
+        if (secret_key.len != PRIVATE_KEY_SIZE) {
+            return Error.ZquicError.CryptoError;
+        }
+
+        // Create keypair struct for signing
+        var keypair: SLH_DSA_128s.KeyPair = undefined;
+        @memcpy(&keypair.private_key, secret_key[0..PRIVATE_KEY_SIZE]);
+
+        // Generate signing randomness using zcrypto's secure RNG
+        var randomness: [SLH_DSA_128s.SEED_SIZE]u8 = undefined;
+        zcrypto.rand.fill(&randomness);
+
+        // Sign the data
+        const signature = keypair.sign(data, randomness) catch {
+            return Error.ZquicError.CryptoError;
+        };
+
+        // Allocate and return signature
+        const result = try allocator.alloc(u8, SIGNATURE_SIZE);
+        @memcpy(result, &signature);
         return result;
     }
 
@@ -478,11 +530,22 @@ pub const PQAuthentication = struct {
         signature: []const u8,
         public_key: []const u8,
     ) !bool {
-        // TODO: Update to new zcrypto PQ API
-        _ = signature;
-        _ = data;
-        _ = public_key;
-        return true; // Stub verification
+        // Validate sizes
+        if (signature.len != SIGNATURE_SIZE) {
+            return false;
+        }
+        if (public_key.len != PUBLIC_KEY_SIZE) {
+            return false;
+        }
+
+        // Convert slices to fixed arrays
+        var sig_array: [SIGNATURE_SIZE]u8 = undefined;
+        var pk_array: [PUBLIC_KEY_SIZE]u8 = undefined;
+        @memcpy(&sig_array, signature[0..SIGNATURE_SIZE]);
+        @memcpy(&pk_array, public_key[0..PUBLIC_KEY_SIZE]);
+
+        // Verify using zcrypto SLH-DSA
+        return SLH_DSA_128s.KeyPair.verify(pk_array, data, sig_array) catch false;
     }
 };
 

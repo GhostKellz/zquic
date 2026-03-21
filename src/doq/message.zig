@@ -242,7 +242,7 @@ fn encodeDomainName(name: []const u8, _: std.mem.Allocator, writer: anytype) !vo
 
 /// Decode domain name from DNS wire format
 fn decodeDomainName(allocator: std.mem.Allocator, reader: anytype) ![]u8 {
-    var parts: std.ArrayListUnmanaged([]u8) = .{};
+    var parts: std.ArrayListUnmanaged([]u8) = .empty;
     defer {
         // Free any remaining parts on error/cleanup
         for (parts.items) |part| {

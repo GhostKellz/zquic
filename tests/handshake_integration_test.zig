@@ -6,9 +6,9 @@ const zquic = @import("zquic");
 const HandshakeManager = zquic.Handshake.HandshakeManager;
 
 test "integration: client and server complete handshake" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    defer _ = gpa.deinit();
-    const allocator = gpa.allocator();
+    var debug_allocator: std.heap.DebugAllocator(.{}) = .init;
+    defer _ = debug_allocator.deinit();
+    const allocator = debug_allocator.allocator();
 
     var client = HandshakeManager.init(allocator, false);
     defer client.deinit();
@@ -43,9 +43,9 @@ test "integration: client and server complete handshake" {
 }
 
 test "integration: handshake tolerates fragmented crypto frames" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    defer _ = gpa.deinit();
-    const allocator = gpa.allocator();
+    var debug_allocator: std.heap.DebugAllocator(.{}) = .init;
+    defer _ = debug_allocator.deinit();
+    const allocator = debug_allocator.allocator();
 
     var client = HandshakeManager.init(allocator, false);
     defer client.deinit();

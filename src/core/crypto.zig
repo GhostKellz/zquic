@@ -108,10 +108,11 @@ pub const DirectionalKeys = struct {
 
     /// Clean up key material securely
     pub fn deinit(self: *Self) void {
-        // Securely zero key material
-        @memset(@constCast(self.aead_key), 0);
-        @memset(@constCast(self.aead_iv), 0);
-        @memset(@constCast(self.hp_key), 0);
+        // Securely zero key material using constant-time wipe
+        // (prevents compiler optimization from removing the wipe)
+        std.crypto.secureZero(u8, @constCast(self.aead_key));
+        std.crypto.secureZero(u8, @constCast(self.aead_iv));
+        std.crypto.secureZero(u8, @constCast(self.hp_key));
 
         self.allocator.free(self.aead_key);
         self.allocator.free(self.aead_iv);

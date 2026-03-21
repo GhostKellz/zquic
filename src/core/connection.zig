@@ -134,10 +134,10 @@ pub const SuperConnection = struct {
             .params = params,
             .stats = ConnectionStats{},
             .next_stream_id = initial_stream_id,
-            .incoming_packets = .{},
-            .outgoing_packets = .{},
-            .stream_events = .{},
-            .streams = .{},
+            .incoming_packets = .empty,
+            .outgoing_packets = .empty,
+            .stream_events = .empty,
+            .streams = .empty,
             .allocator = allocator,
         };
     }
@@ -521,8 +521,8 @@ pub const SuperConnectionPool = struct {
 
     pub fn init(allocator: std.mem.Allocator) Self {
         return Self{
-            .available = .{},
-            .active = .{},
+            .available = .empty,
+            .active = .empty,
             .allocator = allocator,
             .stats = PoolStats{},
             .mutex = .{},
@@ -601,9 +601,9 @@ pub const SuperConnectionPool = struct {
 };
 
 test "connection creation" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    defer _ = gpa.deinit();
-    const allocator = gpa.allocator();
+    var debug_allocator: std.heap.DebugAllocator(.{}) = .init;
+    defer _ = debug_allocator.deinit();
+    const allocator = debug_allocator.allocator();
 
     const params = ConnectionParams{};
     var conn = try SuperConnection.init(allocator, .client, params);
@@ -614,9 +614,9 @@ test "connection creation" {
 }
 
 test "connection pool operations" {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    defer _ = gpa.deinit();
-    const allocator = gpa.allocator();
+    var debug_allocator: std.heap.DebugAllocator(.{}) = .init;
+    defer _ = debug_allocator.deinit();
+    const allocator = debug_allocator.allocator();
 
     var pool = SuperConnectionPool.init(allocator);
     defer pool.deinit();

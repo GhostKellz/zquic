@@ -285,7 +285,7 @@ pub const SendBuffer = struct {
     /// Initialize send buffer
     pub fn init(allocator: std.mem.Allocator) Self {
         return Self{
-            .segments = .{},
+            .segments = .empty,
             .next_offset = 0,
             .allocator = allocator,
         };
@@ -325,7 +325,7 @@ pub const SendBuffer = struct {
 
     /// Get unacknowledged segments for retransmission
     pub fn getUnacked(self: *Self, allocator: std.mem.Allocator) ![]Segment {
-        var unacked: std.ArrayListUnmanaged(Segment) = .{};
+        var unacked: std.ArrayListUnmanaged(Segment) = .empty;
         defer unacked.deinit(allocator);
 
         for (self.segments.items) |segment| {
@@ -389,7 +389,7 @@ pub const RecvBuffer = struct {
     /// Initialize receive buffer
     pub fn init(allocator: std.mem.Allocator) Self {
         return Self{
-            .chunks = .{},
+            .chunks = .empty,
             .next_expected = 0,
             .allocator = allocator,
         };

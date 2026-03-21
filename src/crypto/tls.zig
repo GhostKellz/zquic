@@ -259,38 +259,74 @@ pub const TlsContext = struct {
         self.application_keys = try CryptoKeys.deriveFromSecret(application_secret);
     }
 
-    /// Encrypt data using the appropriate keys
+    /// Encrypt data using ChaCha20-Poly1305 AEAD
     pub fn encrypt(self: *const Self, level: EncryptionLevel, plaintext: []const u8, packet_number: u64, allocator: std.mem.Allocator) Error.ZquicError![]u8 {
         const keys = self.getKeys(level) orelse return Error.ZquicError.CryptoError;
 
-        // Simplified encryption (not cryptographically secure)
-        _ = keys;
-        _ = packet_number;
+        // Construct nonce from IV XOR packet number (QUIC nonce construction)
+        var nonce: [12]u8 = keys.iv;
+        const pn_bytes = std.mem.toBytes(packet_number);
+        for (nonce[4..12], pn_bytes[0..8]) |*n, p| {
+            n.* ^= p;
+        }
 
-        var ciphertext = try allocator.alloc(u8, plaintext.len + 16); // +16 for auth tag
-        @memcpy(ciphertext[0..plaintext.len], plaintext);
+        // Allocate output: ciphertext + 16-byte auth tag
+        var ciphertext = try allocator.alloc(u8, plaintext.len + 16);
+        errdefer allocator.free(ciphertext);
 
-        // Add dummy auth tag
-        @memset(ciphertext[plaintext.len..], 0xAA);
+        // Use empty AAD (QUIC would use packet header as AAD)
+        const aad: []const u8 = &[_]u8{};
+
+        // Perform ChaCha20-Poly1305 AEAD encryption
+        std.crypto.aead.chacha_poly.ChaCha20Poly1305.encrypt(
+            ciphertext[0..plaintext.len],
+            ciphertext[plaintext.len..][0..16],
+            plaintext,
+            aad,
+            nonce,
+            keys.key,
+        );
 
         return ciphertext;
     }
 
-    /// Decrypt data using the appropriate keys
+    /// Decrypt data using ChaCha20-Poly1305 AEAD
     pub fn decrypt(self: *const Self, level: EncryptionLevel, ciphertext: []const u8, packet_number: u64, allocator: std.mem.Allocator) Error.ZquicError![]u8 {
         const keys = self.getKeys(level) orelse return Error.ZquicError.CryptoError;
 
-        _ = keys;
-        _ = packet_number;
-
+        // Must have at least 16-byte auth tag
         if (ciphertext.len < 16) {
             return Error.ZquicError.CryptoError;
         }
 
-        // Simplified decryption
         const plaintext_len = ciphertext.len - 16;
+
+        // Construct nonce from IV XOR packet number (QUIC nonce construction)
+        var nonce: [12]u8 = keys.iv;
+        const pn_bytes = std.mem.toBytes(packet_number);
+        for (nonce[4..12], pn_bytes[0..8]) |*n, p| {
+            n.* ^= p;
+        }
+
+        // Allocate output buffer for plaintext
         const plaintext = try allocator.alloc(u8, plaintext_len);
-        @memcpy(plaintext, ciphertext[0..plaintext_len]);
+        errdefer allocator.free(plaintext);
+
+        // Use empty AAD
+        const aad: []const u8 = &[_]u8{};
+
+        // Perform ChaCha20-Poly1305 AEAD decryption with authentication
+        std.crypto.aead.chacha_poly.ChaCha20Poly1305.decrypt(
+            plaintext,
+            ciphertext[0..plaintext_len],
+            ciphertext[plaintext_len..][0..16].*,
+            aad,
+            nonce,
+            keys.key,
+        ) catch {
+            allocator.free(plaintext);
+            return Error.ZquicError.CryptoError;
+        };
 
         return plaintext;
     }

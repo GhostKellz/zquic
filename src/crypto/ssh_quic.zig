@@ -175,7 +175,7 @@ pub const SshQuicContext = struct {
         return if (self.remote_keys) |*keys| keys else null;
     }
 
-    /// Encrypt data using local keys (for sending)
+    /// Encrypt data using local keys (for sending) with ChaCha20-Poly1305 AEAD
     pub fn encrypt(
         self: *const Self,
         plaintext: []const u8,
@@ -187,23 +187,37 @@ pub const SshQuicContext = struct {
             return self.tls_ctx.encrypt(.application, plaintext, packet_number, allocator);
         }
 
-        // SSH mode encryption using local keys
+        // SSH mode encryption using local keys with ChaCha20-Poly1305
         const keys = self.local_keys orelse return Error.ZquicError.CryptoError;
 
-        // TODO: Implement proper AEAD encryption using keys and packet_number as nonce
-        // For now, use a simplified XOR-based approach for testing
-        var ciphertext = try allocator.alloc(u8, plaintext.len + 16);
-        for (ciphertext[0..plaintext.len], plaintext, 0..) |*c, p, i| {
-            c.* = p ^ keys.key[i % keys.key.len];
+        // Construct nonce from IV XOR packet number (QUIC nonce construction)
+        var nonce: [12]u8 = keys.iv;
+        const pn_bytes = std.mem.toBytes(packet_number);
+        for (nonce[4..12], pn_bytes[0..8]) |*n, p| {
+            n.* ^= p;
         }
-        // Encode packet number in auth tag for verification
-        std.mem.writeInt(u64, ciphertext[plaintext.len..][0..8], packet_number, .little);
-        @memset(ciphertext[plaintext.len + 8 ..], 0xAA);
+
+        // Allocate output: ciphertext + 16-byte auth tag
+        var ciphertext = try allocator.alloc(u8, plaintext.len + 16);
+        errdefer allocator.free(ciphertext);
+
+        // Use empty AAD for simplicity (QUIC typically uses packet header as AAD)
+        const aad: []const u8 = &[_]u8{};
+
+        // Perform ChaCha20-Poly1305 AEAD encryption
+        std.crypto.aead.chacha_poly.ChaCha20Poly1305.encrypt(
+            ciphertext[0..plaintext.len],
+            ciphertext[plaintext.len..][0..16],
+            plaintext,
+            aad,
+            nonce,
+            keys.key,
+        );
 
         return ciphertext;
     }
 
-    /// Decrypt data using remote keys (for receiving)
+    /// Decrypt data using remote keys (for receiving) with ChaCha20-Poly1305 AEAD
     pub fn decrypt(
         self: *const Self,
         ciphertext: []const u8,
@@ -215,26 +229,42 @@ pub const SshQuicContext = struct {
             return self.tls_ctx.decrypt(.application, ciphertext, packet_number, allocator);
         }
 
-        // SSH mode decryption using remote keys
+        // SSH mode decryption using remote keys with ChaCha20-Poly1305
         const keys = self.remote_keys orelse return Error.ZquicError.CryptoError;
 
+        // Must have at least 16-byte auth tag
         if (ciphertext.len < 16) {
             return Error.ZquicError.CryptoError;
         }
 
-        // Verify packet number from auth tag
         const plaintext_len = ciphertext.len - 16;
-        const stored_pn = std.mem.readInt(u64, ciphertext[plaintext_len..][0..8], .little);
-        if (stored_pn != packet_number) {
-            return Error.ZquicError.CryptoError;
+
+        // Construct nonce from IV XOR packet number (QUIC nonce construction)
+        var nonce: [12]u8 = keys.iv;
+        const pn_bytes = std.mem.toBytes(packet_number);
+        for (nonce[4..12], pn_bytes[0..8]) |*n, p| {
+            n.* ^= p;
         }
 
-        // TODO: Implement proper AEAD decryption
-        // For now, use simplified XOR-based approach for testing
+        // Allocate output buffer for plaintext
         const plaintext = try allocator.alloc(u8, plaintext_len);
-        for (plaintext, ciphertext[0..plaintext_len], 0..) |*p, c, i| {
-            p.* = c ^ keys.key[i % keys.key.len];
-        }
+        errdefer allocator.free(plaintext);
+
+        // Use empty AAD for simplicity
+        const aad: []const u8 = &[_]u8{};
+
+        // Perform ChaCha20-Poly1305 AEAD decryption with authentication
+        std.crypto.aead.chacha_poly.ChaCha20Poly1305.decrypt(
+            plaintext,
+            ciphertext[0..plaintext_len],
+            ciphertext[plaintext_len..][0..16].*,
+            aad,
+            nonce,
+            keys.key,
+        ) catch {
+            allocator.free(plaintext);
+            return Error.ZquicError.CryptoError;
+        };
 
         return plaintext;
     }

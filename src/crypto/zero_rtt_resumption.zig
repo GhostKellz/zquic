@@ -114,7 +114,7 @@ pub const ZeroRttSessionManager = struct {
 
     pub fn init(allocator: std.mem.Allocator) !Self {
         return Self{
-            .sessions = .{},
+            .sessions = .empty,
             .anti_replay = try AntiReplayWindow.init(allocator, AntiReplayWindow.DEFAULT_WINDOW_SIZE),
             .max_sessions = 10000, // High limit for crypto trading
             .ticket_lifetime = 86400, // 24 hours
@@ -178,7 +178,7 @@ pub const ZeroRttSessionManager = struct {
 
     /// Cleanup expired sessions
     pub fn cleanupExpiredSessions(self: *Self) !void {
-        var expired_tickets = std.ArrayListUnmanaged([16]u8){};
+        var expired_tickets: std.ArrayListUnmanaged([16]u8) = .empty;
         defer expired_tickets.deinit(self.allocator);
 
         var iterator = self.sessions.iterator();
@@ -223,7 +223,7 @@ pub const ZeroRttContext = struct {
             .early_data_accepted = false,
             .early_data_rejected = false,
             .session_ticket = null,
-            .early_data_buffer = .{},
+            .early_data_buffer = .empty,
             .max_early_data = 16384,
             .early_data_sent = 0,
             .allocator = allocator,
@@ -288,17 +288,16 @@ pub const ZeroRttContext = struct {
     }
 };
 
-/// Utility function for secure memory zeroing
+/// Utility function for secure memory zeroing - uses std.crypto.secureZero
 fn secureZero(data: []u8) void {
-    @memset(data, 0);
-    std.atomic.compilerFence(.SeqCst);
+    std.crypto.secureZero(u8, data);
 }
 
 /// Test 0-RTT functionality
 pub fn testZeroRtt() !void {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    defer _ = gpa.deinit();
-    const allocator = gpa.allocator();
+    var debug_allocator: std.heap.DebugAllocator(.{}) = .init;
+    defer _ = debug_allocator.deinit();
+    const allocator = debug_allocator.allocator();
 
     // Create session manager
     var session_mgr = try ZeroRttSessionManager.init(allocator);

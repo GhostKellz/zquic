@@ -75,7 +75,7 @@ pub const LoadBalancer = struct {
 
     pub fn init(allocator: std.mem.Allocator, strategy: LoadBalanceStrategy) Self {
         return Self{
-            .backends = .{},
+            .backends = .empty,
             .strategy = strategy,
             .round_robin_index = std.atomic.Value(u32).init(0),
             .stats = .{},

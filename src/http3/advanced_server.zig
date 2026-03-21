@@ -297,8 +297,8 @@ pub const ConnectionPool = struct {
 
     pub fn init(allocator: std.mem.Allocator, max_size: u32) !ConnectionPool {
         return ConnectionPool{
-            .connections = .{},
-            .available_connections = .{},
+            .connections = .empty,
+            .available_connections = .empty,
             .max_size = max_size,
             .allocator = allocator,
         };
@@ -455,7 +455,7 @@ pub const LoadBalancer = struct {
     pub fn init(alloc: std.mem.Allocator, algorithm: LoadBalancingAlgorithm) LoadBalancer {
         return LoadBalancer{
             .algorithm = algorithm,
-            .backends = .{},
+            .backends = .empty,
             .current_index = 0,
             .hash_ring = null,
             .allocator = alloc,
@@ -649,8 +649,8 @@ pub const ConsistentHashRing = struct {
 
     pub fn init(alloc: std.mem.Allocator) ConsistentHashRing {
         return ConsistentHashRing{
-            .nodes = .{},
-            .sorted_hashes = .{},
+            .nodes = .empty,
+            .sorted_hashes = .empty,
             .allocator = alloc,
         };
     }
@@ -676,7 +676,7 @@ pub const ConsistentHashRing = struct {
     }
 
     pub fn removeNode(self: *ConsistentHashRing, node: []const u8) void {
-        var hashes_to_remove: std.ArrayListUnmanaged(u64) = .{};
+        var hashes_to_remove: std.ArrayListUnmanaged(u64) = .empty;
         defer hashes_to_remove.deinit(self.allocator);
 
         var iterator = self.nodes.iterator();
@@ -803,9 +803,9 @@ pub const AdvancedHttp3Server = struct {
             .config = config,
             .multiplexer = multiplexer,
             .load_balancer = load_balancer,
-            .connections = .{},
+            .connections = .empty,
             .router = Router.init(allocator),
-            .middleware_stack = .{},
+            .middleware_stack = .empty,
             .stats = ServerStats.init(),
             .metrics_collector = MetricsCollector.init(allocator),
             .health_monitor = HealthMonitor.init(allocator),
@@ -1066,7 +1066,7 @@ pub const ConnectionContext = struct {
     pub fn init(allocator: std.mem.Allocator, connection: *Connection) ConnectionContext {
         return ConnectionContext{
             .connection = connection,
-            .active_streams = .{},
+            .active_streams = .empty,
             .last_activity = (try std.time.Instant.now()).timestamp.sec,
             .allocator = allocator,
         };
@@ -1121,8 +1121,8 @@ pub const MetricsCollector = struct {
 
     pub fn init(allocator: std.mem.Allocator) MetricsCollector {
         return MetricsCollector{
-            .request_durations = .{},
-            .status_codes = .{},
+            .request_durations = .empty,
+            .status_codes = .empty,
             .allocator = allocator,
         };
     }
@@ -1164,7 +1164,7 @@ pub const HealthMonitor = struct {
     pub fn init(allocator: std.mem.Allocator) HealthMonitor {
         return HealthMonitor{
             .overall_health = HealthStatus.init(),
-            .component_health = .{},
+            .component_health = .empty,
             .allocator = allocator,
         };
     }
@@ -1212,7 +1212,7 @@ pub const Router = struct {
 
     pub fn init(allocator: std.mem.Allocator) Router {
         return Router{
-            .routes = .{},
+            .routes = .empty,
             .allocator = allocator,
         };
     }

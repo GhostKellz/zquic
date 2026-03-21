@@ -6,9 +6,9 @@ const std = @import("std");
 const zquic = @import("zquic");
 
 pub fn main() !void {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    defer _ = gpa.deinit();
-    const allocator = gpa.allocator();
+    var debug_allocator: std.heap.DebugAllocator(.{}) = .init;
+    defer _ = debug_allocator.deinit();
+    const allocator = debug_allocator.allocator();
 
     std.log.info("🚀 Starting DNS-over-QUIC Echo Server Demo...", .{});
 
@@ -271,7 +271,7 @@ fn handleMXRecord(query: *const zquic.DoQ.Message.DnsMessage, domain: []const u8
     const mx_domain = try std.fmt.allocPrint(allocator, "mail.{s}", .{domain});
     defer allocator.free(mx_domain);
 
-    var mx_data = std.ArrayList(u8){};
+    var mx_data: std.ArrayListUnmanaged(u8) = .empty;
     defer mx_data.deinit(allocator);
 
     // Priority (10)

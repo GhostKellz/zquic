@@ -110,7 +110,7 @@ pub const ResponseHeaders = struct {
 
     pub fn init(allocator: std.mem.Allocator) Self {
         return Self{
-            .fields = .{},
+            .fields = .empty,
             .allocator = allocator,
         };
     }
@@ -235,7 +235,7 @@ pub const Response = struct {
         return Self{
             .status = .ok,
             .headers = ResponseHeaders.init(allocator),
-            .body = .{},
+            .body = .empty,
             .allocator = allocator,
             .stream_id = stream_id,
         };
@@ -361,7 +361,7 @@ pub const Response = struct {
 
     /// Generate HTTP/3 frames for this response
     pub fn generateFrames(self: *Self, allocator: std.mem.Allocator) ![]Frame.Frame {
-        var frames: std.ArrayListUnmanaged(Frame.Frame) = .{};
+        var frames: std.ArrayListUnmanaged(Frame.Frame) = .empty;
 
         // Set content-length if not already set
         if (self.headers.get("content-length") == null) {
@@ -369,7 +369,7 @@ pub const Response = struct {
         }
 
         // Add pseudo-headers for HTTP/3
-        var all_headers: std.ArrayListUnmanaged(HeaderField) = .{};
+        var all_headers: std.ArrayListUnmanaged(HeaderField) = .empty;
         defer {
             for (all_headers.items) |*field| {
                 field.deinit();

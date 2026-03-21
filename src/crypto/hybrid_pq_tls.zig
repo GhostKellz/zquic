@@ -260,18 +260,16 @@ pub const HybridPQTlsContext = struct {
     }
 };
 
-/// Utility function for secure memory zeroing
+/// Utility function for secure memory zeroing - uses std library implementation
 fn secureZero(data: []u8) void {
-    @memset(data, 0);
-    // Prevent compiler optimization
-    std.atomic.compilerFence(.SeqCst);
+    std.crypto.secureZero(u8, data);
 }
 
 /// Test hybrid PQ-TLS functionality
 pub fn testHybridPQTLS() !void {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    defer _ = gpa.deinit();
-    const allocator = gpa.allocator();
+    var debug_allocator: std.heap.DebugAllocator(.{}) = .init;
+    defer _ = debug_allocator.deinit();
+    const allocator = debug_allocator.allocator();
 
     const config = HybridConfig{
         .enable_ml_kem = true,

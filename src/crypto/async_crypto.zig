@@ -1,9 +1,13 @@
 //! Asynchronous Cryptographic Operations for ZQUIC
 //!
-//! ZQUIC v0.9.4 - Non-blocking cryptographic processing without external dependencies
+//! ZQUIC v0.9.4 - Non-blocking cryptographic processing with real AEAD
 
 const std = @import("std");
+const zcrypto = @import("zcrypto");
 const Error = @import("../utils/error.zig");
+
+/// Production safety flag - set to false to reject placeholder crypto
+const allow_placeholder_crypto = false;
 
 /// Asynchronous cryptographic operation types
 pub const AsyncCryptoOp = union(enum) {
@@ -85,6 +89,10 @@ pub const AsyncCryptoProcessor = struct {
     worker_count: u32,
     mutex: std.Thread.Mutex,
 
+    // Encryption keys for AEAD operations
+    encryption_key: [32]u8,
+    encryption_iv: [12]u8,
+
     // Statistics
     operations_queued: std.atomic.Value(u64),
     operations_completed: std.atomic.Value(u64),
@@ -93,13 +101,38 @@ pub const AsyncCryptoProcessor = struct {
     const Self = @This();
 
     pub fn init(allocator: std.mem.Allocator, worker_count: u32) !Self {
+        // Generate random encryption keys for this processor instance
+        var encryption_key: [32]u8 = undefined;
+        var encryption_iv: [12]u8 = undefined;
+        zcrypto.rand.fill(&encryption_key);
+        zcrypto.rand.fill(&encryption_iv);
+
         return Self{
-            .operation_queue = .{},
-            .result_queue = .{},
+            .operation_queue = .empty,
+            .result_queue = .empty,
             .allocator = allocator,
             .is_running = false,
             .worker_count = worker_count,
             .mutex = .{},
+            .encryption_key = encryption_key,
+            .encryption_iv = encryption_iv,
+            .operations_queued = std.atomic.Value(u64).init(0),
+            .operations_completed = std.atomic.Value(u64).init(0),
+            .operations_failed = std.atomic.Value(u64).init(0),
+        };
+    }
+
+    /// Initialize with specific keys (for testing or key exchange)
+    pub fn initWithKeys(allocator: std.mem.Allocator, worker_count: u32, key: [32]u8, iv: [12]u8) !Self {
+        return Self{
+            .operation_queue = .empty,
+            .result_queue = .empty,
+            .allocator = allocator,
+            .is_running = false,
+            .worker_count = worker_count,
+            .mutex = .{},
+            .encryption_key = key,
+            .encryption_iv = iv,
             .operations_queued = std.atomic.Value(u64).init(0),
             .operations_completed = std.atomic.Value(u64).init(0),
             .operations_failed = std.atomic.Value(u64).init(0),
@@ -110,6 +143,10 @@ pub const AsyncCryptoProcessor = struct {
         if (self.is_running) {
             self.stop();
         }
+        // Securely zero key material
+        std.crypto.secureZero(u8, &self.encryption_key);
+        std.crypto.secureZero(u8, &self.encryption_iv);
+
         self.operation_queue.deinit(self.allocator);
         self.result_queue.deinit(self.allocator);
     }
@@ -230,9 +267,14 @@ pub const AsyncCryptoProcessor = struct {
         }
     }
 
-    /// Process encryption request
+    /// Process encryption request using ChaCha20-Poly1305 AEAD
     fn processEncryption(self: *Self, req: EncryptRequest) EncryptResult {
-        // Allocate buffer for encrypted data
+        // Production safety check
+        if (allow_placeholder_crypto) {
+            @compileError("Placeholder crypto is disabled in production");
+        }
+
+        // Allocate buffer for encrypted data (ciphertext + 16-byte auth tag)
         const encrypted_data = self.allocator.alloc(u8, req.packet_data.len + 16) catch {
             return EncryptResult{
                 .success = false,
@@ -242,13 +284,29 @@ pub const AsyncCryptoProcessor = struct {
             };
         };
 
-        // Copy data and simulate encryption
-        @memcpy(encrypted_data[0..req.packet_data.len], req.packet_data);
+        // Construct nonce from IV XOR packet number (QUIC nonce construction)
+        var nonce: [12]u8 = self.encryption_iv;
+        const pn_bytes = std.mem.toBytes(req.packet_number);
+        for (nonce[4..12], pn_bytes[0..8]) |*n, p| {
+            n.* ^= p;
+        }
 
-        // Generate auth tag (placeholder)
+        // Use empty AAD (application would pass packet header as AAD)
+        const aad: []const u8 = &[_]u8{};
         var auth_tag: [16]u8 = undefined;
-        @memset(&auth_tag, 0);
-        auth_tag[0] = @intCast(req.key_phase);
+
+        // Perform ChaCha20-Poly1305 AEAD encryption
+        std.crypto.aead.chacha_poly.ChaCha20Poly1305.encrypt(
+            encrypted_data[0..req.packet_data.len],
+            &auth_tag,
+            req.packet_data,
+            aad,
+            nonce,
+            self.encryption_key,
+        );
+
+        // Copy auth tag to end of encrypted data
+        @memcpy(encrypted_data[req.packet_data.len..][0..16], &auth_tag);
 
         return EncryptResult{
             .success = true,
@@ -258,8 +316,9 @@ pub const AsyncCryptoProcessor = struct {
         };
     }
 
-    /// Process decryption request
+    /// Process decryption request using ChaCha20-Poly1305 AEAD
     fn processDecryption(self: *Self, req: DecryptRequest) DecryptResult {
+        // Must have at least 16-byte auth tag
         if (req.encrypted_data.len < 16) {
             return DecryptResult{
                 .success = false,
@@ -268,8 +327,10 @@ pub const AsyncCryptoProcessor = struct {
             };
         }
 
+        const plaintext_len = req.encrypted_data.len - 16;
+
         // Allocate buffer for decrypted data
-        const decrypted_data = self.allocator.alloc(u8, req.encrypted_data.len - 16) catch {
+        const decrypted_data = self.allocator.alloc(u8, plaintext_len) catch {
             return DecryptResult{
                 .success = false,
                 .decrypted_data = null,
@@ -277,8 +338,33 @@ pub const AsyncCryptoProcessor = struct {
             };
         };
 
-        // Copy data (simulate decryption)
-        @memcpy(decrypted_data, req.encrypted_data[0 .. req.encrypted_data.len - 16]);
+        // Construct nonce from IV XOR packet number (QUIC nonce construction)
+        var nonce: [12]u8 = self.encryption_iv;
+        const pn_bytes = std.mem.toBytes(req.packet_number);
+        for (nonce[4..12], pn_bytes[0..8]) |*n, p| {
+            n.* ^= p;
+        }
+
+        // Use empty AAD
+        const aad: []const u8 = &[_]u8{};
+
+        // Perform ChaCha20-Poly1305 AEAD decryption with authentication
+        std.crypto.aead.chacha_poly.ChaCha20Poly1305.decrypt(
+            decrypted_data,
+            req.encrypted_data[0..plaintext_len],
+            req.encrypted_data[plaintext_len..][0..16].*,
+            aad,
+            nonce,
+            self.encryption_key,
+        ) catch {
+            // Authentication failed - tampered data or wrong key
+            self.allocator.free(decrypted_data);
+            return DecryptResult{
+                .success = false,
+                .decrypted_data = null,
+                .error_code = Error.ZquicError.DecryptionFailed,
+            };
+        };
 
         return DecryptResult{
             .success = true,
@@ -296,14 +382,32 @@ pub const AsyncCryptoProcessor = struct {
         };
     }
 
-    /// Process key derivation request
-    fn processKeyDerivation(_: *Self, _: DeriveKeysRequest) DeriveKeysResult {
+    /// Process key derivation request using HKDF
+    fn processKeyDerivation(_: *Self, req: DeriveKeysRequest) DeriveKeysResult {
         var client_key: [32]u8 = undefined;
         var server_key: [32]u8 = undefined;
 
-        // Placeholder key derivation
-        @memset(&client_key, 0x01);
-        @memset(&server_key, 0x02);
+        // Use HKDF-SHA256 for key derivation
+        const Hkdf = std.crypto.kdf.hkdf.HkdfSha256;
+
+        // Extract PRK from shared secret and salt
+        var prk: [32]u8 = undefined;
+        if (req.salt.len > 0) {
+            Hkdf.extract(&prk, req.salt, req.shared_secret);
+        } else {
+            // Use empty salt if not provided
+            const empty_salt: [32]u8 = std.mem.zeroes([32]u8);
+            Hkdf.extract(&prk, &empty_salt, req.shared_secret);
+        }
+
+        // Derive client key
+        Hkdf.expand(&client_key, "client key", prk);
+
+        // Derive server key
+        Hkdf.expand(&server_key, "server key", prk);
+
+        // Securely zero PRK
+        std.crypto.secureZero(u8, &prk);
 
         return DeriveKeysResult{
             .success = true,

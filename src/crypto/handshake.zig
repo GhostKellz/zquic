@@ -18,7 +18,7 @@ pub const HandshakeManager = struct {
     pub fn init(allocator: std.mem.Allocator, is_server: bool) Self {
         return Self{
             .tls_context = Tls.TlsContext.init(allocator, is_server),
-            .crypto_buffer = .{},
+            .crypto_buffer = .empty,
             .handshake_complete = false,
             .allocator = allocator,
         };

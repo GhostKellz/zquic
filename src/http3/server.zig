@@ -117,8 +117,8 @@ pub const SuperHttp3Server = struct {
             .config = config,
             .stats = SuperServerStats.init(),
             .allocator = allocator,
-            .request_queue = .{},
-            .response_queue = .{},
+            .request_queue = .empty,
+            .response_queue = .empty,
         };
     }
 
@@ -159,7 +159,7 @@ pub const ConnectionContext = struct {
     pub fn init(allocator: std.mem.Allocator, connection: *Connection) Self {
         return Self{
             .connection = connection,
-            .active_requests = .{},
+            .active_requests = .empty,
             .last_activity = Time.nowSeconds(),
             .allocator = allocator,
         };
@@ -233,8 +233,8 @@ pub const Http3Server = struct {
             .router = Router.init(allocator),
             .config = config,
             .stats = SuperServerStats.init(),
-            .connections = .{},
-            .middleware_stack = .{},
+            .connections = .empty,
+            .middleware_stack = .empty,
             .metrics = null,
         };
 
@@ -472,7 +472,7 @@ pub const Http3Server = struct {
         const stream = try connection.createStream(.server_bidirectional);
 
         // Encode the frame with type and length
-        var frame_data: std.ArrayListUnmanaged(u8) = .{};
+        var frame_data: std.ArrayListUnmanaged(u8) = .empty;
         defer frame_data.deinit(self.allocator);
         try frame_data.ensureTotalCapacity(self.allocator, 64);
 
@@ -556,7 +556,7 @@ pub const Http3Server = struct {
 
     /// Cleanup expired connections
     pub fn cleanupExpiredConnections(self: *Self) void {
-        var to_remove: std.ArrayListUnmanaged([]const u8) = .{};
+        var to_remove: std.ArrayListUnmanaged([]const u8) = .empty;
         defer to_remove.deinit(self.allocator);
         to_remove.ensureTotalCapacity(self.allocator, 10) catch return;
 

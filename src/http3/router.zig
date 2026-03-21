@@ -65,7 +65,7 @@ pub const RoutePattern = struct {
     pub fn init(allocator: std.mem.Allocator, pattern: []const u8) !Self {
         var route = Self{
             .pattern = try allocator.dupe(u8, pattern),
-            .segments = .{},
+            .segments = .empty,
             .allocator = allocator,
         };
 
@@ -165,7 +165,7 @@ pub const Route = struct {
             .method = method,
             .pattern = try RoutePattern.init(allocator, pattern),
             .handler = handler,
-            .middleware = .{},
+            .middleware = .empty,
             .allocator = allocator,
         };
     }
@@ -208,8 +208,8 @@ pub const Router = struct {
 
     pub fn init(allocator: std.mem.Allocator) Self {
         return Self{
-            .routes = .{},
-            .global_middleware = .{},
+            .routes = .empty,
+            .global_middleware = .empty,
             .not_found_handler = null,
             .error_handler = null,
             .allocator = allocator,

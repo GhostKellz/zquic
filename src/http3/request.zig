@@ -65,7 +65,7 @@ pub const Headers = struct {
 
     pub fn init(allocator: std.mem.Allocator) Self {
         return Self{
-            .fields = .{},
+            .fields = .empty,
             .allocator = allocator,
         };
     }
@@ -189,7 +189,7 @@ pub const Request = struct {
             .version = .HTTP3,
             .headers = Headers.init(allocator),
             .query_params = QueryParams.init(allocator),
-            .body = .{},
+            .body = .empty,
             .context = RequestContext.init(stream_id, connection_id),
             .allocator = allocator,
         };

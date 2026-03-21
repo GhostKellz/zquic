@@ -123,7 +123,7 @@ pub const SettingsFrame = struct {
 
     pub fn init(_: std.mem.Allocator) Self {
         return Self{
-            .settings = .{},
+            .settings = .empty,
         };
     }
 
@@ -198,7 +198,7 @@ pub const FrameParser = struct {
 
     pub fn init(_: std.mem.Allocator) Self {
         return Self{
-            .buffer = .{},
+            .buffer = .empty,
             .state = .waiting_for_header,
             .current_frame_type = null,
             .current_frame_length = 0,
@@ -214,7 +214,7 @@ pub const FrameParser = struct {
     pub fn processData(self: *Self, data: []const u8, allocator: std.mem.Allocator) Error.ZquicError![]Frame {
         try self.buffer.appendSlice(allocator, data);
 
-        var frames: std.ArrayListUnmanaged(Frame) = .{};
+        var frames: std.ArrayListUnmanaged(Frame) = .empty;
 
         while (true) {
             switch (self.state) {

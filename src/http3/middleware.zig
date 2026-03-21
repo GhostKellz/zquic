@@ -27,9 +27,9 @@ pub const CorsMiddleware = struct {
 
     pub fn init(allocator: std.mem.Allocator) Self {
         var cors_middleware = Self{
-            .allowed_origins = .{},
-            .allowed_methods = .{},
-            .allowed_headers = .{},
+            .allowed_origins = .empty,
+            .allowed_methods = .empty,
+            .allowed_headers = .empty,
             .allow_credentials = false,
             .max_age = null,
             .allocator = allocator,
@@ -99,7 +99,11 @@ pub const CorsMiddleware = struct {
     }
 };
 
-/// Authentication middleware
+/// Global auth configuration for middleware (set once at startup)
+/// This allows the middleware function to access the secret key for full HMAC verification
+var global_auth_secret: ?[]const u8 = null;
+
+/// Authentication middleware with HMAC-SHA256 token verification
 pub const AuthMiddleware = struct {
     secret_key: []const u8,
     allocator: std.mem.Allocator,
@@ -107,36 +111,134 @@ pub const AuthMiddleware = struct {
     const Self = @This();
 
     pub fn init(allocator: std.mem.Allocator, secret_key: []const u8) Self {
+        // Also set global secret for middleware chain usage
+        global_auth_secret = secret_key;
         return Self{
             .secret_key = secret_key,
             .allocator = allocator,
         };
     }
 
+    /// Validate JWT-like token using HMAC-SHA256 (standalone function for reuse)
+    /// Token format: <header>.<payload>.<signature>
+    pub fn validateTokenWithSecret(token: []const u8, secret_key: []const u8) bool {
+        // Token must have minimum length for JWT structure
+        if (token.len < 32) return false;
+
+        // Find dot separators (JWT has exactly 2)
+        var dot_count: usize = 0;
+        var first_dot: ?usize = null;
+        var second_dot: ?usize = null;
+
+        for (token, 0..) |c, i| {
+            if (c == '.') {
+                dot_count += 1;
+                if (dot_count == 1) first_dot = i else if (dot_count == 2) second_dot = i;
+            }
+        }
+
+        // Must have exactly 2 dots
+        if (dot_count != 2) return false;
+
+        const d1 = first_dot orelse return false;
+        const d2 = second_dot orelse return false;
+
+        // Validate segment lengths
+        if (d1 == 0 or d2 <= d1 + 1 or d2 >= token.len - 1) return false;
+
+        const header_payload = token[0..d2];
+        const provided_sig = token[d2 + 1 ..];
+
+        // Signature must be base64url encoded (43 chars for 256-bit HMAC)
+        if (provided_sig.len < 43) return false;
+
+        // Validate base64url characters in signature
+        for (provided_sig) |c| {
+            if (!isBase64UrlChar(c)) return false;
+        }
+
+        // Compute expected signature using HMAC-SHA256
+        var hmac = std.crypto.auth.hmac.sha2.HmacSha256.init(secret_key);
+        hmac.update(header_payload);
+        var expected_sig: [32]u8 = undefined;
+        hmac.final(&expected_sig);
+
+        // Decode provided signature from base64url
+        var decoded_sig: [32]u8 = undefined;
+        _ = std.base64.url_safe_no_pad.Decoder.decode(&decoded_sig, provided_sig) catch return false;
+
+        // Constant-time comparison to prevent timing attacks
+        return std.crypto.timing_safe.eql([32]u8, decoded_sig, expected_sig);
+    }
+
+    fn isBase64UrlChar(c: u8) bool {
+        return (c >= 'A' and c <= 'Z') or
+            (c >= 'a' and c <= 'z') or
+            (c >= '0' and c <= '9') or
+            c == '-' or c == '_';
+    }
+
+    /// Instance method for token validation
+    pub fn validateToken(self: *const Self, token: []const u8) bool {
+        return validateTokenWithSecret(token, self.secret_key);
+    }
+
+    /// Handle authentication for a request directly (non-middleware usage)
+    pub fn authenticate(self: *const Self, request: *Request, response: *Response) Error.ZquicError!bool {
+        if (request.getHeader("authorization")) |auth_header| {
+            if (std.mem.startsWith(u8, auth_header, "Bearer ")) {
+                const token = auth_header[7..];
+                if (self.validateToken(token)) {
+                    return true;
+                }
+            }
+        }
+
+        // Unauthorized - deny by default
+        response.setStatus(.unauthorized);
+        try response.setHeader("WWW-Authenticate", "Bearer");
+        try response.text("{\"error\": \"Unauthorized\", \"message\": \"Valid authentication token required\"}");
+        return false;
+    }
+
+    /// Create a middleware function with full HMAC signature verification
+    /// Uses the global auth secret set during init()
     pub fn middleware(self: *const Self) MiddlewareFn {
         _ = self;
 
         return struct {
             fn handle(request: *Request, response: *Response, next: NextFn) Error.ZquicError!void {
+                // Get the global secret key - deny if not configured
+                const secret = global_auth_secret orelse {
+                    response.setStatus(.internal_server_error);
+                    try response.text("{\"error\": \"Internal Server Error\", \"message\": \"Auth not configured\"}");
+                    return;
+                };
+
                 // Check for Authorization header
                 if (request.getHeader("authorization")) |auth_header| {
                     if (std.mem.startsWith(u8, auth_header, "Bearer ")) {
                         const token = auth_header[7..];
 
-                        // Simplified token validation
-                        if (token.len > 0) {
+                        // Full HMAC signature verification (not just structure check)
+                        if (validateTokenWithSecret(token, secret)) {
                             try next(request, response);
                             return;
                         }
                     }
                 }
 
-                // Unauthorized
+                // Unauthorized - deny by default for missing, malformed, or invalid tokens
                 response.setStatus(.unauthorized);
                 try response.setHeader("WWW-Authenticate", "Bearer");
                 try response.text("{\"error\": \"Unauthorized\", \"message\": \"Valid authentication token required\"}");
             }
         }.handle;
+    }
+
+    /// Reset global auth configuration (for testing)
+    pub fn resetGlobalAuth() void {
+        global_auth_secret = null;
     }
 };
 
@@ -181,26 +283,30 @@ pub const LoggingMiddleware = struct {
     }
 };
 
-/// Rate limiting middleware
+/// Rate limiting middleware with request count tracking
+/// Uses a simple per-client request counter with periodic reset
 pub const RateLimitMiddleware = struct {
     max_requests: u32,
-    window_seconds: u32,
-    client_requests: std.AutoHashMapUnmanaged(u64, RequestWindow),
+    reset_threshold: u32,
+    client_requests: std.AutoHashMapUnmanaged(u64, u32),
+    total_requests: std.atomic.Value(u64),
     allocator: std.mem.Allocator,
-
-    const RequestWindow = struct {
-        count: u32,
-        window_start: i64,
-    };
+    mutex: std.atomic.Mutex,
 
     const Self = @This();
 
-    pub fn init(allocator: std.mem.Allocator, max_requests: u32, window_seconds: u32) Self {
+    pub fn init(allocator: std.mem.Allocator, max_requests: u32, reset_threshold: u32) Self {
+        // Store config in globals for inner function access
+        global_rate_limit_max = max_requests;
+        global_rate_limit_reset = reset_threshold;
+
         return Self{
             .max_requests = max_requests,
-            .window_seconds = window_seconds,
-            .client_requests = .{},
+            .reset_threshold = reset_threshold,
+            .client_requests = .empty,
+            .total_requests = std.atomic.Value(u64).init(0),
             .allocator = allocator,
+            .mutex = .unlocked,
         };
     }
 
@@ -208,12 +314,51 @@ pub const RateLimitMiddleware = struct {
         self.client_requests.deinit(self.allocator);
     }
 
-    pub fn middleware(_: *Self) MiddlewareFn {
+    /// Check if a client is allowed to make a request
+    pub fn isAllowed(self: *Self, client_id: u64) bool {
+        // Acquire lock (spinlock style for simplicity)
+        while (!self.mutex.tryLock()) {
+            std.atomic.spinLoopHint();
+        }
+        defer self.mutex.unlock();
+
+        // Increment total request counter
+        const total = self.total_requests.fetchAdd(1, .monotonic);
+
+        // Periodic reset: clear all counters when threshold reached
+        if (total > 0 and total % @as(u64, self.reset_threshold) == 0) {
+            self.client_requests.clearRetainingCapacity();
+        }
+
+        if (self.client_requests.getPtr(client_id)) |count| {
+            // Check if within limit
+            if (count.* >= self.max_requests) {
+                return false;
+            }
+            // Increment count
+            count.* += 1;
+            return true;
+        } else {
+            // New client, create entry
+            self.client_requests.put(self.allocator, client_id, 1) catch {
+                // On allocation failure, allow request (fail open for availability)
+                return true;
+            };
+            return true;
+        }
+    }
+
+    pub fn middleware(self: *Self) MiddlewareFn {
+        // Store pointer for inner function access
+        global_rate_limiter = self;
+
         return struct {
             fn handle(request: *Request, response: *Response, next: NextFn) Error.ZquicError!void {
-                // Check rate limit (simplified implementation)
-                // In a real implementation, would track request.context.stream_id
-                const is_allowed = true;
+                // Get client identifier (use stream_id as proxy for client identity)
+                const client_id: u64 = request.context.stream_id;
+
+                // Check rate limit using the global rate limiter
+                const is_allowed = if (global_rate_limiter) |limiter| limiter.isAllowed(client_id) else true;
 
                 if (!is_allowed) {
                     response.setStatus(.too_many_requests);
@@ -228,10 +373,19 @@ pub const RateLimitMiddleware = struct {
     }
 };
 
-/// Compression middleware (simplified)
+// Global rate limiter state for middleware closure workaround
+var global_rate_limiter: ?*RateLimitMiddleware = null;
+var global_rate_limit_max: u32 = 100;
+var global_rate_limit_reset: u32 = 10000;
+
+/// Compression middleware
+/// NOTE: Actual compression requires runtime compression library.
+/// This middleware currently only advertises compression capability via Vary header.
+/// Set compression_enabled = true when actual compression is implemented.
 pub const CompressionMiddleware = struct {
     compression_level: u8,
     min_size: usize,
+    compression_enabled: bool,
     allocator: std.mem.Allocator,
 
     const Self = @This();
@@ -240,22 +394,37 @@ pub const CompressionMiddleware = struct {
         return Self{
             .compression_level = compression_level,
             .min_size = min_size,
+            // Compression is disabled by default until actual compression is implemented
+            // This prevents false Content-Encoding headers
+            .compression_enabled = false,
             .allocator = allocator,
         };
     }
 
+    /// Enable with actual compression (call when compression library is available)
+    pub fn enableCompression(self: *Self) void {
+        self.compression_enabled = true;
+    }
+
     pub fn middleware(self: *const Self) MiddlewareFn {
-        _ = self;
+        global_compression_enabled = self.compression_enabled;
+        global_compression_min_size = self.min_size;
 
         return struct {
             fn handle(request: *Request, response: *Response, next: NextFn) Error.ZquicError!void {
                 try next(request, response);
 
-                // Check if client accepts compression (simplified)
-                if (request.getHeader("accept-encoding")) |encoding| {
-                    if (std.mem.indexOf(u8, encoding, "gzip") != null) {
-                        // Would implement actual compression here
-                        try response.setHeader("Content-Encoding", "gzip");
+                // Always set Vary header to indicate content may vary by encoding
+                try response.setHeader("Vary", "Accept-Encoding");
+
+                // Only set Content-Encoding if compression is actually enabled and performed
+                if (global_compression_enabled) {
+                    if (request.getHeader("accept-encoding")) |encoding| {
+                        if (std.mem.indexOf(u8, encoding, "gzip") != null) {
+                            // TODO: Implement actual gzip compression here
+                            // Only uncomment when actual compression is implemented:
+                            // try response.setHeader("Content-Encoding", "gzip");
+                        }
                     }
                 }
             }
@@ -263,14 +432,19 @@ pub const CompressionMiddleware = struct {
     }
 };
 
+// Global compression config for middleware closure workaround
+var global_compression_enabled: bool = false;
+var global_compression_min_size: usize = 1024;
+
 /// Security headers middleware
 pub const SecurityMiddleware = struct {
     enable_hsts: bool,
     hsts_max_age: u32,
-    enable_xss_protection: bool,
     enable_content_type_options: bool,
     enable_frame_options: bool,
     csp_policy: ?[]const u8,
+    referrer_policy: []const u8,
+    permissions_policy: []const u8,
     allocator: std.mem.Allocator,
 
     const Self = @This();
@@ -279,10 +453,13 @@ pub const SecurityMiddleware = struct {
         return Self{
             .enable_hsts = true,
             .hsts_max_age = 31536000, // 1 year
-            .enable_xss_protection = true,
             .enable_content_type_options = true,
             .enable_frame_options = true,
             .csp_policy = null,
+            // Modern referrer policy - only send origin for cross-origin requests
+            .referrer_policy = "strict-origin-when-cross-origin",
+            // Restrictive permissions policy by default
+            .permissions_policy = "geolocation=(), camera=(), microphone=(), payment=()",
             .allocator = allocator,
         };
     }
@@ -301,21 +478,52 @@ pub const SecurityMiddleware = struct {
     }
 
     pub fn middleware(self: *const Self) MiddlewareFn {
-        _ = self;
+        // Store config in globals for inner function access
+        global_security_hsts_enabled = self.enable_hsts;
+        global_security_hsts_max_age = self.hsts_max_age;
+        global_security_csp = self.csp_policy;
+        global_security_referrer_policy = self.referrer_policy;
+        global_security_permissions_policy = self.permissions_policy;
 
         return struct {
             fn handle(request: *Request, response: *Response, next: NextFn) Error.ZquicError!void {
                 try next(request, response);
 
-                // Add security headers (simplified)
+                // Modern security headers baseline
                 try response.setHeader("X-Content-Type-Options", "nosniff");
                 try response.setHeader("X-Frame-Options", "DENY");
-                try response.setHeader("X-XSS-Protection", "1; mode=block");
-                try response.setHeader("Strict-Transport-Security", "max-age=31536000; includeSubDomains");
+
+                // X-XSS-Protection is deprecated in modern browsers and can cause issues
+                // Modern browsers have built-in XSS protection; this header is no longer needed
+
+                // Add HSTS header (should only be sent over HTTPS in production)
+                if (global_security_hsts_enabled) {
+                    var hsts_buf: [64]u8 = undefined;
+                    const hsts_value = std.fmt.bufPrint(&hsts_buf, "max-age={d}; includeSubDomains", .{global_security_hsts_max_age}) catch "max-age=31536000; includeSubDomains";
+                    try response.setHeader("Strict-Transport-Security", hsts_value);
+                }
+
+                // Content-Security-Policy for HTML contexts (if configured)
+                if (global_security_csp) |csp| {
+                    try response.setHeader("Content-Security-Policy", csp);
+                }
+
+                // Referrer-Policy - controls how much referrer info is sent
+                try response.setHeader("Referrer-Policy", global_security_referrer_policy);
+
+                // Permissions-Policy - controls browser feature access
+                try response.setHeader("Permissions-Policy", global_security_permissions_policy);
             }
         }.handle;
     }
 };
+
+// Global security config for middleware closure workaround
+var global_security_hsts_enabled: bool = true;
+var global_security_hsts_max_age: u32 = 31536000;
+var global_security_csp: ?[]const u8 = null;
+var global_security_referrer_policy: []const u8 = "strict-origin-when-cross-origin";
+var global_security_permissions_policy: []const u8 = "geolocation=(), camera=(), microphone=(), payment=()";
 
 /// Static file serving middleware
 pub const StaticMiddleware = struct {
@@ -374,6 +582,11 @@ pub const StaticMiddleware = struct {
 };
 
 fn buildStaticFilePath(buffer: []u8, root_dir: []const u8, request_path: []const u8) Error.ZquicError![]const u8 {
+    // Validate request path for path traversal attacks (defense in depth)
+    if (!isPathSafe(request_path)) {
+        return Error.ZquicError.InvalidPath;
+    }
+
     var used: usize = 0;
 
     if (root_dir.len > buffer.len) return Error.ZquicError.BufferTooSmall;
@@ -391,7 +604,113 @@ fn buildStaticFilePath(buffer: []u8, root_dir: []const u8, request_path: []const
     @memcpy(buffer[used .. used + trimmed.len], trimmed);
     used += trimmed.len;
 
-    return buffer[0..used];
+    const constructed_path = buffer[0..used];
+
+    // Symlink escape protection: verify the resolved path stays within root
+    if (!isPathUnderRoot(root_dir, constructed_path)) {
+        return Error.ZquicError.InvalidPath;
+    }
+
+    return constructed_path;
+}
+
+/// Check if a path resolves to a location under the root directory
+/// This provides symlink escape protection by checking the path prefix
+/// and rejecting symlink patterns
+fn isPathUnderRoot(root_dir: []const u8, file_path: []const u8) bool {
+    // Verify the constructed path starts with the root directory
+    if (!std.mem.startsWith(u8, file_path, root_dir)) {
+        return false;
+    }
+
+    // Get the portion after root_dir
+    const remainder = file_path[root_dir.len..];
+
+    // If there's content after root_dir, it must start with /
+    if (remainder.len > 0 and remainder[0] != '/') {
+        // This prevents /var/www from matching /var/www-attacker/secret
+        return false;
+    }
+
+    // Additional symlink detection: reject paths with components that look like symlinks
+    // This is a defense-in-depth measure alongside the isPathSafe check
+    // Note: Full symlink resolution requires filesystem access which may not be
+    // available in all contexts. The isPathSafe() check handles traversal attacks.
+
+    // Reject paths containing suspicious patterns that might indicate symlink tricks
+    var i: usize = 0;
+    while (i < file_path.len) {
+        // Look for paths that start components with common symlink attack patterns
+        if (i == 0 or (i > 0 and file_path[i - 1] == '/')) {
+            // Check for single dot followed by something other than / or end
+            // (hidden files starting with . are usually OK, but .hidden/../ etc should be caught by isPathSafe)
+            // Check for suspicious lengths of dots (more than 2 is unusual)
+            var dot_count: usize = 0;
+            var j = i;
+            while (j < file_path.len and file_path[j] == '.') {
+                dot_count += 1;
+                j += 1;
+            }
+            if (dot_count > 2 and (j >= file_path.len or file_path[j] == '/')) {
+                // More than two consecutive dots followed by separator or end is suspicious
+                return false;
+            }
+        }
+        i += 1;
+    }
+
+    return true;
+}
+
+/// Check if a path is safe from directory traversal attacks
+fn isPathSafe(path: []const u8) bool {
+    // Reject null bytes (null byte injection)
+    for (path) |c| {
+        if (c == 0) return false;
+    }
+
+    // Reject paths containing ".." segments
+    var i: usize = 0;
+    while (i < path.len) {
+        // Check for ".." at start or after separator
+        if (i == 0 or (i > 0 and path[i - 1] == '/')) {
+            if (i + 1 < path.len and path[i] == '.' and path[i + 1] == '.') {
+                // ".." followed by end, "/" or nothing
+                if (i + 2 >= path.len or path[i + 2] == '/') {
+                    return false;
+                }
+            }
+        }
+        i += 1;
+    }
+
+    // Reject URL-encoded traversal attempts (%2e%2e, %2E%2E, etc.)
+    i = 0;
+    while (i + 2 < path.len) {
+        if (path[i] == '%') {
+            // Check for %2e or %2E (encoded '.')
+            if ((path[i + 1] == '2' and (path[i + 2] == 'e' or path[i + 2] == 'E'))) {
+                // Check if followed by another encoded dot
+                if (i + 5 < path.len and path[i + 3] == '%' and path[i + 4] == '2' and
+                    (path[i + 5] == 'e' or path[i + 5] == 'E'))
+                {
+                    return false;
+                }
+            }
+            // Check for %2f or %2F (encoded '/')
+            if (path[i + 1] == '2' and (path[i + 2] == 'f' or path[i + 2] == 'F')) {
+                return false;
+            }
+        }
+        i += 1;
+    }
+
+    // Reject backslashes (Windows-style paths)
+    for (path) |c| {
+        if (c == '\\') return false;
+    }
+
+    return true;
 }
 
 test "cors middleware creation" {

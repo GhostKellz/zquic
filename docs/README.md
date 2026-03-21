@@ -1,6 +1,19 @@
 # ZQUIC Documentation
 
-Welcome to the ZQUIC v0.9.6 documentation! This guide covers the complete modular QUIC transport library for Zig 0.16.0-dev.
+Welcome to the ZQUIC v0.9.8 documentation! This guide covers the complete modular QUIC transport library for Zig 0.16.0-dev.
+
+## What's New in v0.9.8
+
+**Security Hardening Release**
+
+- **Cryptographic Fixes**: Replaced all placeholder/XOR encryption with real ChaCha20-Poly1305 AEAD
+- **JWT Security**: Unified authentication with full HMAC-SHA256 signature verification
+- **Path Traversal Protection**: Enhanced static file serving with symlink escape detection
+- **Secure Zeroization**: Standardized `std.crypto.secureZero()` across all crypto modules
+- **Modern Security Headers**: Added CSP, Referrer-Policy, Permissions-Policy support
+- **TLS Verification**: Complete certificate chain, CertificateVerify, and Finished validation
+- **Post-Quantum Crypto**: Real ML-KEM-768 and SLH-DSA-128s via zcrypto
+- **Zig 0.16.0-dev.2790**: Full compatibility with latest Zig development builds
 
 ## What's New in v0.9.6
 
@@ -42,6 +55,7 @@ Welcome to the ZQUIC v0.9.6 documentation! This guide covers the complete modula
 - **[Services API](api/services.md)** - High-level services (Bridge, Proxy, DoQ)
 
 ### Features
+- **[Security](features/security.md)** - Cryptographic security, hardening, and best practices (v0.9.8)
 - **[Post-Quantum Crypto](features/post-quantum.md)** - ML-KEM-768 + X25519 hybrid TLS
 - **[SSH/QUIC Integration](features/ssh_quic.md)** - SSH secret injection for QUIC (v0.9.6)
 - **[HTTP/3 Server](features/http3.md)** - Production HTTP/3 with QPACK
