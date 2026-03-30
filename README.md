@@ -8,7 +8,7 @@
 [![HTTP/3](https://img.shields.io/badge/HTTP%2F3-enabled-blue.svg)](#feature-highlights)
 [![SSH/QUIC](https://img.shields.io/badge/SSH%2FQUIC-draft-purple.svg)](#sshquic-integration)
 
-ZQUIC 0.9.6 is a **modular, high-performance QUIC transport stack** built entirely in Zig 0.16.0-dev. It ships with a native async runtime (no external deps), hybrid post-quantum TLS via `zcrypto`, SSH/QUIC secret injection support, and a suite of HTTP/3, DoQ, VPN, and service layers tuned for Ghost production workloads.
+ZQUIC is a **modular, high-performance QUIC transport stack** built entirely in Zig 0.16.0-dev. It ships with a native async runtime (no external deps), hybrid post-quantum TLS via `zcrypto`, SSH/QUIC secret injection support, and a suite of HTTP/3, DoQ, VPN, and service layers tuned for Ghost production workloads.
 
 > ✅ Builds cleanly with Zig 0.16.0-dev.2535+ on Linux/macOS/Windows and passes the `dev/test.sh` suite.
 
