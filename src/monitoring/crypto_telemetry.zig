@@ -269,6 +269,10 @@ pub const CryptoTelemetrySystem = struct {
     connection_count: std.atomic.Atomic(u32),
     request_count: std.atomic.Atomic(u64),
     bytes_transferred: std.atomic.Atomic(u64),
+
+    // Previous counter values for rate calculation (prevents drift)
+    prev_request_count: u64,
+    prev_bytes_transferred: u64,
     error_count: std.atomic.Atomic(u64),
     zero_rtt_attempts: std.atomic.Atomic(u64),
     zero_rtt_successes: std.atomic.Atomic(u64),
@@ -306,6 +310,8 @@ pub const CryptoTelemetrySystem = struct {
             .connection_count = std.atomic.Atomic(u32).init(0),
             .request_count = std.atomic.Atomic(u64).init(0),
             .bytes_transferred = std.atomic.Atomic(u64).init(0),
+            .prev_request_count = 0,
+            .prev_bytes_transferred = 0,
             .error_count = std.atomic.Atomic(u64).init(0),
             .zero_rtt_attempts = std.atomic.Atomic(u64).init(0),
             .zero_rtt_successes = std.atomic.Atomic(u64).init(0),
@@ -401,18 +407,19 @@ pub const CryptoTelemetrySystem = struct {
         self.current_metrics.total_connections = self.connection_count.load(.Monotonic);
         self.current_metrics.active_connections = self.connection_count.load(.Monotonic); // Simplified
 
-        // Calculate rates
-        const requests_delta = self.request_count.load(.Monotonic) - (if (self.metrics_history.items.len > 0)
-            @as(u64, @intFromFloat(self.metrics_history.items[self.metrics_history.items.len - 1].requests_per_second * time_delta_seconds))
-        else
-            0);
-        self.current_metrics.requests_per_second = @as(f32, @floatFromInt(requests_delta)) / @as(f32, @floatCast(time_delta_seconds));
+        // Calculate rates from actual counter deltas (prevents drift over time)
+        const current_request_count = self.request_count.load(.Monotonic);
+        const current_bytes = self.bytes_transferred.load(.Monotonic);
 
-        const bytes_delta = self.bytes_transferred.load(.Monotonic) - (if (self.metrics_history.items.len > 0)
-            @as(u64, @intFromFloat(self.metrics_history.items[self.metrics_history.items.len - 1].bytes_per_second * time_delta_seconds))
-        else
-            0);
+        const requests_delta = current_request_count - self.prev_request_count;
+        const bytes_delta = current_bytes - self.prev_bytes_transferred;
+
+        self.current_metrics.requests_per_second = @as(f32, @floatFromInt(requests_delta)) / @as(f32, @floatCast(time_delta_seconds));
         self.current_metrics.bytes_per_second = @as(u64, @intFromFloat(@as(f64, @floatFromInt(bytes_delta)) / time_delta_seconds));
+
+        // Update previous counters for next calculation
+        self.prev_request_count = current_request_count;
+        self.prev_bytes_transferred = current_bytes;
 
         // Update latency metrics from histogram
         self.current_metrics.avg_latency_us = self.latency_histogram.getAverage();

@@ -8,9 +8,18 @@ echo "=== ZQUIC Local Testing ==="
 echo "Zig version: $(zig version)"
 echo ""
 
-# Clean build
+# Clean build - use find + xargs for robustness on busy filesystems
 echo "[1/4] Cleaning previous builds..."
-rm -rf zig-out .zig-cache 2>/dev/null || true
+if [ -d "zig-out" ]; then
+    find zig-out -type f -delete 2>/dev/null || true
+    find zig-out -type d -empty -delete 2>/dev/null || true
+    rm -rf zig-out 2>/dev/null || true
+fi
+if [ -d ".zig-cache" ]; then
+    find .zig-cache -type f -delete 2>/dev/null || true
+    find .zig-cache -type d -empty -delete 2>/dev/null || true
+    rm -rf .zig-cache 2>/dev/null || true
+fi
 
 # Build
 echo "[2/4] Building ZQUIC..."

@@ -1,6 +1,6 @@
 //! DNS-over-QUIC Server Implementation (RFC 9250)
 //!
-//! ZQUIC v0.9.4 - Post-quantum secure DoQ server without external dependencies
+//! Post-quantum secure DoQ server without external dependencies
 
 const std = @import("std");
 const zquic_core = @import("zquic_core");
@@ -30,7 +30,7 @@ pub const DoQServerConfig = struct {
     /// Query timeout in milliseconds
     query_timeout_ms: u32 = 5000,
     /// Enable post-quantum crypto
-    enable_post_quantum: bool = true,
+    enable_post_quantum: bool = false, // Experimental: requires -Dpost-quantum=true -Dexperimental-crypto=true
     /// Certificate path for TLS
     cert_path: []const u8,
     /// Private key path for TLS
@@ -87,11 +87,9 @@ const DoQConnection = struct {
             }
         }
 
-        // RFC 9250: DoQ uses stream 0 for DNS messages
-        if (stream.id != 0) {
-            std.log.warn("DoQ: Non-zero stream ID {} not supported", .{stream.id});
-            return;
-        }
+        // RFC 9250: DNS queries can use any stream ID
+        // Each query-response pair uses a separate stream
+        std.log.debug("DoQ: Handling query on stream {}", .{stream.id});
 
         // Read DNS query from stream
         var buffer: [4096]u8 = undefined;

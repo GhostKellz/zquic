@@ -1,6 +1,6 @@
 //! DNS-over-QUIC Echo Server Demo
 //!
-//! Example implementation matching the TODO.md sketch
+//! Example implementation demonstrating DoQ server usage
 
 const std = @import("std");
 const zquic = @import("zquic");
@@ -12,7 +12,7 @@ pub fn main() !void {
 
     std.log.info("🚀 Starting DNS-over-QUIC Echo Server Demo...", .{});
 
-    // Create DoQ server configuration (matching TODO.md sketch)
+    // Create DoQ server configuration
     const config = zquic.DoQ.ServerConfig{
         .address = "0.0.0.0",
         .port = 853,
@@ -89,7 +89,7 @@ fn startDemoServer(allocator: std.mem.Allocator) !void {
     std.log.info("✅ Demo completed", .{});
 }
 
-/// Custom DNS handler function (matches TODO.md interface)
+/// Custom DNS handler function
 fn customDnsHandler(query: *zquic.DoQ.Message.DnsMessage, allocator: std.mem.Allocator) !zquic.DoQ.Message.DnsMessage {
     if (query.questions.len == 0) {
         return createErrorResponse(query, allocator, zquic.DoQ.Message.DnsResponseCode.FormErr);

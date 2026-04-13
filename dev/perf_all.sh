@@ -6,7 +6,7 @@
 set -e
 
 echo "╔══════════════════════════════════════════════════════════════╗"
-echo "║       ZQUIC v0.9.5 Comprehensive Performance Suite           ║"
+echo "║       ZQUIC Comprehensive Performance Suite                  ║"
 echo "╚══════════════════════════════════════════════════════════════╝"
 echo ""
 echo "Zig version: $(zig version)"

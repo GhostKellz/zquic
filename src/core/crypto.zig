@@ -174,30 +174,46 @@ pub const AeadOps = struct {
         }
 
         return switch (self.cipher_suite) {
-            .aes_128_gcm_sha256, .aes_256_gcm_sha384 => blk: {
-                // Use zcrypto AES-GCM
-                const aes_gcm = zcrypto.aead.AesGcm.init(key) catch return Error.ZquicError.CryptoError;
-                const result = aes_gcm.encrypt(
-                    &nonce,
-                    associated_data,
-                    plaintext,
+            .aes_128_gcm_sha256 => blk: {
+                // Use std.crypto AES-128-GCM
+                if (key.len != 16) return Error.ZquicError.CryptoError;
+                const key_array: [16]u8 = key[0..16].*;
+                std.crypto.aead.aes_gcm.Aes128Gcm.encrypt(
                     ciphertext[0..plaintext.len],
-                    ciphertext[plaintext.len .. plaintext.len + 16],
-                ) catch return Error.ZquicError.CryptoError;
-                _ = result;
+                    ciphertext[plaintext.len..][0..16],
+                    plaintext,
+                    associated_data,
+                    nonce,
+                    key_array,
+                );
+                break :blk plaintext.len + 16;
+            },
+            .aes_256_gcm_sha384 => blk: {
+                // Use std.crypto AES-256-GCM
+                if (key.len != 32) return Error.ZquicError.CryptoError;
+                const key_array: [32]u8 = key[0..32].*;
+                std.crypto.aead.aes_gcm.Aes256Gcm.encrypt(
+                    ciphertext[0..plaintext.len],
+                    ciphertext[plaintext.len..][0..16],
+                    plaintext,
+                    associated_data,
+                    nonce,
+                    key_array,
+                );
                 break :blk plaintext.len + 16;
             },
             .chacha20_poly1305_sha256 => blk: {
-                // Use zcrypto ChaCha20-Poly1305
-                const chacha_poly = zcrypto.aead.ChaCha20Poly1305.init(key) catch return Error.ZquicError.CryptoError;
-                const result = chacha_poly.encrypt(
-                    &nonce,
-                    associated_data,
-                    plaintext,
+                // Use std.crypto ChaCha20-Poly1305
+                if (key.len != 32) return Error.ZquicError.CryptoError;
+                const key_array: [32]u8 = key[0..32].*;
+                std.crypto.aead.chacha_poly.ChaCha20Poly1305.encrypt(
                     ciphertext[0..plaintext.len],
-                    ciphertext[plaintext.len .. plaintext.len + 16],
-                ) catch return Error.ZquicError.CryptoError;
-                _ = result;
+                    ciphertext[plaintext.len..][0..16],
+                    plaintext,
+                    associated_data,
+                    nonce,
+                    key_array,
+                );
                 break :blk plaintext.len + 16;
             },
         };
@@ -230,30 +246,49 @@ pub const AeadOps = struct {
         const tag = ciphertext[ciphertext.len - 16 ..];
 
         return switch (self.cipher_suite) {
-            .aes_128_gcm_sha256, .aes_256_gcm_sha384 => blk: {
-                // Use zcrypto AES-GCM
-                const aes_gcm = zcrypto.aead.AesGcm.init(key) catch return Error.ZquicError.CryptoError;
-                const result = aes_gcm.decrypt(
-                    &nonce,
-                    associated_data,
+            .aes_128_gcm_sha256 => blk: {
+                // Use std.crypto AES-128-GCM
+                if (key.len != 16) return Error.ZquicError.CryptoError;
+                const key_array: [16]u8 = key[0..16].*;
+                const tag_array: [16]u8 = tag[0..16].*;
+                std.crypto.aead.aes_gcm.Aes128Gcm.decrypt(
+                    plaintext[0..encrypted_data.len],
                     encrypted_data,
-                    tag,
-                    plaintext,
+                    tag_array,
+                    associated_data,
+                    nonce,
+                    key_array,
                 ) catch return Error.ZquicError.CryptoError;
-                _ = result;
+                break :blk encrypted_data.len;
+            },
+            .aes_256_gcm_sha384 => blk: {
+                // Use std.crypto AES-256-GCM
+                if (key.len != 32) return Error.ZquicError.CryptoError;
+                const key_array: [32]u8 = key[0..32].*;
+                const tag_array: [16]u8 = tag[0..16].*;
+                std.crypto.aead.aes_gcm.Aes256Gcm.decrypt(
+                    plaintext[0..encrypted_data.len],
+                    encrypted_data,
+                    tag_array,
+                    associated_data,
+                    nonce,
+                    key_array,
+                ) catch return Error.ZquicError.CryptoError;
                 break :blk encrypted_data.len;
             },
             .chacha20_poly1305_sha256 => blk: {
-                // Use zcrypto ChaCha20-Poly1305
-                const chacha_poly = zcrypto.aead.ChaCha20Poly1305.init(key) catch return Error.ZquicError.CryptoError;
-                const result = chacha_poly.decrypt(
-                    &nonce,
-                    associated_data,
+                // Use std.crypto ChaCha20-Poly1305
+                if (key.len != 32) return Error.ZquicError.CryptoError;
+                const key_array: [32]u8 = key[0..32].*;
+                const tag_array: [16]u8 = tag[0..16].*;
+                std.crypto.aead.chacha_poly.ChaCha20Poly1305.decrypt(
+                    plaintext[0..encrypted_data.len],
                     encrypted_data,
-                    tag,
-                    plaintext,
+                    tag_array,
+                    associated_data,
+                    nonce,
+                    key_array,
                 ) catch return Error.ZquicError.CryptoError;
-                _ = result;
                 break :blk encrypted_data.len;
             },
         };
@@ -283,21 +318,34 @@ pub const HeaderProtection = struct {
         if (mask.len != 5) return Error.ZquicError.CryptoError;
 
         switch (self.cipher_suite) {
-            .aes_128_gcm_sha256, .aes_256_gcm_sha384 => {
-                // Use AES-ECB to encrypt the sample
-                const aes = zcrypto.block.Aes.init(hp_key) catch return Error.ZquicError.CryptoError;
+            .aes_128_gcm_sha256 => {
+                // Use std.crypto AES-128-ECB to encrypt the sample
+                if (hp_key.len != 16) return Error.ZquicError.CryptoError;
+                const key_array: [16]u8 = hp_key[0..16].*;
+                const sample_array: [16]u8 = sample[0..16].*;
+                const aes = std.crypto.core.aes.Aes128.initEnc(key_array);
                 var encrypted_sample: [16]u8 = undefined;
-                aes.encryptBlock(sample, &encrypted_sample) catch return Error.ZquicError.CryptoError;
+                aes.encrypt(&encrypted_sample, &sample_array);
+                @memcpy(mask, encrypted_sample[0..5]);
+            },
+            .aes_256_gcm_sha384 => {
+                // Use std.crypto AES-256-ECB to encrypt the sample
+                if (hp_key.len != 32) return Error.ZquicError.CryptoError;
+                const key_array: [32]u8 = hp_key[0..32].*;
+                const sample_array: [16]u8 = sample[0..16].*;
+                const aes = std.crypto.core.aes.Aes256.initEnc(key_array);
+                var encrypted_sample: [16]u8 = undefined;
+                aes.encrypt(&encrypted_sample, &sample_array);
                 @memcpy(mask, encrypted_sample[0..5]);
             },
             .chacha20_poly1305_sha256 => {
-                // Use ChaCha20 with zero nonce and counter from sample
+                // Use std.crypto ChaCha20 with counter from sample
+                if (hp_key.len != 32) return Error.ZquicError.CryptoError;
+                const key_array: [32]u8 = hp_key[0..32].*;
                 const counter = std.mem.readInt(u32, sample[0..4], .little);
-                const nonce = sample[4..16];
+                const nonce_array: [12]u8 = sample[4..16].*;
                 var zeros: [5]u8 = [_]u8{0} ** 5;
-
-                const chacha20 = zcrypto.stream.ChaCha20.init(hp_key, nonce, counter) catch return Error.ZquicError.CryptoError;
-                chacha20.encrypt(&zeros, mask) catch return Error.ZquicError.CryptoError;
+                std.crypto.stream.chacha.ChaCha20IETF.xor(mask, &zeros, counter, key_array, nonce_array);
             },
         }
     }

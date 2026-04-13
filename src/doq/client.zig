@@ -21,7 +21,7 @@ pub const DoQClientConfig = struct {
     /// Query timeout in milliseconds
     timeout_ms: u32 = 5000,
     /// Enable post-quantum crypto
-    enable_post_quantum: bool = true,
+    enable_post_quantum: bool = false, // Experimental: requires -Dpost-quantum=true -Dexperimental-crypto=true
     /// Max retry attempts
     max_retries: u32 = 3,
     /// Connection keep-alive duration in seconds
@@ -282,12 +282,13 @@ pub const DoQClient = struct {
         self.stats.queries_sent += 1;
         self.stats.bytes_sent += query_data.len;
 
-        // Get stream 0 for DoQ (RFC 9250)
-        const stream = try self.connection.?.openStream(0);
-        defer stream.close();
+        // RFC 9250: Create a new stream for each DNS query
+        // Each query-response pair uses a separate bidirectional stream
+        const stream = try self.connection.?.createStream(.client_bidirectional);
+        defer stream.close() catch {};
 
-        // Send query
-        try stream.write(query_data);
+        // Send query with FIN flag (complete message on this stream)
+        _ = try stream.write(query_data, true);
 
         std.log.debug("DoQ: Sent {} byte query for '{s}'", .{ query_data.len, query_msg.questions[0].name });
 

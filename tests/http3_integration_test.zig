@@ -387,6 +387,10 @@ test "integration: static middleware serves files" {
 
     var request = Http3.Request.init(allocator, 30, "conn-static");
     defer request.deinit();
+
+    // Set middleware config from server (normally done by processRequest)
+    request.middleware_config = @ptrCast(&server.middleware_config);
+
     const headers = try buildHeaderFields(allocator, &.{
         .{ .name = ":method", .value = "GET" },
         .{ .name = ":path", .value = "/index.txt" },

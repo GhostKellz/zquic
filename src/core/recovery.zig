@@ -367,14 +367,14 @@ pub const LossRecovery = struct {
             }
         }
 
-        // Process for congestion control
+        // Process the ack in the packet space FIRST to update largest_acked_time
+        space.onAckReceived(acked_ranges, ack_delay, now);
+
+        // Then process for congestion control using the updated state
         self.congestion_controller.onAckReceived(acked_bytes, space.largest_acked_time, now);
 
         // Reset PTO count on successful ack
         self.pto_count = 0;
-
-        // Process the ack in the packet space
-        space.onAckReceived(acked_ranges, ack_delay, now);
     }
 
     /// Detect persistent congestion

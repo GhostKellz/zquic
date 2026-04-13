@@ -178,6 +178,11 @@ pub const Request = struct {
     context: RequestContext,
     allocator: std.mem.Allocator,
 
+    /// Middleware configuration pointer (set by server before routing).
+    /// Type is *const anyopaque to avoid circular dependency with middleware.zig.
+    /// Cast to *const MiddlewareConfig in middleware handlers.
+    middleware_config: ?*const anyopaque = null,
+
     const Self = @This();
 
     pub fn init(allocator: std.mem.Allocator, stream_id: u64, connection_id: []const u8) Self {
@@ -192,6 +197,7 @@ pub const Request = struct {
             .body = .empty,
             .context = RequestContext.init(stream_id, connection_id),
             .allocator = allocator,
+            .middleware_config = null,
         };
     }
 
@@ -278,6 +284,16 @@ pub const Request = struct {
             return std.fmt.parseInt(usize, length_str, 10) catch null;
         }
         return null;
+    }
+
+    /// Check if the request method typically expects a body.
+    /// POST, PUT, PATCH typically have bodies.
+    /// GET, HEAD, DELETE, OPTIONS, CONNECT typically don't.
+    pub fn expectsBody(self: *const Self) bool {
+        return switch (self.method) {
+            .POST, .PUT, .PATCH => true,
+            .GET, .HEAD, .DELETE, .OPTIONS, .CONNECT => false,
+        };
     }
 };
 

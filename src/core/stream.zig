@@ -1,6 +1,6 @@
 //! QUIC Stream with async I/O support
 //!
-//! ZQUIC v0.9.4 - Stream management without external dependencies
+//! Stream management without external dependencies
 
 const std = @import("std");
 const Error = @import("../utils/error.zig");
@@ -164,6 +164,26 @@ pub const SuperStream = struct {
         try self.updateActivityTimestamp();
 
         return copy_len;
+    }
+
+    /// Read data from stream with timeout
+    /// Polls for data until timeout_ms milliseconds have elapsed
+    /// Returns error.Timeout if no data received within the timeout period
+    pub fn readWithTimeout(self: *Self, buffer: []u8, timeout_ms: u32) !usize {
+        const deadline_us = Time.nowMicros() + @as(i64, timeout_ms) * 1000;
+        const poll_interval_ns: u64 = 1_000_000; // 1ms polling interval
+
+        while (Time.nowMicros() < deadline_us) {
+            const bytes_read = try self.read(buffer);
+            if (bytes_read > 0) {
+                return bytes_read;
+            }
+
+            // Small sleep to avoid busy-waiting
+            Time.sleep(poll_interval_ns);
+        }
+
+        return Error.ZquicError.Timeout;
     }
 
     /// Write data to stream

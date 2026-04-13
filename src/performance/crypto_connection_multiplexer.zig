@@ -48,7 +48,7 @@ pub const CryptoConnectionPoolConfig = struct {
 
     // Crypto-specific features
     enable_zero_rtt: bool = true,
-    enable_post_quantum: bool = true,
+    enable_post_quantum: bool = false, // Experimental: requires -Dpost-quantum=true -Dexperimental-crypto=true
     enable_connection_migration: bool = true,
     enable_priority_queuing: bool = true,
 
@@ -443,7 +443,9 @@ pub const CryptoConnectionMultiplexer = struct {
         }
 
         if (self.config.enable_post_quantum) {
-            // TODO: Initialize PQ-TLS context
+            // PQ-TLS is not yet wired into the multiplexer.
+            // Use pq_quic.zig or hybrid_pq_tls.zig directly for PQ key exchange.
+            std.log.warn("enable_post_quantum set but PQ-TLS is not wired into crypto_connection_multiplexer", .{});
         }
 
         // Enable requested protocol

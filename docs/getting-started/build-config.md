@@ -1,8 +1,8 @@
-# Build Configuration (v0.9.3)
+# Build Configuration (v0.9.9)
 
 ZQUIC ships with a small set of build flags that mirror the switches inside `build.zig`. Keeping this list tight makes migrating to Zig 0.16.0-dev straightforward.
 
-## 🧩 Feature Flags
+## Feature Flags
 
 | Flag | Default | Description |
 |------|---------|-------------|
@@ -10,28 +10,34 @@ ZQUIC ships with a small set of build flags that mirror the switches inside `bui
 | `-Ddoq[=bool]` | `true` | Build DNS-over-QUIC client/server support |
 | `-Dservices[=bool]` | `false` | Include GhostBridge, Wraith, CNS resolver, and service glue |
 | `-Dvpn[=bool]` | `false` | Build VPN helpers that depend on the services layer |
-| `-Dpost-quantum[=bool]` | `true` | Enable PQ handshakes via `zcrypto` (ML-KEM-768 + SLH-DSA) |
+| `-Dpost-quantum[=bool]` | `false` | Enable PQ handshakes via `zcrypto` (ML-KEM-768 + SLH-DSA) |
+| `-Dexperimental-crypto[=bool]` | `false` | Required for PQ features; enables experimental zcrypto APIs |
 | `-Dmonitoring[=bool]` | `false` | Compile monitoring/telemetry surfaces |
 | `-Dexamples[=bool]` | `true` | Produce runnable samples in `zig-out/bin/` |
 
+**Note**: Post-quantum cryptography requires both `-Dpost-quantum=true` AND `-Dexperimental-crypto=true`.
+
 > Tip: flags cascade. Disable `-Dservices` to shrink binaries automatically, regardless of VPN/monitoring settings.
 
-## 🚀 Common Build Profiles
+## Common Build Profiles
 
 ```bash
 # Minimal core stack (embedded)
-zig build -Dhttp3=false -Ddoq=false -Dservices=false -Dvpn=false -Dpost-quantum=false -Dexamples=false -Doptimize=ReleaseSmall
+zig build -Dhttp3=false -Ddoq=false -Dservices=false -Dvpn=false -Dexamples=false -Doptimize=ReleaseSmall
 
-# Web edge tier
-zig build -Dhttp3=true -Ddoq=true -Dpost-quantum=true -Dservices=false -Dvpn=false -Doptimize=ReleaseFast
+# Web edge tier (stable crypto only)
+zig build -Dhttp3=true -Ddoq=true -Dservices=false -Dvpn=false -Doptimize=ReleaseFast
 
-# Enterprise / Ghost default
-zig build  # enables HTTP/3, DoQ, PQ, monitoring off, services/vpn off by default
+# Default build (HTTP/3, DoQ, no PQ)
+zig build  # enables HTTP/3, DoQ; PQ disabled by default
 
-# Observability heavy build
-zig build -Dmonitoring=true -Dservices=true -Dpost-quantum=true -Doptimize=ReleaseSafe
+# With post-quantum crypto (experimental)
+zig build -Dpost-quantum=true -Dexperimental-crypto=true
 
-# Cross-compile to Windows with reduced surface
+# Observability build
+zig build -Dmonitoring=true -Dservices=true -Doptimize=ReleaseSafe
+
+# Cross-compile to Windows
 zig build -Dhttp3=false -Dservices=false -Dtarget=x86_64-windows -Doptimize=ReleaseSafe
 ```
 
@@ -97,8 +103,8 @@ The dependency inherits the same Zig toolchain, so ensure you are on `zig 0.16.0
 
 Actual size depends on target triple, optimization mode, and libc choice.
 
-## ➡️ Next Steps
+## Next Steps
 
 - Read `docs/getting-started/quick-start.md` to run the demos
 - Browse `examples/*.zig` for reference server/client setups
-- Track progress in `TODO.md` for the next sprint
+- See `CHANGELOG.md` for release notes

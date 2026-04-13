@@ -33,16 +33,18 @@ pub const FrameHeader = struct {
         var offset: usize = 0;
 
         // Parse frame type (variable-length integer)
-        const frame_type_result = parseVarintFrom(data, offset);
+        const frame_type_result = parseVarintFrom(data, offset) orelse {
+            // Incomplete varint - need more data
+            return Error.ZquicError.WouldBlock;
+        };
         const frame_type_val = frame_type_result.value;
         offset += frame_type_result.consumed;
 
         // Parse length (variable-length integer)
-        if (offset >= data.len) {
-            return Error.ZquicError.Http3Error;
-        }
-
-        const length_result = parseVarintFrom(data, offset);
+        const length_result = parseVarintFrom(data, offset) orelse {
+            // Incomplete varint - need more data
+            return Error.ZquicError.WouldBlock;
+        };
         const length = length_result.value;
         offset += length_result.consumed;
 
@@ -164,14 +166,18 @@ pub const SettingsFrame = struct {
         var offset: usize = 0;
 
         while (offset < data.len) {
-            if (offset + 1 >= data.len) break;
-
-            const id_result = parseVarintFrom(data, offset);
+            // Parse setting identifier
+            const id_result = parseVarintFrom(data, offset) orelse {
+                // Incomplete - stop parsing, return what we have
+                break;
+            };
             offset += id_result.consumed;
 
-            if (offset >= data.len) break;
-
-            const value_result = parseVarintFrom(data, offset);
+            // Parse setting value
+            const value_result = parseVarintFrom(data, offset) orelse {
+                // Incomplete - stop parsing, return what we have
+                break;
+            };
             offset += value_result.consumed;
 
             try settings.addSetting(allocator, id_result.value, value_result.value);
@@ -278,12 +284,22 @@ pub const Frame = struct {
     }
 };
 
-/// Variable-length integer parsing (simplified)
-fn parseVarintFrom(data: []const u8, offset: usize) struct { value: u64, consumed: usize } {
-    if (offset >= data.len) return .{ .value = 0, .consumed = 0 };
+/// Variable-length integer parsing result.
+/// Returns null if data is incomplete (need more bytes).
+/// Returns value and consumed count on success.
+const VarintResult = struct {
+    value: u64,
+    consumed: usize,
+};
+
+/// Variable-length integer parsing per RFC 9000.
+/// Returns null if insufficient data is available (incomplete varint).
+/// Callers should buffer data and retry when more arrives.
+fn parseVarintFrom(data: []const u8, offset: usize) ?VarintResult {
+    if (offset >= data.len) return null; // Need more data
 
     const first_byte = data[offset];
-    const length = switch (first_byte >> 6) {
+    const length: usize = switch (first_byte >> 6) {
         0 => 1,
         1 => 2,
         2 => 4,
@@ -291,9 +307,10 @@ fn parseVarintFrom(data: []const u8, offset: usize) struct { value: u64, consume
         else => unreachable,
     };
 
-    if (offset + length > data.len) return .{ .value = 0, .consumed = 0 };
+    // Check if we have enough data for the full varint
+    if (offset + length > data.len) return null; // Incomplete - need more data
 
-    var value: u64 = first_byte & 0x3f; // Remove length bits
+    var value: u64 = first_byte & 0x3f; // Remove length prefix bits
 
     var i: usize = 1;
     while (i < length) : (i += 1) {

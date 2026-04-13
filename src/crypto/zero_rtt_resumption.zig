@@ -141,7 +141,7 @@ pub const ZeroRttSessionManager = struct {
         };
 
         // Generate secure random ticket ID
-        try zcrypto.rand.bytes(&ticket.ticket_id);
+        zcrypto.rand.fill(&ticket.ticket_id);
 
         // Store session if we have space
         if (self.sessions.count() < self.max_sessions) {
@@ -305,7 +305,7 @@ pub fn testZeroRtt() !void {
 
     // Create resumption secret
     var resumption_secret: [32]u8 = undefined;
-    try zcrypto.rand.bytes(&resumption_secret);
+    zcrypto.rand.fill(&resumption_secret);
 
     // Create session ticket
     const ticket = try session_mgr.createSessionTicket(resumption_secret);

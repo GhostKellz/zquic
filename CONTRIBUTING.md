@@ -41,7 +41,7 @@ Integration tests that depend on networking should tolerate offline environments
 - Update `README.md` when public APIs, build flags, or positioning changes
 - Keep `docs/getting-started/build-config.md` aligned with `build.zig`
 - Add architecture notes to `docs/architecture/overview.md` for new subsystems
-- Reflect roadmap changes in `TODO.md`
+- Reflect roadmap changes in `tasks/todo.md` or `CHANGELOG.md`
 
 ## 6. Commit & PR Checklist
 - [ ] Clear title that describes the change scope

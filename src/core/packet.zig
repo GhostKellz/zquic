@@ -63,6 +63,7 @@ pub const PacketHeader = struct {
     packet_number: u64,
     packet_number_len: u8,
     token: ?[]const u8, // for Initial packets
+    header_length: usize, // number of bytes consumed by the header
 
     const Self = @This();
 
@@ -146,6 +147,7 @@ pub const PacketHeader = struct {
             .packet_number = 0, // Would be parsed from protected header
             .packet_number_len = 1,
             .token = null,
+            .header_length = pos, // Track how many bytes were consumed
         };
     }
 
@@ -172,6 +174,7 @@ pub const PacketHeader = struct {
             .packet_number = 0, // Would be parsed from protected header
             .packet_number_len = 1,
             .token = null,
+            .header_length = pos, // Track how many bytes were consumed
         };
     }
 
@@ -252,6 +255,7 @@ test "packet header serialization" {
         .packet_number = 0,
         .packet_number_len = 1,
         .token = null,
+        .header_length = 0, // Not relevant for serialization test
     };
 
     try header.serialize(&writer);

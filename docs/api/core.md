@@ -1,6 +1,6 @@
 # Core API Reference
 
-Complete API documentation for ZQUIC v0.9.6 core modules.
+Complete API documentation for ZQUIC core modules.
 
 ## 📋 Quick Reference
 
@@ -17,7 +17,7 @@ const Config = zquic.Config;
 const PacketCrypto = zquic.PacketCrypto;
 const TlsContext = zquic.TlsContext;
 
-// SSH/QUIC types (v0.9.6)
+// SSH/QUIC types
 const SshQuicSecrets = zquic.SshQuic.SshQuicSecrets;
 const SshQuicContext = zquic.SshQuic.SshQuicContext;
 
@@ -264,7 +264,7 @@ pub const PacketCrypto = struct {
 };
 ```
 
-### SSH/QUIC Integration (v0.9.6)
+### SSH/QUIC Integration
 
 SSH secret injection for QUIC connections, implementing [draft-denis-ssh-quic](https://datatracker.ietf.org/doc/draft-denis-ssh-quic/).
 

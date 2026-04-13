@@ -45,25 +45,51 @@ pub const EnhancedCipherSuite = enum {
     pub fn getHashFunction(self: @This()) type {
         return switch (self) {
             .aes_128_gcm_sha256, .chacha20_poly1305_sha256 => hash.Sha256,
+            // zcrypto v1.0.1 now exports Sha384
             .aes_256_gcm_sha384 => hash.Sha384,
+        };
+    }
+
+    /// Get the hash size for this cipher suite
+    pub fn getHashSize(self: @This()) u32 {
+        return switch (self) {
+            .aes_128_gcm_sha256, .chacha20_poly1305_sha256 => 32,
+            .aes_256_gcm_sha384 => 48,
         };
     }
 };
 
-/// HKDF-based key derivation using zcrypto
+/// HKDF-based key derivation using std.crypto
+/// Uses std.crypto.kdf.hkdf which provides HKDF per RFC 5869
 pub const Hkdf = struct {
-    /// HKDF-Extract function
+    /// HKDF-Extract function: (salt, IKM) -> PRK
     pub fn extract(comptime HashType: type, salt: []const u8, ikm: []const u8, prk: []u8) void {
-        // Use zcrypto's HKDF implementation
-        kdf.hkdf_extract(HashType, salt, ikm, prk);
+        // Map zcrypto hash types to std.crypto HKDF
+        const HkdfType = getHkdfType(HashType);
+        const extracted = HkdfType.extract(salt, ikm);
+        @memcpy(prk, &extracted);
     }
 
-    /// HKDF-Expand function
+    /// HKDF-Expand function: (PRK, info) -> OKM
     pub fn expand(comptime HashType: type, prk: []const u8, info: []const u8, okm: []u8) !void {
-        // Use zcrypto's HKDF implementation
-        kdf.hkdf_expand(HashType, prk, info, okm) catch {
-            return Error.ZquicError.CryptoError;
-        };
+        const HkdfType = getHkdfType(HashType);
+        const prk_len = HkdfType.prk_length;
+        if (prk.len < prk_len) return Error.ZquicError.CryptoError;
+        HkdfType.expand(okm, info, prk[0..prk_len].*);
+    }
+
+    /// Map zcrypto/hash types to std.crypto HKDF types
+    fn getHkdfType(comptime HashType: type) type {
+        // Handle both zcrypto.hash and std.crypto.hash types
+        // zcrypto v1.0.1 now exports Sha384
+        if (HashType == hash.Sha256 or HashType == std.crypto.hash.sha2.Sha256) {
+            return std.crypto.kdf.hkdf.HkdfSha256;
+        } else if (HashType == hash.Sha384 or HashType == std.crypto.hash.sha2.Sha384) {
+            // Use HmacSha384 to construct the HKDF type
+            return std.crypto.kdf.hkdf.Hkdf(std.crypto.auth.hmac.sha2.HmacSha384);
+        } else {
+            @compileError("Unsupported hash type for HKDF");
+        }
     }
 };
 
@@ -112,27 +138,33 @@ pub const EnhancedCryptoKeys = struct {
 
     /// Derive keys from a master secret using HKDF
     pub fn deriveFromSecret(self: *Self, master_secret: []const u8, label: []const u8, context: []const u8) !void {
-        const HashType = self.cipher_suite.getHashFunction();
-
-        // HKDF-Extract
-        var prk: [HashType.digest_length]u8 = undefined;
-        Hkdf.extract(HashType, "", master_secret, &prk);
-
-        // HKDF-Expand for each key
+        // Build HKDF labels
         const info_key = try self.buildHkdfLabel(label, "key", context, self.key.len);
         defer self.allocator.free(info_key);
-        try Hkdf.expand(HashType, &prk, info_key, self.key);
-
         const info_iv = try self.buildHkdfLabel(label, "iv", context, self.iv.len);
         defer self.allocator.free(info_iv);
-        try Hkdf.expand(HashType, &prk, info_iv, self.iv);
-
         const info_hp = try self.buildHkdfLabel(label, "hp", context, self.header_protection_key.len);
         defer self.allocator.free(info_hp);
-        try Hkdf.expand(HashType, &prk, info_hp, self.header_protection_key);
 
-        // Copy the derived secret
-        @memcpy(self.secret, prk[0..@min(self.secret.len, prk.len)]);
+        // Runtime dispatch based on cipher suite
+        switch (self.cipher_suite) {
+            .aes_128_gcm_sha256, .chacha20_poly1305_sha256 => {
+                var prk: [32]u8 = undefined;
+                Hkdf.extract(hash.Sha256, "", master_secret, &prk);
+                try Hkdf.expand(hash.Sha256, &prk, info_key, self.key);
+                try Hkdf.expand(hash.Sha256, &prk, info_iv, self.iv);
+                try Hkdf.expand(hash.Sha256, &prk, info_hp, self.header_protection_key);
+                @memcpy(self.secret, prk[0..@min(self.secret.len, prk.len)]);
+            },
+            .aes_256_gcm_sha384 => {
+                var prk: [48]u8 = undefined;
+                Hkdf.extract(std.crypto.hash.sha2.Sha384, "", master_secret, &prk);
+                try Hkdf.expand(std.crypto.hash.sha2.Sha384, &prk, info_key, self.key);
+                try Hkdf.expand(std.crypto.hash.sha2.Sha384, &prk, info_iv, self.iv);
+                try Hkdf.expand(std.crypto.hash.sha2.Sha384, &prk, info_hp, self.header_protection_key);
+                @memcpy(self.secret, prk[0..@min(self.secret.len, prk.len)]);
+            },
+        }
     }
 
     /// Build HKDF label according to TLS 1.3 specification
@@ -147,7 +179,7 @@ pub const EnhancedCryptoKeys = struct {
         var offset: usize = 0;
 
         // Length (2 bytes, big-endian)
-        std.mem.writeInt(u16, hkdf_label[offset .. offset + 2], @intCast(length), .big);
+        std.mem.writeInt(u16, hkdf_label[offset..][0..2], @intCast(length), .big);
         offset += 2;
 
         // Label length and label
@@ -169,26 +201,45 @@ pub const EnhancedCryptoKeys = struct {
 pub const EnhancedAead = struct {
     /// Encrypt data using AES-GCM
     pub fn encryptAesGcm(key: []const u8, iv: []const u8, plaintext: []const u8, aad: []const u8, allocator: std.mem.Allocator) ![]u8 {
-        const ciphertext = try allocator.alloc(u8, plaintext.len + 16); // +16 for auth tag
-
         if (key.len == 16) {
-            // AES-128-GCM using zcrypto
-            symmetric.aes_128_gcm_encrypt(plaintext, aad, key[0..16], iv[0..12], ciphertext) catch {
-                allocator.free(ciphertext);
+            // AES-128-GCM using zcrypto v1.0.0 API
+            const result = symmetric.encryptAes128Gcm(
+                allocator,
+                key[0..16].*,
+                iv[0..12].*,
+                plaintext,
+                aad,
+            ) catch {
                 return Error.ZquicError.CryptoError;
             };
+            defer result.deinit();
+
+            // Combine ciphertext and tag
+            const combined = try allocator.alloc(u8, result.data.len + 16);
+            @memcpy(combined[0..result.data.len], result.data);
+            @memcpy(combined[result.data.len..][0..16], &result.tag);
+            return combined;
         } else if (key.len == 32) {
-            // AES-256-GCM using zcrypto
-            symmetric.aes_256_gcm_encrypt(plaintext, aad, key[0..32], iv[0..12], ciphertext) catch {
-                allocator.free(ciphertext);
+            // AES-256-GCM using zcrypto v1.0.0 API
+            const result = symmetric.encryptAes256Gcm(
+                allocator,
+                key[0..32].*,
+                iv[0..12].*,
+                plaintext,
+                aad,
+            ) catch {
                 return Error.ZquicError.CryptoError;
             };
+            defer result.deinit();
+
+            // Combine ciphertext and tag
+            const combined = try allocator.alloc(u8, result.data.len + 16);
+            @memcpy(combined[0..result.data.len], result.data);
+            @memcpy(combined[result.data.len..][0..16], &result.tag);
+            return combined;
         } else {
-            allocator.free(ciphertext);
             return Error.ZquicError.CryptoError;
         }
-
-        return ciphertext;
     }
 
     /// Decrypt data using AES-GCM
@@ -196,41 +247,74 @@ pub const EnhancedAead = struct {
         if (ciphertext.len < 16) return Error.ZquicError.CryptoError;
 
         const plaintext_len = ciphertext.len - 16;
-        const plaintext = try allocator.alloc(u8, plaintext_len);
+
+        // Extract tag from end of ciphertext
+        var tag: [16]u8 = undefined;
+        @memcpy(&tag, ciphertext[plaintext_len..][0..16]);
 
         if (key.len == 16) {
-            // AES-128-GCM using zcrypto
-            symmetric.aes_128_gcm_decrypt(ciphertext, aad, key[0..16], iv[0..12], plaintext) catch {
-                allocator.free(plaintext);
+            // AES-128-GCM using zcrypto v1.0.0 API
+            const result = symmetric.decryptAes128Gcm(
+                allocator,
+                key[0..16].*,
+                iv[0..12].*,
+                ciphertext[0..plaintext_len],
+                tag,
+                aad,
+            ) catch {
                 return Error.ZquicError.CryptoError;
             };
+
+            if (result) |plaintext| {
+                return plaintext;
+            } else {
+                return Error.ZquicError.CryptoError;
+            }
         } else if (key.len == 32) {
-            // AES-256-GCM using zcrypto
-            symmetric.aes_256_gcm_decrypt(ciphertext, aad, key[0..32], iv[0..12], plaintext) catch {
-                allocator.free(plaintext);
+            // AES-256-GCM using zcrypto v1.0.0 API
+            const result = symmetric.decryptAes256Gcm(
+                allocator,
+                key[0..32].*,
+                iv[0..12].*,
+                ciphertext[0..plaintext_len],
+                tag,
+                aad,
+            ) catch {
                 return Error.ZquicError.CryptoError;
             };
+
+            if (result) |plaintext| {
+                return plaintext;
+            } else {
+                return Error.ZquicError.CryptoError;
+            }
         } else {
-            allocator.free(plaintext);
             return Error.ZquicError.CryptoError;
         }
-
-        return plaintext;
     }
 
     /// Encrypt data using ChaCha20-Poly1305
     pub fn encryptChaCha20Poly1305(key: []const u8, iv: []const u8, plaintext: []const u8, aad: []const u8, allocator: std.mem.Allocator) ![]u8 {
         if (key.len != 32 or iv.len != 12) return Error.ZquicError.CryptoError;
 
-        const ciphertext = try allocator.alloc(u8, plaintext.len + 16); // +16 for auth tag
-
-        // ChaCha20-Poly1305 using zcrypto
-        symmetric.chacha20_poly1305_encrypt(plaintext, aad, key[0..32], iv[0..12], ciphertext) catch {
-            allocator.free(ciphertext);
+        // ChaCha20-Poly1305 using zcrypto v1.0.0 API
+        const result = symmetric.encryptChaCha20Poly1305(
+            allocator,
+            key[0..32].*,
+            iv[0..12].*,
+            plaintext,
+            aad,
+        ) catch {
             return Error.ZquicError.CryptoError;
         };
+        defer result.deinit();
 
-        return ciphertext;
+        // Combine ciphertext and tag into single buffer
+        const combined = try allocator.alloc(u8, result.data.len + 16);
+        @memcpy(combined[0..result.data.len], result.data);
+        @memcpy(combined[result.data.len..][0..16], &result.tag);
+
+        return combined;
     }
 
     /// Decrypt data using ChaCha20-Poly1305
@@ -238,15 +322,28 @@ pub const EnhancedAead = struct {
         if (key.len != 32 or iv.len != 12 or ciphertext.len < 16) return Error.ZquicError.CryptoError;
 
         const plaintext_len = ciphertext.len - 16;
-        const plaintext = try allocator.alloc(u8, plaintext_len);
 
-        // ChaCha20-Poly1305 using zcrypto
-        symmetric.chacha20_poly1305_decrypt(ciphertext, aad, key[0..32], iv[0..12], plaintext) catch {
-            allocator.free(plaintext);
+        // Extract tag from end of ciphertext
+        var tag: [16]u8 = undefined;
+        @memcpy(&tag, ciphertext[plaintext_len..][0..16]);
+
+        // ChaCha20-Poly1305 using zcrypto v1.0.0 API
+        const result = symmetric.decryptChaCha20Poly1305(
+            allocator,
+            key[0..32].*,
+            iv[0..12].*,
+            ciphertext[0..plaintext_len],
+            tag,
+            aad,
+        ) catch {
             return Error.ZquicError.CryptoError;
         };
 
-        return plaintext;
+        if (result) |plaintext| {
+            return plaintext;
+        } else {
+            return Error.ZquicError.CryptoError;
+        }
     }
 };
 
@@ -295,38 +392,69 @@ pub const EnhancedHeaderProtection = struct {
     }
 
     /// Apply header protection to packet
+    /// The packet number length is determined from header[0] bits 0-1 (pn_len = bits + 1)
+    /// For protection: read pn_length before masking, then apply mask
     pub fn protectHeader(cipher_suite: EnhancedCipherSuite, hp_key: []const u8, header: []u8, sample: []const u8) !void {
+        if (header.len == 0) return Error.ZquicError.CryptoError;
+
         const mask = switch (cipher_suite) {
             .aes_128_gcm_sha256, .aes_256_gcm_sha384 => try generateAesMask(hp_key, sample),
             .chacha20_poly1305_sha256 => try generateChaCha20Mask(hp_key, sample),
         };
 
+        // Determine packet number length from header flags (before protection)
+        // Bits 0-1 encode (pn_length - 1), so values 0-3 mean 1-4 bytes
+        const pn_length: usize = (header[0] & 0x03) + 1;
+
+        // Verify header is long enough for the packet number
+        if (header.len < pn_length) return Error.ZquicError.CryptoError;
+        const pn_offset = header.len - pn_length;
+
         // Apply mask to first byte (protect flags)
-        if (header.len > 0) {
-            if ((header[0] & 0x80) != 0) {
-                // Long header: protect lower 4 bits
-                header[0] ^= mask[0] & 0x0f;
-            } else {
-                // Short header: protect lower 5 bits
-                header[0] ^= mask[0] & 0x1f;
-            }
+        if ((header[0] & 0x80) != 0) {
+            // Long header: protect lower 4 bits
+            header[0] ^= mask[0] & 0x0f;
+        } else {
+            // Short header: protect lower 5 bits
+            header[0] ^= mask[0] & 0x1f;
         }
 
-        // Apply mask to packet number bytes
-        const pn_offset = header.len - 4; // Simplified: assume 4-byte packet number at end
-        if (header.len >= 4) {
-            for (0..4) |i| {
-                if (pn_offset + i < header.len) {
-                    header[pn_offset + i] ^= mask[1 + i];
-                }
-            }
+        // Apply mask to packet number bytes (only as many as indicated by pn_length)
+        for (0..pn_length) |i| {
+            header[pn_offset + i] ^= mask[1 + i];
         }
     }
 
     /// Remove header protection from packet
+    /// For unprotection: first unmask byte 0 to reveal pn_length, then unmask pn bytes
     pub fn unprotectHeader(cipher_suite: EnhancedCipherSuite, hp_key: []const u8, header: []u8, sample: []const u8) !void {
-        // Header protection is symmetric
-        return protectHeader(cipher_suite, hp_key, header, sample);
+        if (header.len == 0) return Error.ZquicError.CryptoError;
+
+        const mask = switch (cipher_suite) {
+            .aes_128_gcm_sha256, .aes_256_gcm_sha384 => try generateAesMask(hp_key, sample),
+            .chacha20_poly1305_sha256 => try generateChaCha20Mask(hp_key, sample),
+        };
+
+        // First, unmask the first byte to reveal the packet number length
+        if ((header[0] & 0x80) != 0) {
+            // Long header: unprotect lower 4 bits
+            header[0] ^= mask[0] & 0x0f;
+        } else {
+            // Short header: unprotect lower 5 bits
+            header[0] ^= mask[0] & 0x1f;
+        }
+
+        // Now read the unmasked packet number length
+        const pn_length: usize = (header[0] & 0x03) + 1;
+
+        // Verify header is long enough for the packet number
+        if (header.len < pn_length) return Error.ZquicError.CryptoError;
+        const pn_offset = header.len - pn_length;
+
+        // Unmask the packet number bytes
+        for (0..pn_length) |i| {
+            header[pn_offset + i] ^= mask[1 + i];
+        }
     }
 };
 
@@ -357,8 +485,8 @@ pub const EnhancedTlsContext = struct {
         };
 
         // Generate random values using zcrypto
-        random.fillBytes(&context.client_random);
-        random.fillBytes(&context.server_random);
+        random.fill(&context.client_random);
+        random.fill(&context.server_random);
 
         return context;
     }
@@ -375,14 +503,25 @@ pub const EnhancedTlsContext = struct {
         var salt_bytes: [20]u8 = undefined;
         _ = try std.fmt.hexToBytes(&salt_bytes, initial_salt);
 
-        // Derive initial secret
-        const HashType = self.cipher_suite.getHashFunction();
-        var initial_secret: [HashType.digest_length]u8 = undefined;
-        Hkdf.extract(HashType, &salt_bytes, connection_id, &initial_secret);
-
-        // Create initial keys
+        // Create initial keys first
         self.initial_keys = try EnhancedCryptoKeys.init(self.allocator, self.cipher_suite);
-        try self.initial_keys.?.deriveFromSecret(&initial_secret, "quic", "");
+
+        // Derive initial secret based on cipher suite (runtime dispatch)
+        // Use fixed buffer for largest hash size (SHA-384 = 48 bytes)
+        var initial_secret: [48]u8 = undefined;
+        const secret_len: usize = switch (self.cipher_suite) {
+            .aes_128_gcm_sha256, .chacha20_poly1305_sha256 => blk: {
+                Hkdf.extract(hash.Sha256, &salt_bytes, connection_id, initial_secret[0..32]);
+                break :blk 32;
+            },
+            .aes_256_gcm_sha384 => blk: {
+                // zcrypto v1.0.1 now exports Sha384
+                Hkdf.extract(hash.Sha384, &salt_bytes, connection_id, initial_secret[0..48]);
+                break :blk 48;
+            },
+        };
+
+        try self.initial_keys.?.deriveFromSecret(initial_secret[0..secret_len], "quic", "");
     }
 
     /// Derive handshake keys

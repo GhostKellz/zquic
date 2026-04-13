@@ -19,6 +19,12 @@ pub const PQAuthentication = PostQuantum.PQAuthentication;
 // Assembly optimizations for high-performance crypto
 pub const Optimizations = @import("crypto/asm_optimizations.zig");
 
+// Re-export optimization types for convenience
+pub const CpuOptimizer = Optimizations.CpuOptimizer;
+pub const OptimizedBlake3 = Optimizations.OptimizedBlake3;
+pub const OptimizedChaCha20Poly1305 = Optimizations.OptimizedChaCha20Poly1305;
+pub const OptimizedPacketProcessor = Optimizations.OptimizedPacketProcessor;
+
 // PQ-specific configuration
 pub const PQConfig = struct {
     enable_hybrid_mode: bool = true, // Use ML-KEM + X25519 hybrid
@@ -39,22 +45,5 @@ pub fn deinit() void {
     // Clean up PQ-specific crypto state
 }
 
-// PQ crypto utilities
-pub const PQUtils = struct {
-    /// Generate a new PQ keypair
-    pub fn generateKeypair(allocator: std.mem.Allocator, algorithm: PQCipherSuite) !PQKeyExchange.PublicKeys {
-        _ = allocator;
-        _ = algorithm;
-        // Implementation would use zcrypto PQ functions
-        return undefined;
-    }
-
-    /// Perform PQ key exchange
-    pub fn keyExchange(allocator: std.mem.Allocator, private_key: []const u8, public_key: []const u8) ![]u8 {
-        _ = allocator;
-        _ = private_key;
-        _ = public_key;
-        // Implementation would use zcrypto PQ functions
-        return undefined;
-    }
-};
+// PQ crypto utilities - use PQKeyExchange and PQQuicContext directly
+// The real implementation lives in crypto/pq_quic.zig

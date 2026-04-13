@@ -2,7 +2,7 @@
 
 ## The Short Version
 
-zquic v0.9.3 has **one external dependency**: [zcrypto](https://github.com/ghostkellz/zcrypto) for cryptographic operations. That's it.
+ZQUIC has **one external dependency**: [zcrypto](https://github.com/ghostkellz/zcrypto) for cryptographic operations. That's it.
 
 We used to depend on zsync for async I/O, but that's gone. The async runtime is now built directly into zquic.
 
@@ -170,8 +170,8 @@ If you're building something that needs:
 
 ## Summary
 
-| Aspect | Before (v0.8.x) | After (v0.9.3) |
-|--------|-----------------|----------------|
+| Aspect | With zsync (legacy) | Current |
+|--------|---------------------|---------|
 | External deps | zsync + zcrypto | zcrypto only |
 | Async model | zsync executor | Built-in poll loop |
 | Timer handling | zsync timers | Native timer wheel |

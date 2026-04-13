@@ -56,6 +56,7 @@ pub const ZquicError = error{
     FlowControlError,
     StreamLimitError,
     StreamStateError,
+    StreamNotFound,
 
     // Crypto errors
     CryptoError,

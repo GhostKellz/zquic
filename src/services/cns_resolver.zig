@@ -34,7 +34,7 @@ pub const CnsResolverConfig = struct {
     /// Maximum cache size in MB
     cache_size_mb: u32 = 128,
     /// Enable post-quantum crypto
-    enable_post_quantum: bool = true,
+    enable_post_quantum: bool = false, // Experimental: requires -Dpost-quantum=true -Dexperimental-crypto=true
     /// Certificate path for TLS
     cert_path: []const u8 = "/etc/ssl/certs/cns-resolver.pem",
     /// Private key path for TLS
@@ -131,6 +131,15 @@ pub const DnsQuestion = struct {
         allocator.free(self.name);
     }
 
+    /// Deep clone this question, duplicating all allocated memory
+    pub fn clone(self: *const DnsQuestion, allocator: std.mem.Allocator) !DnsQuestion {
+        return DnsQuestion{
+            .name = try allocator.dupe(u8, self.name),
+            .qtype = self.qtype,
+            .qclass = self.qclass,
+        };
+    }
+
     pub fn serialize(self: *const DnsQuestion, writer: anytype) !void {
         try self.writeDomainName(writer, self.name);
         try writer.writeInt(u16, @intFromEnum(self.qtype), .big);
@@ -170,6 +179,17 @@ pub const DnsResourceRecord = struct {
     pub fn deinit(self: *const DnsResourceRecord, allocator: std.mem.Allocator) void {
         allocator.free(self.name);
         allocator.free(self.data);
+    }
+
+    /// Deep clone this resource record, duplicating all allocated memory
+    pub fn clone(self: *const DnsResourceRecord, allocator: std.mem.Allocator) !DnsResourceRecord {
+        return DnsResourceRecord{
+            .name = try allocator.dupe(u8, self.name),
+            .rtype = self.rtype,
+            .rclass = self.rclass,
+            .ttl = self.ttl,
+            .data = try allocator.dupe(u8, self.data),
+        };
     }
 
     pub fn serialize(self: *const DnsResourceRecord, writer: anytype) !void {
@@ -354,10 +374,10 @@ pub const CacheEntry = struct {
     expiry_time: i64,
     hit_count: u32,
 
-    pub fn init(allocator: std.mem.Allocator, question: DnsQuestion) CacheEntry {
-        _ = allocator;
+    /// Create a new cache entry, cloning the question to take ownership
+    pub fn init(allocator: std.mem.Allocator, question: *const DnsQuestion) !CacheEntry {
         return CacheEntry{
-            .question = question,
+            .question = try question.clone(allocator),
             .answers = .{},
             .expiry_time = 0,
             .hit_count = 0,
@@ -403,35 +423,50 @@ pub const DnsCache = struct {
         self.cache.deinit(self.allocator);
     }
 
-    pub fn get(self: *DnsCache, question: *const DnsQuestion) ?[]const DnsResourceRecord {
+    /// Get cached answers by cloning them. Caller owns returned list and must deinit.
+    /// Returns null if not found or expired.
+    pub fn get(self: *DnsCache, question: *const DnsQuestion, allocator: std.mem.Allocator) !?std.ArrayList(DnsResourceRecord) {
         self.mutex.lockShared();
         defer self.mutex.unlockShared();
 
         const key = self.hashQuestion(question);
         if (self.cache.getPtr(key)) |entry| {
             if (!entry.isExpired()) {
-                entry.hit_count += 1;
-                return entry.answers.items;
+                // Atomic increment of hit_count (safe under shared lock)
+                _ = @atomicRmw(u32, &entry.hit_count, .Add, 1, .monotonic);
+
+                // Clone answers while holding lock - caller owns the returned list
+                var cloned = std.ArrayList(DnsResourceRecord).init(allocator);
+                errdefer {
+                    for (cloned.items) |*a| a.deinit(allocator);
+                    cloned.deinit();
+                }
+                for (entry.answers.items) |*answer| {
+                    try cloned.append(try answer.clone(allocator));
+                }
+                return cloned;
             }
         }
 
         return null;
     }
 
-    pub fn put(self: *DnsCache, question: DnsQuestion, answers: []const DnsResourceRecord, ttl: u32) !void {
+    pub fn put(self: *DnsCache, question: *const DnsQuestion, answers: []const DnsResourceRecord, ttl: u32) !void {
         self.mutex.lock();
         defer self.mutex.unlock();
 
-        const key = self.hashQuestion(&question);
-        var entry = CacheEntry.init(self.allocator, question);
+        const key = self.hashQuestion(question);
+        var entry = try CacheEntry.init(self.allocator, question);
 
-        for (answers) |answer| {
-            try entry.answers.append(self.allocator, answer);
+        // Clone each answer to take ownership
+        for (answers) |*answer| {
+            const cloned = try answer.clone(self.allocator);
+            try entry.answers.append(self.allocator, cloned);
         }
 
         entry.expiry_time = Time.nowSeconds() + ttl;
 
-        try self.cache.put(key, entry);
+        try self.cache.put(self.allocator, key, entry);
     }
 
     fn hashQuestion(self: *DnsCache, question: *const DnsQuestion) u64 {
@@ -547,9 +582,13 @@ pub const CnsResolver = struct {
 
         // Check cache first
         if (self.config.enable_caching) {
-            if (self.dns_cache.get(question)) |cached_answers| {
+            if (try self.dns_cache.get(question, self.allocator)) |cached_answers| {
+                defer {
+                    for (cached_answers.items) |*a| a.deinit(self.allocator);
+                    cached_answers.deinit();
+                }
                 self.stats.cache_hits += 1;
-                return try self.buildResponse(question, cached_answers);
+                return try self.buildResponse(question, cached_answers.items);
             }
             self.stats.cache_misses += 1;
         }
@@ -559,7 +598,7 @@ pub const CnsResolver = struct {
 
         // Cache the result
         if (self.config.enable_caching and answers.len > 0) {
-            try self.dns_cache.put(question.*, answers, self.config.default_cache_ttl_s);
+            try self.dns_cache.put(question, answers, self.config.default_cache_ttl_s);
         }
 
         self.stats.successful_queries += 1;
@@ -619,12 +658,14 @@ pub const CnsResolver = struct {
         response.header.qdcount = 1;
         response.header.ancount = @intCast(answers.len);
 
-        // Add question
-        try response.questions.append(self.allocator, question.*);
+        // Add question (clone to take ownership)
+        const cloned_question = try question.clone(self.allocator);
+        try response.questions.append(self.allocator, cloned_question);
 
-        // Add answers
-        for (answers) |answer| {
-            try response.answers.append(self.allocator, answer);
+        // Add answers (clone each to take ownership)
+        for (answers) |*answer| {
+            const cloned_answer = try answer.clone(self.allocator);
+            try response.answers.append(self.allocator, cloned_answer);
         }
 
         return response;

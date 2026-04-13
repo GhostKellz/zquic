@@ -14,7 +14,7 @@ rm -rf zig-out 2>/dev/null || true
 
 # Release build
 echo "[2/3] Building release (ReleaseFast)..."
-zig build -Doptimize=ReleaseFast
+zig build -Doptimize=ReleaseFast "$@"
 
 # Report
 echo "[3/3] Release binaries:"

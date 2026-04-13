@@ -25,12 +25,12 @@
 //! | Feature | Build Flag | Size | Description |
 //! |---------|------------|------|-------------|
 //! | Core QUIC | Always included | ~1MB | RFC 9000 transport, streams, crypto |
-//! | HTTP/3 | `-Denable_http3=true` | +1MB | RFC 9114 web server support |
-//! | DoQ | `-Denable_doq=true` | +0.5MB | DNS-over-QUIC (RFC 9250) |
-//! | Services | `-Denable_services=true` | +2MB | GhostBridge gRPC, Wraith proxy |
-//! | VPN | `-Denable_vpn=true` | +0.5MB | Mesh VPN routing |
-//! | Post-Quantum | `-Denable_post_quantum=true` | +1.5MB | ML-KEM-768, SLH-DSA |
-//! | Monitoring | `-Denable_monitoring=true` | +0.2MB | Prometheus metrics |
+//! | HTTP/3 | `-Dhttp3=true` | +1MB | RFC 9114 web server support |
+//! | DoQ | `-Ddoq=true` | +0.5MB | DNS-over-QUIC (RFC 9250) |
+//! | Services | `-Dservices=true` | +2MB | GhostBridge gRPC, Wraith proxy |
+//! | VPN | `-Dvpn=true` | +0.5MB | Mesh VPN routing |
+//! | Post-Quantum | `-Dpost-quantum=true -Dexperimental-crypto=true` | +1.5MB | ML-KEM-768 (experimental) |
+//! | Monitoring | `-Dmonitoring=true` | +0.2MB | Prometheus metrics |
 //!
 //! ## Architecture
 //!
@@ -68,9 +68,9 @@
 //!
 //! ## Version Information
 //!
-//! - Library version: 0.9.5
+//! - Library version: 0.9.9
 //! - QUIC version: RFC 9000 (v1)
-//! - Zig compatibility: 0.16.0-dev+
+//! - Zig compatibility: 0.16.0-dev.3144+
 
 const std = @import("std");
 const build_options = @import("build_options");
@@ -391,8 +391,11 @@ pub const build_config = struct {
     /// True if GhostBridge/Wraith services are compiled in.
     pub const services_enabled = build_options.enable_services;
 
-    /// True if post-quantum cryptography is compiled in.
-    pub const post_quantum_enabled = build_options.enable_post_quantum;
+    /// True if post-quantum cryptography is fully enabled (requires both flags).
+    pub const post_quantum_enabled = build_options.enable_post_quantum and build_options.enable_experimental_crypto;
+
+    /// True if experimental crypto features are enabled.
+    pub const experimental_crypto_enabled = build_options.enable_experimental_crypto;
 
     /// True if Prometheus monitoring is compiled in.
     pub const monitoring_enabled = build_options.enable_monitoring;
@@ -404,7 +407,7 @@ pub const build_config = struct {
         std.debug.print("  DoQ: {}\n", .{doq_enabled});
         std.debug.print("  VPN: {}\n", .{vpn_enabled});
         std.debug.print("  Services: {}\n", .{services_enabled});
-        std.debug.print("  Post-Quantum: {}\n", .{post_quantum_enabled});
+        std.debug.print("  Post-Quantum: {} (experimental)\n", .{post_quantum_enabled});
         std.debug.print("  Monitoring: {}\n", .{monitoring_enabled});
     }
 };
@@ -463,7 +466,10 @@ pub fn getEnabledFeatures() []const []const u8 {
         if (build_options.enable_doq) list = list ++ &[_][]const u8{"doq"};
         if (build_options.enable_vpn) list = list ++ &[_][]const u8{"vpn"};
         if (build_options.enable_services) list = list ++ &[_][]const u8{"services"};
-        if (build_options.enable_post_quantum) list = list ++ &[_][]const u8{"post-quantum"};
+        // PQ requires both post-quantum AND experimental-crypto flags
+        if (build_options.enable_post_quantum and build_options.enable_experimental_crypto) {
+            list = list ++ &[_][]const u8{"post-quantum (experimental)"};
+        }
         if (build_options.enable_monitoring) list = list ++ &[_][]const u8{"monitoring"};
         break :blk list;
     };

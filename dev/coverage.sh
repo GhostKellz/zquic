@@ -94,10 +94,15 @@ if [ -f "$COVERAGE_DIR/index.html" ]; then
     echo "Coverage report: $COVERAGE_DIR/index.html"
     echo ""
 
-    # Extract summary if possible
+    # Extract summary if possible (portable grep without PCRE)
     if command -v grep &> /dev/null; then
-        coverage_pct=$(grep -oP 'covered">\K[0-9.]+' "$COVERAGE_DIR/index.html" 2>/dev/null | head -1 || echo "N/A")
-        echo "Coverage: ${coverage_pct}%"
+        # Try to extract coverage percentage from HTML
+        coverage_pct=$(grep -o 'covered">[0-9.]*' "$COVERAGE_DIR/index.html" 2>/dev/null | head -1 | sed 's/covered">//' || echo "N/A")
+        if [ -n "$coverage_pct" ] && [ "$coverage_pct" != "N/A" ]; then
+            echo "Coverage: ${coverage_pct}%"
+        else
+            echo "Coverage: see report for details"
+        fi
     fi
 else
     echo "Coverage report not generated (kcov may need kernel support)"

@@ -216,6 +216,9 @@ pub const CryptoKeys = struct {
     cipher_suite: CipherSuite,
     hash_algorithm: HashAlgorithm,
 
+    // Traffic secret (used for Finished message computation)
+    secret: []u8,
+
     // Key material
     client_write_key: []u8,
     server_write_key: []u8,
@@ -246,6 +249,7 @@ pub const CryptoKeys = struct {
         return Self{
             .cipher_suite = cipher_suite,
             .hash_algorithm = cipher_suite.getHashAlgorithm(),
+            .secret = try allocator.alloc(u8, hash_size),
             .client_write_key = try allocator.alloc(u8, key_len),
             .server_write_key = try allocator.alloc(u8, key_len),
             .client_write_iv = try allocator.alloc(u8, iv_len),
@@ -261,6 +265,7 @@ pub const CryptoKeys = struct {
 
     pub fn deinit(self: *Self) void {
         // Zero out sensitive key material
+        std.crypto.secureZero(u8, self.secret);
         std.crypto.secureZero(u8, self.client_write_key);
         std.crypto.secureZero(u8, self.server_write_key);
         std.crypto.secureZero(u8, self.client_write_iv);
@@ -274,6 +279,7 @@ pub const CryptoKeys = struct {
             self.allocator.free(pq_secret);
         }
 
+        self.allocator.free(self.secret);
         self.allocator.free(self.client_write_key);
         self.allocator.free(self.server_write_key);
         self.allocator.free(self.client_write_iv);
@@ -285,7 +291,9 @@ pub const CryptoKeys = struct {
 
     /// Derive keys from traffic secret using HKDF with ZCrypto
     pub fn deriveFromTrafficSecret(self: *Self, traffic_secret: []const u8, is_client: bool) !void {
-        _ = self.hash_algorithm.getHashSize(); // Acknowledge hash_len usage
+        // Store traffic secret for Finished message computation
+        const copy_len = @min(traffic_secret.len, self.secret.len);
+        @memcpy(self.secret[0..copy_len], traffic_secret[0..copy_len]);
 
         // Derive write key
         const write_key = if (is_client) self.client_write_key else self.server_write_key;
@@ -303,36 +311,51 @@ pub const CryptoKeys = struct {
         try self.hkdfExpandLabel(traffic_secret, "quic ku", &[_]u8{}, self.update_secret);
     }
 
-    /// HKDF-Expand-Label implementation using ZCrypto
+    /// HKDF-Expand-Label implementation using ZCrypto v1.0.0
+    /// Supports SHA-256 and SHA-384 for TLS 1.3 key derivation.
+    /// Blake3 is not supported for TLS key derivation in v0.9.9.
     fn hkdfExpandLabel(self: *Self, secret: []const u8, label: []const u8, context: []const u8, out: []u8) !void {
-        const full_label = try std.fmt.allocPrint(self.allocator, "tls13 {s}", .{label});
-        defer self.allocator.free(full_label);
-
-        // Create HkdfLabel structure
-        var hkdf_label: std.ArrayListUnmanaged(u8) = .empty;
-        defer hkdf_label.deinit(self.allocator);
-
-        // Length (2 bytes)
-        try hkdf_label.writer(self.allocator).writeIntBig(u16, @intCast(out.len));
-
-        // Label length and label
-        try hkdf_label.writer(self.allocator).writeIntBig(u8, @intCast(full_label.len));
-        try hkdf_label.writer(self.allocator).writeAll(full_label);
-
-        // Context length and context
-        try hkdf_label.writer(self.allocator).writeIntBig(u8, @intCast(context.len));
-        try hkdf_label.writer(self.allocator).writeAll(context);
-
-        // Perform HKDF-Expand using ZCrypto
         switch (self.hash_algorithm) {
             .sha256 => {
-                try zcrypto.kdf.hkdf_expand_sha256(secret, hkdf_label.items, out);
+                // Use zcrypto v1.0.0 hkdfExpandLabel which handles TLS 1.3 format internally
+                const derived = try zcrypto.kdf.hkdfExpandLabel(self.allocator, secret, label, context, out.len);
+                defer self.allocator.free(derived);
+                @memcpy(out, derived);
             },
             .sha384 => {
-                try zcrypto.kdf.hkdf_expand_sha384(secret, hkdf_label.items, out);
+                // SHA-384 uses std.crypto since zcrypto doesn't have SHA-384 HKDF
+                const Hkdf = std.crypto.kdf.hkdf.Hkdf(std.crypto.hash.sha2.Sha384);
+
+                // Construct TLS 1.3 HKDF-Label
+                const tls_prefix = "tls13 ";
+                const full_label_len = tls_prefix.len + label.len;
+                const hkdf_label_size = 2 + 1 + full_label_len + 1 + context.len;
+                const hkdf_label = try self.allocator.alloc(u8, hkdf_label_size);
+                defer self.allocator.free(hkdf_label);
+
+                var offset: usize = 0;
+                hkdf_label[offset] = @intCast((out.len >> 8) & 0xFF);
+                hkdf_label[offset + 1] = @intCast(out.len & 0xFF);
+                offset += 2;
+                hkdf_label[offset] = @intCast(full_label_len);
+                offset += 1;
+                @memcpy(hkdf_label[offset .. offset + tls_prefix.len], tls_prefix);
+                offset += tls_prefix.len;
+                @memcpy(hkdf_label[offset .. offset + label.len], label);
+                offset += label.len;
+                hkdf_label[offset] = @intCast(context.len);
+                offset += 1;
+                if (context.len > 0) {
+                    @memcpy(hkdf_label[offset .. offset + context.len], context);
+                }
+
+                // SHA-384 PRK is 48 bytes
+                if (secret.len < 48) return Error.ZquicError.CryptoError;
+                Hkdf.expand(out, hkdf_label, secret[0..48].*);
             },
             .blake3 => {
-                try zcrypto.kdf.hkdf_expand_blake3(secret, hkdf_label.items, out);
+                // Blake3 is not supported for TLS key derivation in v0.9.9
+                return Error.ZquicError.UnsupportedAlgorithm;
             },
             else => return Error.ZquicError.UnsupportedAlgorithm,
         }
@@ -398,25 +421,29 @@ pub const Certificate = struct {
     pub fn verify(self: *const Self, signature: []const u8, message: []const u8) !bool {
         switch (self.signature_algorithm) {
             .ed25519 => {
-                return try zcrypto.signatures.ed25519_verify(
-                    signature[0..64].*,
+                // Use zcrypto.asym stable API for Ed25519 verification
+                if (signature.len < 64 or self.public_key.len < 32) {
+                    return Error.ZquicError.CryptoError;
+                }
+                return zcrypto.asym.verifyEd25519(
                     message,
+                    signature[0..64].*,
                     self.public_key[0..32].*,
                 );
             },
             .ecdsa_secp256r1_sha256 => {
-                return try zcrypto.signatures.ecdsa_secp256r1_verify(
-                    signature,
-                    message,
-                    self.public_key,
-                );
+                // ECDSA-P256 verification - use std.crypto
+                if (signature.len < 64 or self.public_key.len < 33) {
+                    return Error.ZquicError.CryptoError;
+                }
+                // Note: Full ECDSA verification requires proper implementation
+                // For now, return unsupported until proper std.crypto integration
+                return Error.ZquicError.UnsupportedAlgorithm;
             },
             .dilithium3 => {
-                return try zcrypto.signatures.dilithium3_verify(
-                    signature,
-                    message,
-                    self.public_key,
-                );
+                // Dilithium3 is PQ and requires experimental-crypto
+                // Gate this behind build option check at runtime
+                return Error.ZquicError.UnsupportedAlgorithm;
             },
             else => return Error.ZquicError.UnsupportedAlgorithm,
         }
@@ -663,14 +690,15 @@ pub const ComprehensiveTlsContext = struct {
     fn generateKeyPair(self: *Self) !void {
         switch (self.key_exchange_algorithm) {
             .x25519 => {
-                const keypair = try zcrypto.key_exchange.x25519_generate_keypair();
+                // Use zcrypto.kex stable API for X25519
+                const keypair = try zcrypto.kex.X25519.generateKeypair();
                 self.private_key = try self.allocator.dupe(u8, &keypair.private_key);
                 self.public_key = try self.allocator.dupe(u8, &keypair.public_key);
             },
             .secp256r1 => {
-                const keypair = try zcrypto.key_exchange.secp256r1_generate_keypair();
-                self.private_key = try self.allocator.dupe(u8, &keypair.private_key);
-                self.public_key = try self.allocator.dupe(u8, &keypair.public_key);
+                // SECP256R1 key generation - use std.crypto
+                // Note: Full P-256 requires proper implementation
+                return Error.ZquicError.UnsupportedAlgorithm;
             },
             else => return Error.ZquicError.UnsupportedAlgorithm,
         }
@@ -678,16 +706,13 @@ pub const ComprehensiveTlsContext = struct {
 
     /// Generate post-quantum key pair
     fn generatePostQuantumKeyPair(self: *Self) !void {
+        // PQ key generation requires experimental-crypto flag
+        // These are gated at compile time via build_options
         switch (self.key_exchange_algorithm) {
-            .ml_kem_768 => {
-                const keypair = try zcrypto.key_exchange.ml_kem_768_generate_keypair();
-                self.pq_private_key = try self.allocator.dupe(u8, &keypair.private_key);
-                self.pq_public_key = try self.allocator.dupe(u8, &keypair.public_key);
-            },
-            .ml_kem_1024 => {
-                const keypair = try zcrypto.key_exchange.ml_kem_1024_generate_keypair();
-                self.pq_private_key = try self.allocator.dupe(u8, &keypair.private_key);
-                self.pq_public_key = try self.allocator.dupe(u8, &keypair.public_key);
+            .ml_kem_768, .ml_kem_1024 => {
+                // ML-KEM requires -Dpost-quantum=true -Dexperimental-crypto=true
+                // Return unsupported when not available
+                return Error.ZquicError.UnsupportedAlgorithm;
             },
             else => {}, // No post-quantum support for this algorithm
         }
@@ -875,77 +900,112 @@ pub const ComprehensiveTlsContext = struct {
         self.state = .wait_finished;
     }
 
-    /// Process Finished message
+    /// Process Finished message - supports both SHA-256 and SHA-384 based on cipher suite
     fn processFinished(self: *Self, message: []const u8) !void {
-        if (message.len < 32) {
+        const hash_size = self.cipher_suite.getHashAlgorithm().getHashSize();
+        if (message.len < hash_size) {
             return Error.ZquicError.CryptoError;
         }
 
-        // Compute expected verify_data using HMAC
-        // finished_key = HKDF-Expand-Label(base_key, "finished", "", Hash.length)
-        // verify_data = HMAC(finished_key, Transcript-Hash(Handshake Context, Certificate*, CertificateVerify*))
-
         // Get the handshake secret for computing finished key
-        const handshake_secret = self.handshake_keys.?.secret;
-
-        // Derive finished key using HKDF-Expand-Label
-        var finished_key: [32]u8 = undefined;
-        var hkdf_label: [64]u8 = undefined;
+        const handshake_keys = self.handshake_keys orelse return Error.ZquicError.CryptoError;
+        const handshake_secret = handshake_keys.secret;
+        if (handshake_secret.len < hash_size) return Error.ZquicError.CryptoError;
 
         // Build HKDF label: length (2) + "tls13 " + label + context
-        hkdf_label[0] = 0;
-        hkdf_label[1] = 32; // Hash length
         const label = "tls13 finished";
+        var hkdf_label: [64]u8 = undefined;
+        hkdf_label[0] = 0;
+        hkdf_label[1] = @intCast(hash_size);
         hkdf_label[2] = @intCast(label.len);
         @memcpy(hkdf_label[3 .. 3 + label.len], label);
         hkdf_label[3 + label.len] = 0; // Empty context
 
-        // HKDF-Expand
-        var hmac = std.crypto.auth.hmac.sha2.HmacSha256.init(&handshake_secret);
-        hmac.update(hkdf_label[0 .. 4 + label.len]);
-        hmac.update(&[_]u8{1}); // Counter
-        hmac.final(&finished_key);
+        // Compute based on hash algorithm
+        switch (self.cipher_suite.getHashAlgorithm()) {
+            .sha256 => {
+                // SHA-256 path
+                var finished_key: [32]u8 = undefined;
+                var secret_array: [32]u8 = undefined;
+                @memcpy(&secret_array, handshake_secret[0..32]);
+                var hmac = std.crypto.auth.hmac.sha2.HmacSha256.init(&secret_array);
+                hmac.update(hkdf_label[0 .. 4 + label.len]);
+                hmac.update(&[_]u8{1});
+                hmac.final(&finished_key);
 
-        // Compute transcript hash
-        var transcript_hash: [32]u8 = undefined;
-        var hasher = std.crypto.hash.sha2.Sha256.init(.{});
-        hasher.update(self.handshake_transcript.items);
-        hasher.final(&transcript_hash);
+                var transcript_hash: [32]u8 = undefined;
+                var hasher = std.crypto.hash.sha2.Sha256.init(.{});
+                hasher.update(self.handshake_transcript.items);
+                hasher.final(&transcript_hash);
 
-        // Compute expected verify_data = HMAC(finished_key, transcript_hash)
-        var expected_verify_data: [32]u8 = undefined;
-        var verify_hmac = std.crypto.auth.hmac.sha2.HmacSha256.init(&finished_key);
-        verify_hmac.update(&transcript_hash);
-        verify_hmac.final(&expected_verify_data);
+                var expected_verify_data: [32]u8 = undefined;
+                var verify_hmac = std.crypto.auth.hmac.sha2.HmacSha256.init(&finished_key);
+                verify_hmac.update(&transcript_hash);
+                verify_hmac.final(&expected_verify_data);
 
-        // Constant-time comparison of verify_data
-        if (!std.crypto.timing_safe.eql([32]u8, message[0..32].*, expected_verify_data)) {
-            return Error.ZquicError.CryptoError;
+                if (!std.crypto.timing_safe.eql([32]u8, message[0..32].*, expected_verify_data)) {
+                    return Error.ZquicError.CryptoError;
+                }
+                std.crypto.secureZero(u8, &finished_key);
+            },
+            .sha384 => {
+                // SHA-384 path
+                var finished_key: [48]u8 = undefined;
+                var secret_array: [48]u8 = undefined;
+                @memcpy(&secret_array, handshake_secret[0..48]);
+                var hmac = std.crypto.auth.hmac.sha2.HmacSha384.init(&secret_array);
+                hmac.update(hkdf_label[0 .. 4 + label.len]);
+                hmac.update(&[_]u8{1});
+                hmac.final(&finished_key);
+
+                var transcript_hash: [48]u8 = undefined;
+                var hasher = std.crypto.hash.sha2.Sha384.init(.{});
+                hasher.update(self.handshake_transcript.items);
+                hasher.final(&transcript_hash);
+
+                var expected_verify_data: [48]u8 = undefined;
+                var verify_hmac = std.crypto.auth.hmac.sha2.HmacSha384.init(&finished_key);
+                verify_hmac.update(&transcript_hash);
+                verify_hmac.final(&expected_verify_data);
+
+                if (!std.crypto.timing_safe.eql([48]u8, message[0..48].*, expected_verify_data)) {
+                    return Error.ZquicError.CryptoError;
+                }
+                std.crypto.secureZero(u8, &finished_key);
+            },
+            else => return Error.ZquicError.UnsupportedAlgorithm,
         }
-
-        // Securely zero the finished key
-        std.crypto.secureZero(u8, &finished_key);
 
         self.state = .connected;
     }
 
     /// Generate session ticket for 0-RTT
+    /// Format: random_state (32 bytes) || MAC (32 bytes)
     pub fn generateSessionTicket(self: *Self) !SessionTicket {
-        const ticket_data = try self.allocator.alloc(u8, 32);
-        defer self.allocator.free(ticket_data);
+        const shared = self.shared_secret orelse return Error.ZquicError.InvalidState;
 
-        // Generate random ticket
-        try zcrypto.random.secure_random(ticket_data);
+        // Generate random ticket state
+        var ticket_state: [32]u8 = undefined;
+        zcrypto.rand.fill(&ticket_state);
+
+        // Compute MAC over the ticket state using shared secret as key
+        var mac: [32]u8 = undefined;
+        var hmac = std.crypto.auth.hmac.sha2.HmacSha256.init(shared);
+        hmac.update(&ticket_state);
+        hmac.final(&mac);
+
+        // Combine state and MAC: ticket_state || MAC
+        const ticket_data = try self.allocator.alloc(u8, 64);
+        @memcpy(ticket_data[0..32], &ticket_state);
+        @memcpy(ticket_data[32..64], &mac);
 
         // Derive resumption secret
-        const resumption_secret = try self.allocator.alloc(u8, 32);
-        try zcrypto.kdf.hkdf_expand_sha256(
-            self.shared_secret orelse return Error.ZquicError.InvalidState,
-            "resumption",
-            resumption_secret,
-        );
+        const resumption_secret = try zcrypto.kdf.hkdfExpandLabel(self.allocator, shared, "resumption", "", 32);
+        defer self.allocator.free(resumption_secret);
 
-        return SessionTicket.init(self.allocator, ticket_data, resumption_secret, self.cipher_suite);
+        const ticket = try SessionTicket.init(self.allocator, ticket_data, resumption_secret, self.cipher_suite);
+        self.allocator.free(ticket_data);
+        return ticket;
     }
 
     /// Validate session ticket for 0-RTT
@@ -957,7 +1017,7 @@ pub const ComprehensiveTlsContext = struct {
 
         // Verify ticket authenticity using HMAC
         // The ticket should contain: encrypted_state || mac
-        const ticket_data = ticket.ticket_data orelse return false;
+        const ticket_data = ticket.ticket;
 
         if (ticket_data.len < 32) {
             return false; // Too short to contain MAC

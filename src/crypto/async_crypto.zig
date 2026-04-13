@@ -1,6 +1,6 @@
 //! Asynchronous Cryptographic Operations for ZQUIC
 //!
-//! ZQUIC v0.9.4 - Non-blocking cryptographic processing with real AEAD
+//! Non-blocking cryptographic processing with real AEAD
 
 const std = @import("std");
 const zcrypto = @import("zcrypto");

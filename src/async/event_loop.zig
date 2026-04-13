@@ -49,7 +49,8 @@ pub const EventLoop = struct {
         self.poll_fds.deinit(self.allocator);
     }
 
-    /// Register a file descriptor for events
+    /// Register a file descriptor for events.
+    /// If fd is already registered, updates the handler (idempotent).
     pub fn register(self: *Self, fd: posix.fd_t, events: u32, callback: EventCallback, user_data: ?*anyopaque) !void {
         const handler = EventHandler{
             .fd = fd,
@@ -58,26 +59,41 @@ pub const EventLoop = struct {
             .user_data = user_data,
         };
 
+        // Check if fd is already registered
+        const existing = self.handlers.get(fd);
         try self.handlers.put(self.allocator, fd, handler);
-        try self.poll_fds.append(self.allocator, .{
-            .fd = fd,
-            .events = @intCast(events),
-            .revents = 0,
-        });
+
+        if (existing == null) {
+            // Only add to poll_fds if this is a new registration
+            try self.poll_fds.append(self.allocator, .{
+                .fd = fd,
+                .events = @intCast(events),
+                .revents = 0,
+            });
+        } else {
+            // Update existing poll_fd entry
+            for (self.poll_fds.items) |*pfd| {
+                if (pfd.fd == fd) {
+                    pfd.events = @intCast(events);
+                    break;
+                }
+            }
+        }
     }
 
-    /// Unregister a file descriptor
+    /// Unregister a file descriptor.
+    /// Removes all occurrences from poll_fds (idempotent).
     pub fn unregister(self: *Self, fd: posix.fd_t) void {
         _ = self.handlers.remove(fd);
 
-        // Remove from poll_fds
-        var i: usize = 0;
-        while (i < self.poll_fds.items.len) {
+        // Remove ALL occurrences from poll_fds (iterate backward to handle swapRemove correctly)
+        var i: usize = self.poll_fds.items.len;
+        while (i > 0) {
+            i -= 1;
             if (self.poll_fds.items[i].fd == fd) {
                 _ = self.poll_fds.swapRemove(i);
-                break;
+                // Continue checking in case of duplicates
             }
-            i += 1;
         }
     }
 

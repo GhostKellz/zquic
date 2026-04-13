@@ -121,8 +121,11 @@ pub const UdpMultiplexer = struct {
             // Update last activity
             entry.last_activity = Time.nowMicros();
 
+            // Extract payload (data after the header)
+            const payload = packet_data[packet.header_length..];
+
             // Create packet and route to connection
-            const full_packet = Packet.Packet.init(packet, packet_data);
+            const full_packet = Packet.Packet.init(packet, payload);
             entry.connection.processPacket(full_packet) catch |err| {
                 std.log.warn("Failed to process packet for connection {}: {}", .{ conn_id_hash, err });
             };

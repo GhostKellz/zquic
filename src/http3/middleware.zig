@@ -1,6 +1,10 @@
 //! HTTP/3 middleware system
 //!
 //! Common middleware implementations for HTTP/3 server
+//!
+//! Middleware configuration is passed through the Request object to avoid
+//! process-global state and enable multiple server instances with different
+//! configurations to run concurrently.
 
 const std = @import("std");
 const Error = @import("../utils/error.zig");
@@ -11,8 +15,40 @@ const Router = @import("router.zig");
 const NextFn = Router.NextFn;
 pub const MiddlewareFn = Router.MiddlewareFn;
 
-var static_root_dir: []const u8 = "./public";
-var static_cache_control: []const u8 = "public, max-age=3600";
+/// Centralized middleware configuration passed through Request context.
+/// This replaces process-global variables to support multiple server instances.
+pub const MiddlewareConfig = struct {
+    // Auth configuration
+    auth_secret: ?[]const u8 = null,
+
+    // Rate limiting - pointer to server-owned instance
+    rate_limiter: ?*RateLimitMiddleware = null,
+
+    // Compression
+    compression_enabled: bool = false,
+    compression_min_size: usize = 1024,
+
+    // Security headers
+    security_hsts_enabled: bool = true,
+    security_hsts_max_age: u32 = 31536000,
+    security_csp: ?[]const u8 = null,
+    security_referrer_policy: []const u8 = "strict-origin-when-cross-origin",
+    security_permissions_policy: []const u8 = "geolocation=(), camera=(), microphone=(), payment=()",
+
+    // Static files
+    static_root_dir: []const u8 = "./public",
+    static_cache_control: []const u8 = "public, max-age=3600",
+};
+
+/// Get middleware config from request, casting from anyopaque.
+/// Returns default config if not set.
+fn getConfig(request: *const Request) MiddlewareConfig {
+    if (request.middleware_config) |config_ptr| {
+        const config: *const MiddlewareConfig = @ptrCast(@alignCast(config_ptr));
+        return config.*;
+    }
+    return MiddlewareConfig{}; // Return defaults if not configured
+}
 
 /// CORS (Cross-Origin Resource Sharing) middleware
 pub const CorsMiddleware = struct {
@@ -99,10 +135,6 @@ pub const CorsMiddleware = struct {
     }
 };
 
-/// Global auth configuration for middleware (set once at startup)
-/// This allows the middleware function to access the secret key for full HMAC verification
-var global_auth_secret: ?[]const u8 = null;
-
 /// Authentication middleware with HMAC-SHA256 token verification
 pub const AuthMiddleware = struct {
     secret_key: []const u8,
@@ -111,8 +143,6 @@ pub const AuthMiddleware = struct {
     const Self = @This();
 
     pub fn init(allocator: std.mem.Allocator, secret_key: []const u8) Self {
-        // Also set global secret for middleware chain usage
-        global_auth_secret = secret_key;
         return Self{
             .secret_key = secret_key,
             .allocator = allocator,
@@ -202,14 +232,17 @@ pub const AuthMiddleware = struct {
     }
 
     /// Create a middleware function with full HMAC signature verification
-    /// Uses the global auth secret set during init()
+    /// Uses auth_secret from request.middleware_config
     pub fn middleware(self: *const Self) MiddlewareFn {
         _ = self;
 
         return struct {
             fn handle(request: *Request, response: *Response, next: NextFn) Error.ZquicError!void {
-                // Get the global secret key - deny if not configured
-                const secret = global_auth_secret orelse {
+                // Get config from request context
+                const config = getConfig(request);
+
+                // Get the secret key - deny if not configured
+                const secret = config.auth_secret orelse {
                     response.setStatus(.internal_server_error);
                     try response.text("{\"error\": \"Internal Server Error\", \"message\": \"Auth not configured\"}");
                     return;
@@ -234,11 +267,6 @@ pub const AuthMiddleware = struct {
                 try response.text("{\"error\": \"Unauthorized\", \"message\": \"Valid authentication token required\"}");
             }
         }.handle;
-    }
-
-    /// Reset global auth configuration (for testing)
-    pub fn resetGlobalAuth() void {
-        global_auth_secret = null;
     }
 };
 
@@ -296,10 +324,6 @@ pub const RateLimitMiddleware = struct {
     const Self = @This();
 
     pub fn init(allocator: std.mem.Allocator, max_requests: u32, reset_threshold: u32) Self {
-        // Store config in globals for inner function access
-        global_rate_limit_max = max_requests;
-        global_rate_limit_reset = reset_threshold;
-
         return Self{
             .max_requests = max_requests,
             .reset_threshold = reset_threshold,
@@ -349,16 +373,20 @@ pub const RateLimitMiddleware = struct {
     }
 
     pub fn middleware(self: *Self) MiddlewareFn {
-        // Store pointer for inner function access
-        global_rate_limiter = self;
+        _ = self; // Config is passed via request.middleware_config
 
         return struct {
             fn handle(request: *Request, response: *Response, next: NextFn) Error.ZquicError!void {
-                // Get client identifier (use stream_id as proxy for client identity)
-                const client_id: u64 = request.context.stream_id;
+                // Get config from request context
+                const config = getConfig(request);
 
-                // Check rate limit using the global rate limiter
-                const is_allowed = if (global_rate_limiter) |limiter| limiter.isAllowed(client_id) else true;
+                // Get client identifier from connection ID, not stream ID.
+                // Using stream_id would allow bypass by opening new streams.
+                // Connection ID is per-client and persists across streams.
+                const client_id: u64 = hashConnectionId(request.context.connection_id);
+
+                // Check rate limit using the configured rate limiter
+                const is_allowed = if (config.rate_limiter) |limiter| limiter.isAllowed(client_id) else true;
 
                 if (!is_allowed) {
                     response.setStatus(.too_many_requests);
@@ -369,14 +397,21 @@ pub const RateLimitMiddleware = struct {
 
                 try next(request, response);
             }
+
+            /// Hash connection ID bytes to u64 for rate limit key
+            fn hashConnectionId(conn_id: []const u8) u64 {
+                if (conn_id.len == 0) return 0;
+                // Simple FNV-1a hash for connection ID
+                var hash: u64 = 0xcbf29ce484222325; // FNV offset basis
+                for (conn_id) |byte| {
+                    hash ^= byte;
+                    hash *%= 0x100000001b3; // FNV prime
+                }
+                return hash;
+            }
         }.handle;
     }
 };
-
-// Global rate limiter state for middleware closure workaround
-var global_rate_limiter: ?*RateLimitMiddleware = null;
-var global_rate_limit_max: u32 = 100;
-var global_rate_limit_reset: u32 = 10000;
 
 /// Compression middleware
 /// NOTE: Actual compression requires runtime compression library.
@@ -407,18 +442,20 @@ pub const CompressionMiddleware = struct {
     }
 
     pub fn middleware(self: *const Self) MiddlewareFn {
-        global_compression_enabled = self.compression_enabled;
-        global_compression_min_size = self.min_size;
+        _ = self; // Config is passed via request.middleware_config
 
         return struct {
             fn handle(request: *Request, response: *Response, next: NextFn) Error.ZquicError!void {
+                // Get config from request context
+                const config = getConfig(request);
+
                 try next(request, response);
 
                 // Always set Vary header to indicate content may vary by encoding
                 try response.setHeader("Vary", "Accept-Encoding");
 
                 // Only set Content-Encoding if compression is actually enabled and performed
-                if (global_compression_enabled) {
+                if (config.compression_enabled) {
                     if (request.getHeader("accept-encoding")) |encoding| {
                         if (std.mem.indexOf(u8, encoding, "gzip") != null) {
                             // TODO: Implement actual gzip compression here
@@ -431,10 +468,6 @@ pub const CompressionMiddleware = struct {
         }.handle;
     }
 };
-
-// Global compression config for middleware closure workaround
-var global_compression_enabled: bool = false;
-var global_compression_min_size: usize = 1024;
 
 /// Security headers middleware
 pub const SecurityMiddleware = struct {
@@ -478,15 +511,13 @@ pub const SecurityMiddleware = struct {
     }
 
     pub fn middleware(self: *const Self) MiddlewareFn {
-        // Store config in globals for inner function access
-        global_security_hsts_enabled = self.enable_hsts;
-        global_security_hsts_max_age = self.hsts_max_age;
-        global_security_csp = self.csp_policy;
-        global_security_referrer_policy = self.referrer_policy;
-        global_security_permissions_policy = self.permissions_policy;
+        _ = self; // Config is passed via request.middleware_config
 
         return struct {
             fn handle(request: *Request, response: *Response, next: NextFn) Error.ZquicError!void {
+                // Get config from request context
+                const config = getConfig(request);
+
                 try next(request, response);
 
                 // Modern security headers baseline
@@ -497,33 +528,26 @@ pub const SecurityMiddleware = struct {
                 // Modern browsers have built-in XSS protection; this header is no longer needed
 
                 // Add HSTS header (should only be sent over HTTPS in production)
-                if (global_security_hsts_enabled) {
+                if (config.security_hsts_enabled) {
                     var hsts_buf: [64]u8 = undefined;
-                    const hsts_value = std.fmt.bufPrint(&hsts_buf, "max-age={d}; includeSubDomains", .{global_security_hsts_max_age}) catch "max-age=31536000; includeSubDomains";
+                    const hsts_value = std.fmt.bufPrint(&hsts_buf, "max-age={d}; includeSubDomains", .{config.security_hsts_max_age}) catch "max-age=31536000; includeSubDomains";
                     try response.setHeader("Strict-Transport-Security", hsts_value);
                 }
 
                 // Content-Security-Policy for HTML contexts (if configured)
-                if (global_security_csp) |csp| {
+                if (config.security_csp) |csp| {
                     try response.setHeader("Content-Security-Policy", csp);
                 }
 
                 // Referrer-Policy - controls how much referrer info is sent
-                try response.setHeader("Referrer-Policy", global_security_referrer_policy);
+                try response.setHeader("Referrer-Policy", config.security_referrer_policy);
 
                 // Permissions-Policy - controls browser feature access
-                try response.setHeader("Permissions-Policy", global_security_permissions_policy);
+                try response.setHeader("Permissions-Policy", config.security_permissions_policy);
             }
         }.handle;
     }
 };
-
-// Global security config for middleware closure workaround
-var global_security_hsts_enabled: bool = true;
-var global_security_hsts_max_age: u32 = 31536000;
-var global_security_csp: ?[]const u8 = null;
-var global_security_referrer_policy: []const u8 = "strict-origin-when-cross-origin";
-var global_security_permissions_policy: []const u8 = "geolocation=(), camera=(), microphone=(), payment=()";
 
 /// Static file serving middleware
 pub const StaticMiddleware = struct {
@@ -544,11 +568,13 @@ pub const StaticMiddleware = struct {
     }
 
     pub fn middleware(self: *const Self) MiddlewareFn {
-        static_root_dir = self.root_dir;
-        static_cache_control = self.cache_control;
+        _ = self; // Config is passed via request.middleware_config
 
         return struct {
             fn handle(request: *Request, response: *Response, next: NextFn) Error.ZquicError!void {
+                // Get config from request context
+                const config = getConfig(request);
+
                 // Only handle GET requests for files
                 if (request.method != .GET) {
                     try next(request, response);
@@ -556,7 +582,7 @@ pub const StaticMiddleware = struct {
                 }
 
                 var path_buffer: [512]u8 = undefined;
-                const file_path = buildStaticFilePath(&path_buffer, static_root_dir, request.path) catch {
+                const file_path = buildStaticFilePath(&path_buffer, config.static_root_dir, request.path) catch {
                     try next(request, response);
                     return;
                 };
@@ -575,7 +601,7 @@ pub const StaticMiddleware = struct {
                 };
 
                 // Set cache headers
-                try response.setHeader("Cache-Control", static_cache_control);
+                try response.setHeader("Cache-Control", config.static_cache_control);
             }
         }.handle;
     }
@@ -614,9 +640,8 @@ fn buildStaticFilePath(buffer: []u8, root_dir: []const u8, request_path: []const
     return constructed_path;
 }
 
-/// Check if a path resolves to a location under the root directory
-/// This provides symlink escape protection by checking the path prefix
-/// and rejecting symlink patterns
+/// Check if a path resolves to a location under the root directory.
+/// Uses filesystem checks to detect symlinks that could escape the root.
 fn isPathUnderRoot(root_dir: []const u8, file_path: []const u8) bool {
     // Verify the constructed path starts with the root directory
     if (!std.mem.startsWith(u8, file_path, root_dir)) {
@@ -632,31 +657,67 @@ fn isPathUnderRoot(root_dir: []const u8, file_path: []const u8) bool {
         return false;
     }
 
-    // Additional symlink detection: reject paths with components that look like symlinks
-    // This is a defense-in-depth measure alongside the isPathSafe check
-    // Note: Full symlink resolution requires filesystem access which may not be
-    // available in all contexts. The isPathSafe() check handles traversal attacks.
+    // Check each path component for symlinks that could escape root
+    // Build path incrementally and check each component
+    var path_buf: [std.fs.max_path_bytes]u8 = undefined;
+    var current_len: usize = 0;
 
-    // Reject paths containing suspicious patterns that might indicate symlink tricks
-    var i: usize = 0;
-    while (i < file_path.len) {
-        // Look for paths that start components with common symlink attack patterns
-        if (i == 0 or (i > 0 and file_path[i - 1] == '/')) {
-            // Check for single dot followed by something other than / or end
-            // (hidden files starting with . are usually OK, but .hidden/../ etc should be caught by isPathSafe)
-            // Check for suspicious lengths of dots (more than 2 is unusual)
-            var dot_count: usize = 0;
-            var j = i;
-            while (j < file_path.len and file_path[j] == '.') {
-                dot_count += 1;
-                j += 1;
-            }
-            if (dot_count > 2 and (j >= file_path.len or file_path[j] == '/')) {
-                // More than two consecutive dots followed by separator or end is suspicious
-                return false;
-            }
+    // Start with root_dir
+    if (root_dir.len > path_buf.len) return false;
+    @memcpy(path_buf[0..root_dir.len], root_dir);
+    current_len = root_dir.len;
+
+    // Process each component of remainder
+    var iter = std.mem.splitScalar(u8, remainder, '/');
+    while (iter.next()) |component| {
+        if (component.len == 0) continue;
+
+        // Skip . components
+        if (std.mem.eql(u8, component, ".")) continue;
+
+        // Reject .. components (should be caught by isPathSafe, but double-check)
+        if (std.mem.eql(u8, component, "..")) return false;
+
+        // Add separator if needed
+        if (current_len > 0 and path_buf[current_len - 1] != '/') {
+            if (current_len >= path_buf.len) return false;
+            path_buf[current_len] = '/';
+            current_len += 1;
         }
-        i += 1;
+
+        // Add component
+        if (current_len + component.len > path_buf.len) return false;
+        @memcpy(path_buf[current_len..][0..component.len], component);
+        current_len += component.len;
+
+        // Check if this path component is a symlink using statx syscall
+        // We need a null-terminated path for the syscall
+        if (current_len >= path_buf.len) return false;
+        path_buf[current_len] = 0;
+        const path_z: [*:0]const u8 = @ptrCast(path_buf[0..current_len :0].ptr);
+
+        var statx_buf: std.os.linux.Statx = undefined;
+        const rc = std.os.linux.statx(
+            std.os.linux.AT.FDCWD,
+            path_z,
+            std.os.linux.AT.SYMLINK_NOFOLLOW, // Don't follow symlinks
+            .{ .TYPE = true }, // We only need the type/mode
+            &statx_buf,
+        );
+
+        const err = std.os.linux.errno(rc);
+        if (err != .SUCCESS) {
+            // Path doesn't exist or can't be accessed - allow, will fail later
+            continue;
+        }
+
+        // Check if this is a symlink: (mode & S.IFMT) == S.IFLNK
+        if ((statx_buf.mode & std.os.linux.S.IFMT) == std.os.linux.S.IFLNK) {
+            // Path contains a symlink - reject for safety
+            // A symlink could point outside the root directory
+            std.log.warn("Rejected path containing symlink: {s}", .{path_buf[0..current_len]});
+            return false;
+        }
     }
 
     return true;

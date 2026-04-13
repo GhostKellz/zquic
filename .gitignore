@@ -6,6 +6,5 @@ zig-global-cache/
 *.exe
 archive/
 .claude/
-.vscode/
-TODO.md 
-
+.vscode/ 
+tasks/

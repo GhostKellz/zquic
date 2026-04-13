@@ -1,16 +1,20 @@
-# ZQUIC — Production-Ready QUIC Transport for Zig v0.9.6
+<h1 align="center">ZQUIC</h1>
 
-[![Built with Zig](https://img.shields.io/badge/Built%20with-Zig-yellow.svg?logo=zig)](https://ziglang.org/)
-[![Zig Version](https://img.shields.io/badge/Zig-v0.16.0--dev.2535+-orange.svg)](https://ziglang.org/)
-[![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
-[![Post-Quantum](https://img.shields.io/badge/crypto-post--quantum-green.svg)](https://github.com/ghostkellz/zcrypto)
-[![QUIC](https://img.shields.io/badge/QUIC-v1-blue.svg)](#feature-highlights)
-[![HTTP/3](https://img.shields.io/badge/HTTP%2F3-enabled-blue.svg)](#feature-highlights)
-[![SSH/QUIC](https://img.shields.io/badge/SSH%2FQUIC-draft-purple.svg)](#sshquic-integration)
+<p align="center">
+  <strong>Production-Ready QUIC Transport for Zig</strong>
+</p>
+
+<p align="center">
+  <img src="https://img.shields.io/badge/Zig-F7A41D?style=for-the-badge&logo=zig&logoColor=white" alt="Zig">
+  <img src="https://img.shields.io/badge/QUIC-v1-2496ED?style=for-the-badge" alt="QUIC v1">
+  <img src="https://img.shields.io/badge/HTTP%2F3-enabled-2496ED?style=for-the-badge" alt="HTTP/3">
+  <img src="https://img.shields.io/badge/Post--Quantum-ML--KEM-76B900?style=for-the-badge" alt="Post-Quantum">
+  <img src="https://img.shields.io/badge/License-Apache%202.0-blue?style=for-the-badge" alt="License">
+</p>
 
 ZQUIC is a **modular, high-performance QUIC transport stack** built entirely in Zig 0.16.0-dev. It ships with a native async runtime (no external deps), hybrid post-quantum TLS via `zcrypto`, SSH/QUIC secret injection support, and a suite of HTTP/3, DoQ, VPN, and service layers tuned for Ghost production workloads.
 
-> ✅ Builds cleanly with Zig 0.16.0-dev.2535+ on Linux/macOS/Windows and passes the `dev/test.sh` suite.
+> ✅ Builds cleanly with Zig 0.16.0-dev on Linux/macOS/Windows and passes the `dev/test.sh` suite.
 
 ## 🎯 Purpose & Vision
 
@@ -27,32 +31,40 @@ ZQUIC is a **modular, high-performance QUIC transport stack** built entirely in 
 
 | Build Type | Key Flags | Typical Size | Notes |
 |------------|-----------|--------------|-------|
-| **Minimal Core** | `-Dhttp3=false -Ddoq=false -Dservices=false -Dvpn=false -Dpost-quantum=false` | ~1.3 MB | Event loop + core QUIC only |
-| **Web Stack** | `-Dhttp3=true -Ddoq=true -Dpost-quantum=true` | ~3.5 MB | HTTP/3 server, DoQ resolver |
-| **Enterprise** | *(defaults)* | ~5.5 MB | Adds services, VPN, PQ, monitoring |
+| **Minimal Core** | `-Dhttp3=false -Ddoq=false -Dservices=false -Dvpn=false` | ~1.3 MB | Event loop + core QUIC only |
+| **Web Stack** | `-Dhttp3=true -Ddoq=true` | ~3.5 MB | HTTP/3 server, DoQ resolver |
+| **Enterprise** | `-Dservices=true -Dvpn=true -Dmonitoring=true` | ~5.5 MB | Adds services, VPN, monitoring |
+| **With PQ Crypto** | `-Dpost-quantum=true -Dexperimental-crypto=true` | +~0.5 MB | Experimental ML-KEM support |
 
 ```bash
-# Minimal embedded target (no PQ, services, or VPN)
-zig build -Dhttp3=false -Ddoq=false -Dservices=false -Dvpn=false -Dpost-quantum=false -Doptimize=ReleaseSmall
+# Minimal embedded target
+zig build -Dhttp3=false -Ddoq=false -Dservices=false -Dvpn=false -Doptimize=ReleaseSmall
 
-# HTTP/3 + DoQ server with PQ crypto
-zig build -Dhttp3=true -Ddoq=true -Dpost-quantum=true -Dservices=false -Dvpn=false -Doptimize=ReleaseFast
+# HTTP/3 + DoQ server (stable crypto)
+zig build -Dhttp3=true -Ddoq=true -Dservices=false -Dvpn=false -Doptimize=ReleaseFast
 
-# Full enterprise feature set (default flags)
+# Default build (HTTP/3, DoQ enabled; PQ disabled)
 zig build
+
+# With experimental post-quantum crypto
+zig build -Dpost-quantum=true -Dexperimental-crypto=true
 ```
 
 ## ✨ Core Features
 
-### 🔐 **Post-Quantum Cryptography (zcrypto v0.9.0)**
-- **Hybrid TLS 1.3**: ML-KEM-768 + X25519 key exchange (RFC 9420)
+### 🔐 **Cryptography**
+- **Ed25519** and **Secp256k1** signatures (stable)
+- **X25519** key exchange (stable)
+- **AES-256-GCM** and **ChaCha20-Poly1305** AEAD (stable)
+- **Blake3** and **SHA256** hashing (stable)
 - **Zero-RTT resumption**: Ultra-low latency with anti-replay protection
-- **SLH-DSA-128f** post-quantum digital signatures
-- **Ed25519** and **Secp256k1** for compatibility
-- **Blake3** and **SHA256** cryptographic hashing
-- **Zero-knowledge proof** integration ready
 
-### 🔑 **SSH/QUIC Integration (v0.9.6)**
+### 🧪 **Post-Quantum Cryptography** *(Experimental)*
+- **Hybrid TLS 1.3**: ML-KEM-768 + X25519 key exchange
+- **SLH-DSA-128f** post-quantum digital signatures
+- Requires `-Dpost-quantum=true -Dexperimental-crypto=true`
+
+### 🔑 **SSH/QUIC Integration**
 - **SSH secret injection**: Bypass TLS handshake using SSH-derived secrets ([draft-denis-ssh-quic](https://datatracker.ietf.org/doc/draft-denis-ssh-quic/))
 - **Secure key handling**: Secrets passed by pointer, automatic zeroing on cleanup
 - **Bidirectional encryption**: Proper local/remote key separation for client ↔ server traffic
@@ -92,7 +104,7 @@ const ciphertext = try ctx.encrypt(plaintext, packet_number, allocator);
 - **FFI integration**: Production bindings for cross-language projects
 - **WASM integration**: Runtime communication over QUIC transport
 
-### 📊 **Production Monitoring & Telemetry (v0.8.4)**
+### 📊 **Production Monitoring & Telemetry**
 - **Real-time metrics**: performance monitoring and analytics
 - **Prometheus integration**: dedicated exporter surfaces HTTP/3, DoQ, and VPN metrics ready for `/metrics`
 - **Alerting system**: configurable thresholds for high-throughput workloads
@@ -142,7 +154,7 @@ cd zquic
 zig build        # produces all enabled binaries under zig-out/bin/
 ```
 
-Keep the dependency metadata intact (`build.zig.zon` pins `zcrypto` 0.9.5) and build with the latest Zig 0.16.0-dev toolchain. Use `zig build -Dtarget=<triple>` for cross compilation.
+Keep the dependency metadata intact (`build.zig.zon` pins dependencies) and build with the latest Zig 0.16.0-dev toolchain. Use `zig build -Dtarget=<triple>` for cross compilation.
 
 ### Local Development Loop
 
@@ -166,14 +178,14 @@ The `dev/` scripts wrap the raw `zig` commands and provide the configuration we 
 ## 🎯 Production Readiness Status
 
 
-### ✅ 0.9.5 Checklist
+### ✅ Production Checklist
 
 | Component | Status | Notes |
 |-----------|--------|-------|
 | Core QUIC | ✅ | Streams, flow control, congestion modules covered by unit tests |
-| Post-Quantum Crypto | ✅ | Hybrid ML-KEM-768 + X25519 and SLH-DSA via `zcrypto` 0.9.5 |
+| Post-Quantum Crypto | ⚠️ Experimental | Hybrid ML-KEM-768/1024 + X25519 via `zcrypto` (requires `-Dpost-quantum=true -Dexperimental-crypto=true`) |
 | HTTP/3 & DoQ | ✅ | Examples compile by default, exercised via `dev/smoke_test.sh` |
-| Async Runtime | ✅ | Native event loop + timer wheel; no zsync dependency |
+| Async Runtime | ✅ | Native event loop + timer wheel; no external dependencies |
 | Monitoring Hooks | ✅ | Metrics surfaces in `src/monitoring/*` wired into runtime |
 | Dev Tooling | ✅ | `dev/*.sh` scripts for build, fmt, smoke, and validation |
 
@@ -199,43 +211,42 @@ pub fn main() !void {
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
-    // Create post-quantum QUIC server configuration
+    // Configure HTTP/3 server
     const config = zquic.Http3.ServerConfig{
-        .max_connections = 10000,  // High-throughput applications
-        .enable_post_quantum = true,  // ML-KEM-768 + SLH-DSA
+        .max_connections = 10000,
         .enable_compression = true,
         .enable_cors = true,
-        .cert_path = "/etc/ssl/certs/server.pem",
-        .key_path = "/etc/ssl/private/server.key",
+        .enable_security_headers = true,
     };
 
-    // Initialize post-quantum HTTP/3 server
+    // Initialize HTTP/3 server
     var server = try zquic.Http3.Http3Server.init(allocator, config);
     defer server.deinit();
 
-    // Add API routes
-    try server.get("/", homeHandler);
-    try server.get("/api/data/:id", getDataHandler);
-    try server.post("/api/data", submitDataHandler);
-    try server.get("/api/status", getStatusHandler);
+    // Add routes via the router
+    try server.router.get("/", homeHandler);
+    try server.router.get("/api/status", statusHandler);
+    try server.router.post("/api/data", submitHandler);
 
-    // Add post-quantum authentication middleware
-    const auth = zquic.Http3.Middleware.PQAuthMiddleware.init(allocator);
-    try server.use(auth.middleware());
-
-    // Start quantum-safe server
+    // Start server
     try server.start();
-    std.debug.print("🛡️ Post-quantum HTTP/3 server running on QUIC!\n", .{});
+    std.debug.print("HTTP/3 server running on QUIC\n", .{});
 }
 
-fn homeHandler(req: *zquic.Http3.Request, res: *zquic.Http3.Response) !void {
-    try res.json(.{ .status = "online", .quantum_safe = true, .version = "v0.9.5" });
+fn homeHandler(_: *zquic.Http3.Request, res: *zquic.Http3.Response) !void {
+    try res.setStatus(.ok);
+    try res.setBody("Welcome to ZQUIC");
 }
 
-fn getDataHandler(req: *zquic.Http3.Request, res: *zquic.Http3.Response) !void {
-    const id = zquic.Http3.Router.getParam(req, "id") orelse "0";
-    const data = .{ .id = id, .content = "example data", .quantum_safe = true };
-    try res.json(data);
+fn statusHandler(_: *zquic.Http3.Request, res: *zquic.Http3.Response) !void {
+    try res.setStatus(.ok);
+    try res.setBody("{\"status\": \"online\"}");
+}
+
+fn submitHandler(req: *zquic.Http3.Request, res: *zquic.Http3.Response) !void {
+    _ = req;
+    try res.setStatus(.created);
+    try res.setBody("{\"created\": true}");
 }
 ```
 
@@ -243,7 +254,7 @@ fn getDataHandler(req: *zquic.Http3.Request, res: *zquic.Http3.Response) !void {
 
 - **`src/async/`** – native event loop, timer wheel, and runtime orchestration
 - **`src/core/`** – QUIC transport (connection, stream, packet, recovery, flow control)
-- **`src/crypto/`** – TLS 1.3 + PQ handshake glue over `zcrypto` 0.9.5
+- **`src/crypto/`** – TLS 1.3 + PQ handshake glue over `zcrypto`
 - **`src/http3/`** – frame parsing, router, middleware, and advanced server
 - **`src/doq/`** – DNS-over-QUIC client/server implementations
 - **`src/services/`** – GhostBridge, Wraith, CNS resolver, and VPN adapters

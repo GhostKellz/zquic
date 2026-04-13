@@ -1,6 +1,6 @@
 # ZQUIC Security Features
 
-This document describes the security features and hardening measures in ZQUIC v0.9.8+.
+This document describes the security features and hardening measures in ZQUIC.
 
 ## Cryptographic Security
 

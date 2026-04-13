@@ -1,6 +1,6 @@
 //! HTTP/3 Server Implementation
 //!
-//! ZQUIC v0.9.4 - High-performance HTTP/3 server without external dependencies
+//! High-performance HTTP/3 server without external dependencies
 
 const std = @import("std");
 const Error = @import("../utils/error.zig");
@@ -221,6 +221,7 @@ pub const Http3Server = struct {
     stats: SuperServerStats,
     connections: std.StringHashMapUnmanaged(*ConnectionContext),
     middleware_stack: std.ArrayListUnmanaged(Middleware.MiddlewareFn),
+    middleware_config: Middleware.MiddlewareConfig,
     running: bool = false,
     metrics: ?*PrometheusMetrics = null,
 
@@ -235,6 +236,7 @@ pub const Http3Server = struct {
             .stats = SuperServerStats.init(),
             .connections = .empty,
             .middleware_stack = .empty,
+            .middleware_config = Middleware.MiddlewareConfig{},
             .metrics = null,
         };
 
@@ -260,6 +262,13 @@ pub const Http3Server = struct {
     }
 
     fn setupDefaultMiddleware(self: *Self) !void {
+        // Configure middleware_config based on server settings
+        self.middleware_config.security_hsts_enabled = self.config.enable_security_headers;
+        self.middleware_config.compression_enabled = self.config.enable_compression;
+        if (self.config.static_files_root) |static_root| {
+            self.middleware_config.static_root_dir = static_root;
+        }
+
         // Security headers (if enabled)
         if (self.config.enable_security_headers) {
             var security = Middleware.SecurityMiddleware.init(self.allocator);
@@ -281,6 +290,7 @@ pub const Http3Server = struct {
         if (self.config.enable_compression) {
             const compression = Middleware.CompressionMiddleware.init(self.allocator, self.config.compression_level, 256 // min size
             );
+            self.middleware_config.compression_min_size = 256;
             const handler = compression.middleware();
             try self.middleware_stack.append(self.allocator, handler);
             try self.router.use(handler);
@@ -381,8 +391,13 @@ pub const Http3Server = struct {
         // Parse request from headers
         try active_request.request.parseFromHeaders(header_fields);
 
-        // If this completes the request headers, process the request
-        try self.processRequest(active_request);
+        // For requests without body (GET, HEAD, etc), process and respond immediately.
+        // For requests with body (POST, PUT, PATCH), wait for DATA frames in processDataFrame.
+        if (!active_request.request.expectsBody()) {
+            try self.processRequest(active_request);
+            try self.sendResponse(context, active_request);
+        }
+        // Body-bearing requests: handler runs only after body is complete (processDataFrame)
     }
 
     fn processDataFrame(self: *Self, context: *ConnectionContext, stream_id: u64, payload: []const u8) !void {
@@ -391,12 +406,23 @@ pub const Http3Server = struct {
             try active_request.request.appendBody(payload);
             self.stats.addBytesReceived(payload.len);
 
+            const body_len = active_request.request.getBody().len;
+
             // Check body size limit
-            if (active_request.request.getBody().len > self.config.max_request_body_size) {
+            if (body_len > self.config.max_request_body_size) {
                 active_request.response.setStatus(.payload_too_large);
                 try active_request.response.text("Request body too large");
                 try self.sendResponse(context, active_request);
                 return;
+            }
+
+            // Check if body is complete based on Content-Length
+            if (active_request.request.getContentLength()) |expected_len| {
+                if (body_len >= expected_len) {
+                    // Body is complete, process and send response
+                    try self.processRequest(active_request);
+                    try self.sendResponse(context, active_request);
+                }
             }
         }
     }
@@ -422,6 +448,9 @@ pub const Http3Server = struct {
 
     fn processRequest(self: *Self, active_request: *ActiveRequest) !void {
         self.stats.incrementRequest();
+
+        // Set middleware config on request for handlers to access
+        active_request.request.middleware_config = @ptrCast(&self.middleware_config);
 
         // Handle request through router
         self.router.handleRequest(&active_request.request, &active_request.response) catch |err| {
@@ -465,11 +494,17 @@ pub const Http3Server = struct {
         });
 
         self.recordPrometheusSample(active_request);
+
+        // Clean up completed request to prevent memory leak
+        const stream_id = active_request.response.stream_id;
+        active_request.deinit();
+        self.allocator.destroy(active_request);
+        _ = context.active_requests.remove(stream_id);
     }
 
     fn sendFrameToConnection(self: *Self, connection: *Connection, stream_id: u64, frame: Frame.Frame) !void {
-        // Create a new QUIC stream for this HTTP/3 stream
-        const stream = try connection.createStream(.server_bidirectional);
+        // Use the existing request stream - HTTP/3 responses MUST go on the same stream as the request
+        const stream = connection.getStream(stream_id) orelse return Error.ZquicError.StreamNotFound;
 
         // Encode the frame with type and length
         var frame_data: std.ArrayListUnmanaged(u8) = .empty;

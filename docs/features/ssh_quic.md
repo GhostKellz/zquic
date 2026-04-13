@@ -1,6 +1,6 @@
 # SSH/QUIC Secret Injection
 
-> **Status:** Production-ready (v0.9.6+). Implements [draft-denis-ssh-quic](https://datatracker.ietf.org/doc/draft-denis-ssh-quic/) for SSH-derived QUIC initialization.
+> **Status:** Production-ready. Implements [draft-denis-ssh-quic](https://datatracker.ietf.org/doc/draft-denis-ssh-quic/) for SSH-derived QUIC initialization.
 
 ## Overview
 

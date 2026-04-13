@@ -1,6 +1,6 @@
 # System Overview
 
-ZQUIC v0.9.3 architecture and design principles for high-performance quantum-safe networking.
+ZQUIC architecture and design principles for high-performance networking.
 
 ## 🏗️ Architecture Layers
 
@@ -17,7 +17,7 @@ ZQUIC v0.9.3 architecture and design principles for high-performance quantum-saf
 │                   QUIC Core Transport                      │
 │     (connection.zig, packet.zig, stream.zig)              │
 ├─────────────────────────────────────────────────────────────┤
-│              Post-Quantum Crypto (zcrypto v0.9.5)         │
+│              Crypto Layer (zcrypto v1.0.1)                │
 │   ML-KEM-768, SLH-DSA, Ed25519, Secp256k1, Blake3, SHA256  │
 ├─────────────────────────────────────────────────────────────┤
 │                 Networking Foundation                      │

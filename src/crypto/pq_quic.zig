@@ -1,12 +1,22 @@
 //! Post-Quantum QUIC Implementation
 //!
-//! Provides post-quantum key exchange for QUIC handshakes using zcrypto v0.6.0
+//! Provides post-quantum key exchange for QUIC handshakes using zcrypto v1.0.0
 //! Implements hybrid classical + post-quantum cryptography with hardware acceleration
+//!
+//! IMPORTANT: This module requires -Dpost-quantum=true -Dexperimental-crypto=true
 
 const std = @import("std");
+const build_options = @import("build_options");
 const zcrypto = @import("zcrypto");
 const Error = @import("../utils/error.zig");
 const EnhancedTlsContext = @import("enhanced_tls.zig").EnhancedTlsContext;
+
+// Compile-time check for post-quantum support
+comptime {
+    if (!build_options.enable_post_quantum or !build_options.enable_experimental_crypto) {
+        @compileError("pq_quic.zig requires -Dpost-quantum=true -Dexperimental-crypto=true");
+    }
+}
 
 // Utility function for secure memory zeroing - uses std library implementation
 fn secureZero(data: []u8) void {
@@ -15,36 +25,50 @@ fn secureZero(data: []u8) void {
 
 // Import zcrypto post-quantum modules (ML-KEM and ML-DSA)
 const MLKEMResult = struct {
-    ciphertext: []const u8,
-    shared_secret: []const u8,
+    ciphertext: []u8,
+    shared_secret: []u8,
 };
 
 /// Post-quantum key exchange using zcrypto ML-KEM
 const PostQuantum = struct {
     const MLKEMKeyExchange = struct {
         const ML_KEM_768 = zcrypto.post_quantum.pq.ml_kem.ML_KEM_768;
+        const ML_KEM_1024 = zcrypto.post_quantum.pq.ml_kem.ML_KEM_1024;
 
-        pub fn generateKeyPair(allocator: std.mem.Allocator, variant: anytype) !KeyPair {
+        /// ML-KEM variant selection
+        pub const Variant = enum {
+            ml_kem_768,
+            ml_kem_1024,
+        };
+
+        pub fn generateKeyPair(allocator: std.mem.Allocator, variant: Variant) !KeyPair {
             // Generate random seed for key generation using zcrypto's secure RNG
             var seed: [32]u8 = undefined;
             zcrypto.rand.fill(&seed);
 
-            // Currently only ML-KEM-768 is supported
-            const keypair = switch (variant) {
-                .ml_kem_768, .ml_kem_1024 => ML_KEM_768.KeyPair.generate(seed) catch {
-                    return Error.ZquicError.CryptoError;
+            return switch (variant) {
+                .ml_kem_768 => {
+                    const keypair = ML_KEM_768.KeyPair.generate(seed) catch {
+                        return Error.ZquicError.CryptoError;
+                    };
+                    return .{
+                        .public_key = try allocator.dupe(u8, &keypair.public_key),
+                        .secret_key = try allocator.dupe(u8, &keypair.private_key),
+                    };
                 },
-                else => return Error.ZquicError.CryptoError,
-            };
-
-            return .{
-                .public_key = try allocator.dupe(u8, &keypair.public_key),
-                .secret_key = try allocator.dupe(u8, &keypair.private_key),
+                .ml_kem_1024 => {
+                    const keypair = ML_KEM_1024.KeyPair.generate(seed) catch {
+                        return Error.ZquicError.CryptoError;
+                    };
+                    return .{
+                        .public_key = try allocator.dupe(u8, &keypair.public_key),
+                        .secret_key = try allocator.dupe(u8, &keypair.private_key),
+                    };
+                },
             };
         }
 
-        pub fn encapsulate(allocator: std.mem.Allocator, public_key: []const u8) !MLKEMResult {
-            // Use ML-KEM-768 by default
+        pub fn encapsulate768(allocator: std.mem.Allocator, public_key: []const u8) !MLKEMResult {
             if (public_key.len != ML_KEM_768.PUBLIC_KEY_SIZE) {
                 return Error.ZquicError.CryptoError;
             }
@@ -52,7 +76,10 @@ const PostQuantum = struct {
             var pk_array: [ML_KEM_768.PUBLIC_KEY_SIZE]u8 = undefined;
             @memcpy(&pk_array, public_key[0..ML_KEM_768.PUBLIC_KEY_SIZE]);
 
-            const result = ML_KEM_768.encapsulate(pk_array) catch {
+            var randomness: [ML_KEM_768.SEED_SIZE]u8 = undefined;
+            zcrypto.rand.fill(&randomness);
+
+            const result = ML_KEM_768.KeyPair.encapsulate(pk_array, randomness) catch {
                 return Error.ZquicError.CryptoError;
             };
 
@@ -62,60 +89,172 @@ const PostQuantum = struct {
             };
         }
 
-        pub fn decapsulate(allocator: std.mem.Allocator, secret_key: []const u8, ciphertext: []const u8) ![]const u8 {
+        pub fn encapsulate1024(allocator: std.mem.Allocator, public_key: []const u8) !MLKEMResult {
+            if (public_key.len != ML_KEM_1024.PUBLIC_KEY_SIZE) {
+                return Error.ZquicError.CryptoError;
+            }
+
+            var pk_array: [ML_KEM_1024.PUBLIC_KEY_SIZE]u8 = undefined;
+            @memcpy(&pk_array, public_key[0..ML_KEM_1024.PUBLIC_KEY_SIZE]);
+
+            var randomness: [ML_KEM_1024.SEED_SIZE]u8 = undefined;
+            zcrypto.rand.fill(&randomness);
+
+            const result = ML_KEM_1024.KeyPair.encapsulate(pk_array, randomness) catch {
+                return Error.ZquicError.CryptoError;
+            };
+
+            return .{
+                .ciphertext = try allocator.dupe(u8, &result.ciphertext),
+                .shared_secret = try allocator.dupe(u8, &result.shared_secret),
+            };
+        }
+
+        pub fn decapsulate768(allocator: std.mem.Allocator, secret_key: []const u8, ciphertext: []const u8) ![]u8 {
             if (secret_key.len != ML_KEM_768.PRIVATE_KEY_SIZE or
                 ciphertext.len != ML_KEM_768.CIPHERTEXT_SIZE)
             {
                 return Error.ZquicError.CryptoError;
             }
 
-            var sk_array: [ML_KEM_768.PRIVATE_KEY_SIZE]u8 = undefined;
+            var keypair: ML_KEM_768.KeyPair = undefined;
+            @memcpy(&keypair.private_key, secret_key[0..ML_KEM_768.PRIVATE_KEY_SIZE]);
+
             var ct_array: [ML_KEM_768.CIPHERTEXT_SIZE]u8 = undefined;
-            @memcpy(&sk_array, secret_key[0..ML_KEM_768.PRIVATE_KEY_SIZE]);
             @memcpy(&ct_array, ciphertext[0..ML_KEM_768.CIPHERTEXT_SIZE]);
 
-            const shared_secret = ML_KEM_768.decapsulate(sk_array, ct_array) catch {
+            const shared_secret = keypair.decapsulate(ct_array) catch {
                 return Error.ZquicError.CryptoError;
             };
 
             return try allocator.dupe(u8, &shared_secret);
         }
+
+        pub fn decapsulate1024(allocator: std.mem.Allocator, secret_key: []const u8, ciphertext: []const u8) ![]u8 {
+            if (secret_key.len != ML_KEM_1024.PRIVATE_KEY_SIZE or
+                ciphertext.len != ML_KEM_1024.CIPHERTEXT_SIZE)
+            {
+                return Error.ZquicError.CryptoError;
+            }
+
+            var keypair: ML_KEM_1024.KeyPair = undefined;
+            @memcpy(&keypair.private_key, secret_key[0..ML_KEM_1024.PRIVATE_KEY_SIZE]);
+
+            var ct_array: [ML_KEM_1024.CIPHERTEXT_SIZE]u8 = undefined;
+            @memcpy(&ct_array, ciphertext[0..ML_KEM_1024.CIPHERTEXT_SIZE]);
+
+            const shared_secret = keypair.decapsulate(ct_array) catch {
+                return Error.ZquicError.CryptoError;
+            };
+
+            return try allocator.dupe(u8, &shared_secret);
+        }
+
+        /// Legacy encapsulate that auto-detects variant from public key size
+        pub fn encapsulate(allocator: std.mem.Allocator, public_key: []const u8) !MLKEMResult {
+            if (public_key.len == ML_KEM_768.PUBLIC_KEY_SIZE) {
+                return encapsulate768(allocator, public_key);
+            } else if (public_key.len == ML_KEM_1024.PUBLIC_KEY_SIZE) {
+                return encapsulate1024(allocator, public_key);
+            } else {
+                return Error.ZquicError.CryptoError;
+            }
+        }
+
+        /// Legacy decapsulate that auto-detects variant from key sizes
+        pub fn decapsulate(allocator: std.mem.Allocator, secret_key: []const u8, ciphertext: []const u8) ![]u8 {
+            if (secret_key.len == ML_KEM_768.PRIVATE_KEY_SIZE) {
+                return decapsulate768(allocator, secret_key, ciphertext);
+            } else if (secret_key.len == ML_KEM_1024.PRIVATE_KEY_SIZE) {
+                return decapsulate1024(allocator, secret_key, ciphertext);
+            } else {
+                return Error.ZquicError.CryptoError;
+            }
+        }
     };
 };
 
 const KeyPair = struct {
-    public_key: []const u8,
-    secret_key: []const u8,
+    public_key: []u8,
+    secret_key: []u8,
 };
 
 const KeyExchange = struct {
+    /// X25519 key exchange using zcrypto.kex
     const X25519KeyExchange = struct {
         pub fn generateKeyPair(allocator: std.mem.Allocator) !KeyPair {
+            const keypair = zcrypto.kex.X25519.generateKeypair() catch {
+                return Error.ZquicError.CryptoError;
+            };
             return .{
-                .public_key = try allocator.dupe(u8, &[_]u8{6} ** 32),
-                .secret_key = try allocator.dupe(u8, &[_]u8{7} ** 32),
+                .public_key = try allocator.dupe(u8, &keypair.public_key),
+                .secret_key = try allocator.dupe(u8, &keypair.private_key),
             };
         }
 
-        pub fn deriveSharedSecret(secret_key: []const u8, public_key: []const u8) ![]const u8 {
-            _ = secret_key;
-            _ = public_key;
-            return &[_]u8{8} ** 32;
+        pub fn deriveSharedSecret(allocator: std.mem.Allocator, secret_key: []const u8, public_key: []const u8) ![]u8 {
+            if (secret_key.len != 32 or public_key.len != 32) {
+                return Error.ZquicError.CryptoError;
+            }
+            var sk: [32]u8 = undefined;
+            var pk: [32]u8 = undefined;
+            @memcpy(&sk, secret_key[0..32]);
+            @memcpy(&pk, public_key[0..32]);
+
+            const shared = zcrypto.kex.X25519.computeSharedSecret(sk, pk) catch {
+                return Error.ZquicError.CryptoError;
+            };
+            // Allocate heap memory - caller owns and must free
+            const result = try allocator.alloc(u8, 32);
+            @memcpy(result, &shared);
+            return result;
         }
     };
 
+    /// X448 key exchange shim - NOT A REAL X448 IMPLEMENTATION
+    ///
+    /// WARNING: This is a COMPATIBILITY STUB that uses X25519 internally.
+    /// It does NOT provide X448's 224-bit security level.
+    /// DO NOT use for production cryptographic security.
+    ///
+    /// This exists only to satisfy type signatures in experimental PQ hybrid code.
+    /// For real X448 support, zcrypto would need to expose X448 primitives.
     const X448KeyExchange = struct {
+        /// Returns X25519 keys padded to X448 size - NOT cryptographically valid X448
         pub fn generateKeyPair(allocator: std.mem.Allocator) !KeyPair {
+            // STUB: Using X25519 internally - this is NOT real X448
+            const keypair = zcrypto.kex.X25519.generateKeypair() catch {
+                return Error.ZquicError.CryptoError;
+            };
+            // Zero-pad to 56 bytes (X448 key size) - purely for type compatibility
+            var public_key: [56]u8 = [_]u8{0} ** 56;
+            var secret_key: [56]u8 = [_]u8{0} ** 56;
+            @memcpy(public_key[0..32], &keypair.public_key);
+            @memcpy(secret_key[0..32], &keypair.private_key);
             return .{
-                .public_key = try allocator.dupe(u8, &[_]u8{9} ** 56),
-                .secret_key = try allocator.dupe(u8, &[_]u8{10} ** 56),
+                .public_key = try allocator.dupe(u8, &public_key),
+                .secret_key = try allocator.dupe(u8, &secret_key),
             };
         }
 
-        pub fn deriveSharedSecret(secret_key: []const u8, public_key: []const u8) ![]const u8 {
-            _ = secret_key;
-            _ = public_key;
-            return &[_]u8{11} ** 56;
+        /// Derives shared secret using X25519 on first 32 bytes - NOT real X448 ECDH
+        pub fn deriveSharedSecret(allocator: std.mem.Allocator, secret_key: []const u8, public_key: []const u8) ![]u8 {
+            // STUB: Use first 32 bytes for X25519 - this is NOT real X448
+            if (secret_key.len < 32 or public_key.len < 32) {
+                return Error.ZquicError.CryptoError;
+            }
+            var sk: [32]u8 = undefined;
+            var pk: [32]u8 = undefined;
+            @memcpy(&sk, secret_key[0..32]);
+            @memcpy(&pk, public_key[0..32]);
+
+            const shared = zcrypto.kex.X25519.computeSharedSecret(sk, pk) catch {
+                return Error.ZquicError.CryptoError;
+            };
+            // Allocate heap memory - caller owns and must free
+            const result = try allocator.alloc(u8, 32);
+            @memcpy(result, &shared);
+            return result;
         }
     };
 };
@@ -153,8 +292,9 @@ const ZKP = struct {
 pub const PQCipherSuite = enum {
     /// ML-KEM-768 + X25519 hybrid (recommended)
     ml_kem_768_x25519_sha256,
-    /// ML-KEM-1024 + X448 hybrid (higher security)
-    ml_kem_1024_x448_sha384,
+    /// ML-KEM-1024 + X25519 hybrid with SHA-384 (higher PQ security, same classical)
+    /// Note: Uses X25519 for classical component (not X448)
+    ml_kem_1024_x25519_sha384,
     /// Pure ML-KEM-768 (post-quantum only)
     ml_kem_768_sha256,
     /// SLH-DSA-128f for signatures
@@ -163,22 +303,28 @@ pub const PQCipherSuite = enum {
     pub fn getKemAlgorithm(self: @This()) []const u8 {
         return switch (self) {
             .ml_kem_768_x25519_sha256, .ml_kem_768_sha256 => "ml_kem_768",
-            .ml_kem_1024_x448_sha384 => "ml_kem_1024",
+            .ml_kem_1024_x25519_sha384 => "ml_kem_1024",
             .slh_dsa_128f => "ml_kem_768", // Fallback
+        };
+    }
+
+    pub fn getKemVariant(self: @This()) PostQuantum.MLKEMKeyExchange.Variant {
+        return switch (self) {
+            .ml_kem_768_x25519_sha256, .ml_kem_768_sha256, .slh_dsa_128f => .ml_kem_768,
+            .ml_kem_1024_x25519_sha384 => .ml_kem_1024,
         };
     }
 
     pub fn isHybrid(self: @This()) bool {
         return switch (self) {
-            .ml_kem_768_x25519_sha256, .ml_kem_1024_x448_sha384 => true,
+            .ml_kem_768_x25519_sha256, .ml_kem_1024_x25519_sha384 => true,
             .ml_kem_768_sha256, .slh_dsa_128f => false,
         };
     }
 
     pub fn getClassicalAlgorithm(self: @This()) ?[]const u8 {
         return switch (self) {
-            .ml_kem_768_x25519_sha256 => "x25519",
-            .ml_kem_1024_x448_sha384 => "x448",
+            .ml_kem_768_x25519_sha256, .ml_kem_1024_x25519_sha384 => "x25519",
             .ml_kem_768_sha256, .slh_dsa_128f => null,
         };
     }
@@ -248,61 +394,44 @@ pub const PQKeyExchange = struct {
         }
     }
 
-    /// Generate keypair for key exchange (client or server) with hardware acceleration
+    /// Generate keypair for key exchange (client or server)
     pub fn generateKeypair(self: *Self) !void {
-        const kem_algorithm = self.cipher_suite.getKemAlgorithm();
+        // Generate ML-KEM keypair using zcrypto - variant determined by cipher suite
+        const kem_variant = self.cipher_suite.getKemVariant();
+        const kem_keypair = try PostQuantum.MLKEMKeyExchange.generateKeyPair(self.allocator, kem_variant);
 
-        // Generate ML-KEM keypair using zcrypto v0.6.0
-        const kem_keypair = if (std.mem.eql(u8, kem_algorithm, "ml_kem_768"))
-            try PostQuantum.MLKEMKeyExchange.generateKeyPair(self.allocator, .ml_kem_768)
-        else if (std.mem.eql(u8, kem_algorithm, "ml_kem_1024"))
-            try PostQuantum.MLKEMKeyExchange.generateKeyPair(self.allocator, .ml_kem_1024)
-        else
-            return Error.ZquicError.CryptoError;
+        // Transfer ownership directly - no need to dupe since generateKeyPair already allocates
+        self.kem_public_key = kem_keypair.public_key;
+        self.kem_secret_key = kem_keypair.secret_key;
 
-        self.kem_public_key = try self.allocator.dupe(u8, kem_keypair.public_key);
-        self.kem_secret_key = try self.allocator.dupe(u8, kem_keypair.secret_key);
-
-        // Generate classical keypair if hybrid mode
-        if (self.cipher_suite.getClassicalAlgorithm()) |classical_alg| {
-            const classical_keypair = if (std.mem.eql(u8, classical_alg, "x25519"))
-                try KeyExchange.X25519KeyExchange.generateKeyPair(self.allocator)
-            else if (std.mem.eql(u8, classical_alg, "x448"))
-                try KeyExchange.X448KeyExchange.generateKeyPair(self.allocator)
-            else
-                return Error.ZquicError.CryptoError;
-
-            self.classical_public_key = try self.allocator.dupe(u8, classical_keypair.public_key);
-            self.classical_secret_key = try self.allocator.dupe(u8, classical_keypair.secret_key);
+        // Generate classical X25519 keypair if hybrid mode
+        if (self.cipher_suite.isHybrid()) {
+            const classical_keypair = try KeyExchange.X25519KeyExchange.generateKeyPair(self.allocator);
+            self.classical_public_key = classical_keypair.public_key;
+            self.classical_secret_key = classical_keypair.secret_key;
         }
     }
 
-    /// Encapsulate shared secret (client side) with hardware acceleration
+    /// Encapsulate shared secret (client side)
     pub fn encapsulate(self: *Self, server_public_keys: PublicKeys) ![]u8 {
-        const kem_algorithm = self.cipher_suite.getKemAlgorithm();
+        // ML-KEM encapsulation - auto-detects variant from public key size
+        const kem_result = try PostQuantum.MLKEMKeyExchange.encapsulate(
+            self.allocator,
+            server_public_keys.kem_public_key.?,
+        );
 
-        // ML-KEM encapsulation using zcrypto v0.6.0
-        const kem_result = if (std.mem.eql(u8, kem_algorithm, "ml_kem_768"))
-            try PostQuantum.MLKEMKeyExchange.encapsulate(self.allocator, server_public_keys.kem_public_key.?)
-        else if (std.mem.eql(u8, kem_algorithm, "ml_kem_1024"))
-            try PostQuantum.MLKEMKeyExchange.encapsulate(self.allocator, server_public_keys.kem_public_key.?)
-        else
-            return Error.ZquicError.CryptoError;
+        // Transfer ownership directly - encapsulate already allocates
+        self.kem_ciphertext = kem_result.ciphertext;
+        self.kem_shared_secret = kem_result.shared_secret;
 
-        self.kem_ciphertext = try self.allocator.dupe(u8, kem_result.ciphertext);
-        self.kem_shared_secret = try self.allocator.dupe(u8, kem_result.shared_secret);
-
-        // Classical key exchange if hybrid mode
-        if (self.cipher_suite.getClassicalAlgorithm()) |classical_alg| {
+        // Classical X25519 key exchange if hybrid mode
+        if (self.cipher_suite.isHybrid()) {
             if (server_public_keys.classical_public_key) |server_classical_pk| {
-                const classical_ss = if (std.mem.eql(u8, classical_alg, "x25519"))
-                    try KeyExchange.X25519KeyExchange.deriveSharedSecret(self.classical_secret_key.?, server_classical_pk)
-                else if (std.mem.eql(u8, classical_alg, "x448"))
-                    try KeyExchange.X448KeyExchange.deriveSharedSecret(self.classical_secret_key.?, server_classical_pk)
-                else
-                    return Error.ZquicError.CryptoError;
-
-                self.classical_shared_secret = try self.allocator.dupe(u8, classical_ss);
+                self.classical_shared_secret = try KeyExchange.X25519KeyExchange.deriveSharedSecret(
+                    self.allocator,
+                    self.classical_secret_key.?,
+                    server_classical_pk,
+                );
             } else {
                 return Error.ZquicError.CryptoError;
             }
@@ -315,30 +444,23 @@ pub const PQKeyExchange = struct {
     }
 
     /// Decapsulate shared secret (server side)
-    pub fn decapsulate(self: *Self, _: []const u8, client_public_keys: PublicKeys) !void {
-        const kem_algorithm = self.cipher_suite.getKemAlgorithm();
+    /// kem_ciphertext: The encapsulated ciphertext from the client (NOT the public key)
+    pub fn decapsulate(self: *Self, kem_ciphertext: []const u8, client_public_keys: PublicKeys) !void {
+        // ML-KEM decapsulation - auto-detects variant from key sizes
+        self.kem_shared_secret = try PostQuantum.MLKEMKeyExchange.decapsulate(
+            self.allocator,
+            self.kem_secret_key.?,
+            kem_ciphertext,
+        );
 
-        // ML-KEM decapsulation using zcrypto v0.6.0
-        const kem_ss = if (std.mem.eql(u8, kem_algorithm, "ml_kem_768"))
-            try PostQuantum.MLKEMKeyExchange.decapsulate(self.allocator, self.kem_secret_key.?, client_public_keys.kem_public_key.?)
-        else if (std.mem.eql(u8, kem_algorithm, "ml_kem_1024"))
-            try PostQuantum.MLKEMKeyExchange.decapsulate(self.allocator, self.kem_secret_key.?, client_public_keys.kem_public_key.?)
-        else
-            return Error.ZquicError.CryptoError;
-
-        self.kem_shared_secret = try self.allocator.dupe(u8, kem_ss);
-
-        // Classical key exchange if hybrid mode
-        if (self.cipher_suite.getClassicalAlgorithm()) |classical_alg| {
+        // Classical X25519 key exchange if hybrid mode
+        if (self.cipher_suite.isHybrid()) {
             if (client_public_keys.classical_public_key) |client_classical_pk| {
-                const classical_ss = if (std.mem.eql(u8, classical_alg, "x25519"))
-                    try KeyExchange.X25519KeyExchange.deriveSharedSecret(self.classical_secret_key.?, client_classical_pk)
-                else if (std.mem.eql(u8, classical_alg, "x448"))
-                    try KeyExchange.X448KeyExchange.deriveSharedSecret(self.classical_secret_key.?, client_classical_pk)
-                else
-                    return Error.ZquicError.CryptoError;
-
-                self.classical_shared_secret = try self.allocator.dupe(u8, classical_ss);
+                self.classical_shared_secret = try KeyExchange.X25519KeyExchange.deriveSharedSecret(
+                    self.allocator,
+                    self.classical_secret_key.?,
+                    client_classical_pk,
+                );
             } else {
                 return Error.ZquicError.CryptoError;
             }
@@ -362,25 +484,22 @@ pub const PQKeyExchange = struct {
             @memcpy(combined[0..kem_ss.len], kem_ss);
             @memcpy(combined[kem_ss.len..], classical_ss);
 
-            // Use appropriate hash function based on cipher suite
-            const hash_len = switch (self.cipher_suite) {
-                .ml_kem_768_x25519_sha256, .ml_kem_768_sha256 => 32,
-                .ml_kem_1024_x448_sha384 => 48,
-                .slh_dsa_128f => unreachable,
-            };
-
-            self.shared_secret = try self.allocator.alloc(u8, hash_len);
-
+            // Hash combined secrets based on cipher suite
             switch (self.cipher_suite) {
                 .ml_kem_768_x25519_sha256, .ml_kem_768_sha256 => {
-                    var hasher = zcrypto.hash.Sha256.init(.{});
+                    self.shared_secret = try self.allocator.alloc(u8, 32);
+                    var hasher = zcrypto.hash.Sha256.init();
                     hasher.update(combined);
-                    hasher.final(self.shared_secret.?);
+                    const digest = hasher.final();
+                    @memcpy(self.shared_secret.?, &digest);
                 },
-                .ml_kem_1024_x448_sha384 => {
-                    var hasher = zcrypto.hash.Sha384.init(.{});
+                .ml_kem_1024_x25519_sha384 => {
+                    // zcrypto v1.0.1 now exports Sha384
+                    self.shared_secret = try self.allocator.alloc(u8, 48);
+                    var hasher = zcrypto.hash.Sha384.init();
                     hasher.update(combined);
-                    hasher.final(self.shared_secret.?);
+                    const digest = hasher.final();
+                    @memcpy(self.shared_secret.?, &digest);
                 },
                 .slh_dsa_128f => unreachable,
             }

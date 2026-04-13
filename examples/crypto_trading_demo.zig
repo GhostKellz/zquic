@@ -1,6 +1,9 @@
-//! High-Frequency Crypto Trading Demo using ZQUIC v0.8.2
+//! High-Frequency Crypto Trading Demo (EXPERIMENTAL)
 //!
-//! Demonstrates all the new crypto-focused features:
+//! NOTE: This example is experimental and may not reflect current APIs.
+//! Build with: zig build -Dservices=true -Dpost-quantum=true -Dexperimental-crypto=true
+//!
+//! Demonstrates crypto-focused features:
 //! - Post-quantum hybrid TLS (ML-KEM-768 + X25519)
 //! - Zero-RTT connection resumption for ultra-low latency
 //! - BBR congestion control optimized for trading
@@ -9,9 +12,9 @@
 
 const std = @import("std");
 const zquic = @import("zquic");
-const Time = @import("../src/utils/time.zig");
+const Time = zquic.Time;
 
-// Import new v0.8.2 crypto features
+// Import crypto features (requires -Dpost-quantum=true -Dexperimental-crypto=true)
 const HybridPQTlsContext = zquic.crypto.HybridPQTlsContext;
 const HybridConfig = zquic.crypto.HybridConfig;
 const ZeroRttContext = zquic.crypto.ZeroRttContext;
@@ -75,7 +78,7 @@ const MarketUpdate = struct {
 
 /// High-performance crypto trading client
 const CryptoTradingClient = struct {
-    // Core ZQUIC components with v0.8.2 features
+    // Core ZQUIC components with PQ features
     pq_tls_context: HybridPQTlsContext,
     zero_rtt_session_manager: ZeroRttSessionManager,
     congestion_controller: CryptoOptimizedCongestionController,
@@ -348,10 +351,10 @@ const CryptoTradingClient = struct {
     }
 };
 
-/// Demo function showcasing crypto trading with ZQUIC v0.8.2
+/// Demo function showcasing crypto trading with ZQUIC (experimental)
 pub fn runCryptoTradingDemo(allocator: std.mem.Allocator) !void {
-    std.log.info("🚀 Starting ZQUIC v0.8.2 Crypto Trading Demo");
-    std.log.info("Features: Post-Quantum Hybrid TLS, Zero-RTT, BBR, Connection Pooling, Telemetry");
+    std.log.info("Starting ZQUIC Crypto Trading Demo (experimental)", .{});
+    std.log.info("Features: Post-Quantum Hybrid TLS, Zero-RTT, BBR, Connection Pooling, Telemetry", .{});
 
     // Initialize high-performance trading client
     var trading_client = try CryptoTradingClient.init(allocator);
@@ -362,10 +365,10 @@ pub fn runCryptoTradingDemo(allocator: std.mem.Allocator) !void {
     try trading_client.subscribeMarketData(&symbols);
 
     // Start monitoring in background (simplified for demo)
-    std.log.info("📊 Starting performance monitoring...");
+    std.log.info("Starting performance monitoring...", .{});
 
     // Simulate high-frequency trading session
-    std.log.info("💹 Starting high-frequency trading simulation...");
+    std.log.info("Starting high-frequency trading simulation...", .{});
 
     var order_id: u64 = 1;
     const demo_duration_seconds = 30;
@@ -419,30 +422,30 @@ pub fn runCryptoTradingDemo(allocator: std.mem.Allocator) !void {
     // Final statistics
     const final_stats = trading_client.getTradingStats();
 
-    std.log.info("🎯 Crypto Trading Demo Completed!");
-    std.log.info("Performance Results:");
+    std.log.info("Crypto Trading Demo Completed!", .{});
+    std.log.info("Performance Results:", .{});
     std.log.info("  📈 Orders: {} sent, {} executed ({d:.1}% success)", .{ final_stats.orders_sent, final_stats.orders_executed, final_stats.execution_rate });
     std.log.info("  ⚡ Latency: {} μs average order latency", .{final_stats.avg_latency_us});
     std.log.info("  🏃 Execution: {} μs average execution time", .{final_stats.avg_execution_time_us});
     std.log.info("  💰 Volume: ${d:.2} USD total trading volume", .{final_stats.total_volume_usd});
 
-    std.log.info("Network Performance:");
+    std.log.info("Network Performance:", .{});
     std.log.info("  🌐 Throughput: {d:.1} Mbps", .{final_stats.telemetry_summary.throughput_mbps});
     std.log.info("  📊 P99 Latency: {} μs", .{final_stats.telemetry_summary.p99_latency_us});
     std.log.info("  🔗 Zero-RTT Success: {d:.1}%", .{final_stats.telemetry_summary.zero_rtt_success_rate * 100});
     std.log.info("  📡 Connections: {}", .{final_stats.telemetry_summary.total_connections});
 
-    std.log.info("Congestion Control (BBR for HFT):");
+    std.log.info("Congestion Control (BBR for HFT):", .{});
     std.log.info("  🚀 Algorithm: {s}", .{@tagName(final_stats.congestion_stats.algorithm)});
     std.log.info("  📈 Bandwidth: {d:.1} Mbps", .{@as(f32, @floatFromInt(final_stats.congestion_stats.bottleneck_bw)) / 1_000_000});
     std.log.info("  🎯 CWND: {} bytes", .{final_stats.congestion_stats.cwnd});
     std.log.info("  🔄 Loss Rate: {d:.3}%", .{final_stats.congestion_stats.loss_rate * 100});
 
-    std.log.info("🛡️  Security: Post-Quantum Hybrid TLS (ML-KEM-768 + X25519) - Quantum Safe! ✓");
-    std.log.info("⚡ Zero-RTT: Ultra-low latency connection resumption ✓");
-    std.log.info("🧠 BBR: Crypto-optimized congestion control ✓");
-    std.log.info("🔗 Multiplexing: Efficient connection pooling ✓");
-    std.log.info("📊 Telemetry: Real-time performance monitoring ✓");
+    std.log.info("Security: Post-Quantum Hybrid TLS (ML-KEM-768 + X25519) - Quantum Safe!", .{});
+    std.log.info("Zero-RTT: Ultra-low latency connection resumption", .{});
+    std.log.info("BBR: Crypto-optimized congestion control", .{});
+    std.log.info("Multiplexing: Efficient connection pooling", .{});
+    std.log.info("Telemetry: Real-time performance monitoring", .{});
 }
 
 pub fn main() !void {

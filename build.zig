@@ -29,7 +29,8 @@ pub fn build(b: *std.Build) !void {
     const enable_doq = b.option(bool, "doq", "Enable DNS-over-QUIC support") orelse true;
     const enable_vpn = b.option(bool, "vpn", "Enable VPN functionality") orelse false;
     const enable_services = b.option(bool, "services", "Enable GhostBridge/Wraith services") orelse false;
-    const enable_post_quantum = b.option(bool, "post-quantum", "Enable post-quantum QUIC") orelse true;
+    const enable_post_quantum = b.option(bool, "post-quantum", "Enable post-quantum QUIC") orelse false;
+    const enable_experimental_crypto = b.option(bool, "experimental-crypto", "Enable experimental crypto features (required for PQ)") orelse false;
     const enable_monitoring = b.option(bool, "monitoring", "Enable performance monitoring") orelse false;
     const enable_examples = b.option(bool, "examples", "Build example executables") orelse true;
 
@@ -38,11 +39,18 @@ pub fn build(b: *std.Build) !void {
     // ============================================================================
 
     // zcrypto dependency (configure features based on zquic needs)
+    // PQ requires both post-quantum AND experimental-crypto flags
     const zcrypto_dep = b.dependency("zcrypto", .{
         .target = target,
         .optimize = optimize,
-        // Pass our feature flags to zcrypto
-        .@"post-quantum" = enable_post_quantum,
+        // Stable features always enabled
+        .tls = true,
+        .@"hardware-accel" = true,
+        // Async disabled unless needed
+        .async = false,
+        // PQ only enabled when both flags set
+        .@"post-quantum" = enable_post_quantum and enable_experimental_crypto,
+        .@"experimental-crypto" = enable_experimental_crypto,
         .vpn = enable_vpn,
     });
 
@@ -57,6 +65,7 @@ pub fn build(b: *std.Build) !void {
     build_options.addOption(bool, "enable_vpn", enable_vpn);
     build_options.addOption(bool, "enable_services", enable_services);
     build_options.addOption(bool, "enable_post_quantum", enable_post_quantum);
+    build_options.addOption(bool, "enable_experimental_crypto", enable_experimental_crypto);
     build_options.addOption(bool, "enable_monitoring", enable_monitoring);
 
     const mod = b.addModule("zquic", .{
@@ -175,8 +184,8 @@ pub fn build(b: *std.Build) !void {
             b.installArtifact(vpn_client_demo);
         }
 
-        // Post-Quantum demo (only if PQ is enabled)
-        if (enable_post_quantum) {
+        // Post-Quantum demo (only if both PQ and experimental-crypto are enabled)
+        if (enable_post_quantum and enable_experimental_crypto) {
             const pq_demo_exe = b.addExecutable(.{
                 .name = "zquic-pq-demo",
                 .root_module = b.createModule(.{
@@ -192,33 +201,7 @@ pub fn build(b: *std.Build) !void {
         }
 
         // Services examples (only if services are enabled)
-        if (enable_services) {
-            const ghostbridge_demo_exe = b.addExecutable(.{
-                .name = "ghostbridge-demo",
-                .root_module = b.createModule(.{
-                    .root_source_file = b.path("examples/ghostbridge_demo.zig"),
-                    .target = target,
-                    .optimize = optimize,
-                    .imports = &.{
-                        .{ .name = "zquic", .module = mod },
-                    },
-                }),
-            });
-            b.installArtifact(ghostbridge_demo_exe);
-
-            const crypto_trading_demo_exe = b.addExecutable(.{
-                .name = "crypto-trading-demo",
-                .root_module = b.createModule(.{
-                    .root_source_file = b.path("examples/crypto_trading_demo.zig"),
-                    .target = target,
-                    .optimize = optimize,
-                    .imports = &.{
-                        .{ .name = "zquic", .module = mod },
-                    },
-                }),
-            });
-            b.installArtifact(crypto_trading_demo_exe);
-        }
+        // Note: ghostbridge_demo.zig and crypto_trading_demo.zig removed pending API updates
     }
 
     // ============================================================================
@@ -350,6 +333,43 @@ pub fn build(b: *std.Build) !void {
         const run_services_tests = b.addRunArtifact(services_tests);
         integration_step.dependOn(&run_services_tests.step);
         test_step.dependOn(&run_services_tests.step);
+    }
+
+    // zcrypto stable API tests (always run - tests hash, kex, kdf, rand, util)
+    {
+        const zcrypto_stable_module = b.createModule(.{
+            .root_source_file = b.path("tests/zcrypto_stable_test.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{
+                .{ .name = "zcrypto", .module = zcrypto_dep.module("zcrypto") },
+            },
+        });
+        const zcrypto_stable_tests = b.addTest(.{
+            .root_module = zcrypto_stable_module,
+        });
+        const run_zcrypto_stable = b.addRunArtifact(zcrypto_stable_tests);
+        integration_step.dependOn(&run_zcrypto_stable.step);
+        test_step.dependOn(&run_zcrypto_stable.step);
+    }
+
+    // zcrypto PQ integration tests (require PQ flags - test ML-KEM, hybrid key exchange)
+    if (enable_post_quantum and enable_experimental_crypto) {
+        const zcrypto_pq_module = b.createModule(.{
+            .root_source_file = b.path("tests/zcrypto_integration_test.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{
+                .{ .name = "zquic", .module = mod },
+                .{ .name = "zcrypto", .module = zcrypto_dep.module("zcrypto") },
+            },
+        });
+        const zcrypto_pq_tests = b.addTest(.{
+            .root_module = zcrypto_pq_module,
+        });
+        const run_zcrypto_pq = b.addRunArtifact(zcrypto_pq_tests);
+        integration_step.dependOn(&run_zcrypto_pq.step);
+        test_step.dependOn(&run_zcrypto_pq.step);
     }
 
     // ============================================================================

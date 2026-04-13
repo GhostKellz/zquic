@@ -6,7 +6,7 @@ ZQUIC ships as a collection of composable subsystems. Every directory under `src
 - QUIC v1 handshake, streams, congestion control, and pacing live in `src/core/`.
 - The internal async runtime replaces the old zsync dependency and powers the event loop, timers, and zero-copy packet pipeline.
 
-## SSH/QUIC Integration (v0.9.6)
+## SSH/QUIC Integration
 - `src/crypto/ssh_quic.zig` implements [draft-denis-ssh-quic](https://datatracker.ietf.org/doc/draft-denis-ssh-quic/) secret injection.
 - Allows SSH key exchange to **bypass TLS handshake** entirely—useful for SSH-over-QUIC tunnels or environments where SSH authentication is already established.
 - `SshQuicSecrets` holds pre-derived 32-byte client/server secrets with secure zeroing support.

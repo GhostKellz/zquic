@@ -49,8 +49,8 @@ pub const DnsQuestion = struct {
         try writer.writeInt(u16, self.qclass, .big);
     }
 
-    pub fn decode(allocator: std.mem.Allocator, reader: anytype) !DnsQuestion {
-        const name = try decodeDomainName(allocator, reader);
+    pub fn decode(allocator: std.mem.Allocator, reader: anytype, message_data: []const u8) !DnsQuestion {
+        const name = try decodeDomainName(allocator, reader, message_data);
         const qtype = try reader.takeInt(u16, .big);
         const qclass = try reader.takeInt(u16, .big);
 
@@ -80,8 +80,8 @@ pub const DnsResourceRecord = struct {
         try writer.writeAll(self.rdata);
     }
 
-    pub fn decode(allocator: std.mem.Allocator, reader: anytype) !DnsResourceRecord {
-        const name = try decodeDomainName(allocator, reader);
+    pub fn decode(allocator: std.mem.Allocator, reader: anytype, message_data: []const u8) !DnsResourceRecord {
+        const name = try decodeDomainName(allocator, reader, message_data);
         const rtype = try reader.takeInt(u16, .big);
         const rclass = try reader.takeInt(u16, .big);
         const ttl = try reader.takeInt(u32, .big);
@@ -145,6 +145,7 @@ pub const DnsMessage = struct {
     }
 
     /// Parse DoQ message from QUIC stream 0 (RFC 9250)
+    /// Supports DNS compression pointers per RFC 1035 Section 4.1.4
     pub fn parseFromStream(allocator: std.mem.Allocator, data: []const u8) !DnsMessage {
         var reader = Io.Reader.fixed(data);
 
@@ -154,11 +155,11 @@ pub const DnsMessage = struct {
         var message = DnsMessage.init(allocator);
         message.header = header;
 
-        // Parse questions
+        // Parse questions (passing data for compression pointer resolution)
         if (header.qdcount > 0) {
             message.questions = try allocator.alloc(DnsQuestion, header.qdcount);
             for (0..header.qdcount) |i| {
-                message.questions[i] = try DnsQuestion.decode(allocator, &reader);
+                message.questions[i] = try DnsQuestion.decode(allocator, &reader, data);
             }
         }
 
@@ -166,7 +167,7 @@ pub const DnsMessage = struct {
         if (header.ancount > 0) {
             message.answers = try allocator.alloc(DnsResourceRecord, header.ancount);
             for (0..header.ancount) |i| {
-                message.answers[i] = try DnsResourceRecord.decode(allocator, &reader);
+                message.answers[i] = try DnsResourceRecord.decode(allocator, &reader, data);
             }
         }
 
@@ -174,7 +175,7 @@ pub const DnsMessage = struct {
         if (header.nscount > 0) {
             message.authority = try allocator.alloc(DnsResourceRecord, header.nscount);
             for (0..header.nscount) |i| {
-                message.authority[i] = try DnsResourceRecord.decode(allocator, &reader);
+                message.authority[i] = try DnsResourceRecord.decode(allocator, &reader, data);
             }
         }
 
@@ -182,7 +183,7 @@ pub const DnsMessage = struct {
         if (header.arcount > 0) {
             message.additional = try allocator.alloc(DnsResourceRecord, header.arcount);
             for (0..header.arcount) |i| {
-                message.additional[i] = try DnsResourceRecord.decode(allocator, &reader);
+                message.additional[i] = try DnsResourceRecord.decode(allocator, &reader, data);
             }
         }
 
@@ -240,8 +241,9 @@ fn encodeDomainName(name: []const u8, _: std.mem.Allocator, writer: anytype) !vo
     try writer.writeByte(0);
 }
 
-/// Decode domain name from DNS wire format
-fn decodeDomainName(allocator: std.mem.Allocator, reader: anytype) ![]u8 {
+/// Decode domain name from DNS wire format with compression pointer support (RFC 1035)
+/// message_data is the complete DNS message for resolving compression pointers
+fn decodeDomainName(allocator: std.mem.Allocator, reader: anytype, message_data: []const u8) ![]u8 {
     var parts: std.ArrayListUnmanaged([]u8) = .empty;
     defer {
         // Free any remaining parts on error/cleanup
@@ -251,14 +253,53 @@ fn decodeDomainName(allocator: std.mem.Allocator, reader: anytype) ![]u8 {
         parts.deinit(allocator);
     }
 
+    // Track pointers followed to detect loops (max 128 levels)
+    var pointer_count: u8 = 0;
+    const max_pointers: u8 = 128;
+
+    // We may need to follow compression pointers
+    var current_reader = reader;
+    var pointer_reader: ?Io.Reader = null;
+
     while (true) {
-        const length = try reader.takeByte();
+        const length = current_reader.takeByte() catch |err| {
+            if (err == error.EndOfStream) break;
+            return err;
+        };
         if (length == 0) break;
 
+        // Check for compression pointer (RFC 1035 Section 4.1.4)
+        // If top 2 bits are 11, this is a pointer
+        if ((length & 0xC0) == 0xC0) {
+            if (pointer_count >= max_pointers) {
+                // Prevent infinite loops
+                return Error.ZquicError.InvalidArgument;
+            }
+            pointer_count += 1;
+
+            // Read second byte of pointer
+            const second_byte = try current_reader.takeByte();
+            const offset: u16 = (@as(u16, length & 0x3F) << 8) | second_byte;
+
+            // Validate offset is within message bounds
+            if (offset >= message_data.len) {
+                return Error.ZquicError.InvalidArgument;
+            }
+
+            // Create a reader at the pointed-to location
+            pointer_reader = Io.Reader.fixed(message_data[offset..]);
+            current_reader = &pointer_reader.?;
+            continue;
+        }
+
+        // Normal label: length must be 0-63
         if (length > 63) return Error.ZquicError.InvalidArgument;
 
         const part = try allocator.alloc(u8, length);
-        try reader.readSliceAll(part);
+        current_reader.readSliceAll(part) catch |err| {
+            allocator.free(part);
+            return err;
+        };
         try parts.append(allocator, part);
     }
 
@@ -398,7 +439,8 @@ test "domain name encode/decode roundtrip" {
 
     const written = Io.Writer.buffered(&writer);
     var reader = Io.Reader.fixed(written);
-    const decoded = try decodeDomainName(allocator, &reader);
+    // Pass the written buffer for compression pointer support
+    const decoded = try decodeDomainName(allocator, &reader, written);
     defer allocator.free(decoded);
 
     try std.testing.expectEqualStrings("sub.example.com", decoded);

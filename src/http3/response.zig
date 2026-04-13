@@ -275,12 +275,25 @@ pub const Response = struct {
 
     /// Set JSON content type and write JSON data
     pub fn json(self: *Self, data: anytype) !void {
-        _ = data; // Suppress unused parameter warning
         try self.headers.setContentType("application/json");
 
-        // Simple workaround - convert to string literal
-        const json_str = "{}";
-        try self.body.appendSlice(self.allocator, json_str);
+        // Serialize the data to JSON using the streaming API
+        var out: std.Io.Writer.Allocating = .init(self.allocator);
+        defer out.deinit();
+
+        var stringify: std.json.Stringify = .{
+            .writer = &out.writer,
+            .options = .{},
+        };
+
+        stringify.write(data) catch |err| {
+            // On serialization error, return error response
+            std.log.err("JSON serialization error: {}", .{err});
+            try self.body.appendSlice(self.allocator, "{\"error\":\"serialization_failed\"}");
+            return;
+        };
+
+        try self.body.appendSlice(self.allocator, out.written());
     }
 
     /// Set HTML content type and write HTML

@@ -273,10 +273,15 @@ pub const OptimizedChaCha20Poly1305 = struct {
     ) !void {
         _ = self;
 
-        // Use zcrypto's ChaCha20-Poly1305 with AVX2 optimization hints
-        const cipher = zcrypto.symmetric.ChaCha20Poly1305.init(key[0..32].*);
-        const result = try cipher.encrypt(ciphertext, tag[0..16], plaintext, aad, nonce[0..12].*);
-        _ = result;
+        // Use std.crypto ChaCha20-Poly1305 (AVX2 is auto-detected)
+        std.crypto.aead.chacha_poly.ChaCha20Poly1305.encrypt(
+            ciphertext[0..plaintext.len],
+            tag[0..16],
+            plaintext,
+            aad,
+            nonce[0..12].*,
+            key[0..32].*,
+        );
     }
 
     fn encryptNeon(
@@ -290,10 +295,15 @@ pub const OptimizedChaCha20Poly1305 = struct {
     ) !void {
         _ = self;
 
-        // Use zcrypto's ChaCha20-Poly1305 with NEON optimization hints
-        const cipher = zcrypto.symmetric.ChaCha20Poly1305.init(key[0..32].*);
-        const result = try cipher.encrypt(ciphertext, tag[0..16], plaintext, aad, nonce[0..12].*);
-        _ = result;
+        // Use std.crypto ChaCha20-Poly1305 (NEON is auto-detected)
+        std.crypto.aead.chacha_poly.ChaCha20Poly1305.encrypt(
+            ciphertext[0..plaintext.len],
+            tag[0..16],
+            plaintext,
+            aad,
+            nonce[0..12].*,
+            key[0..32].*,
+        );
     }
 
     fn encryptBasic(
@@ -307,9 +317,14 @@ pub const OptimizedChaCha20Poly1305 = struct {
     ) !void {
         _ = self;
 
-        const cipher = zcrypto.symmetric.ChaCha20Poly1305.init(key[0..32].*);
-        const result = try cipher.encrypt(ciphertext, tag[0..16], plaintext, aad, nonce[0..12].*);
-        _ = result;
+        std.crypto.aead.chacha_poly.ChaCha20Poly1305.encrypt(
+            ciphertext[0..plaintext.len],
+            tag[0..16],
+            plaintext,
+            aad,
+            nonce[0..12].*,
+            key[0..32].*,
+        );
     }
 
     fn decryptAvx2(
@@ -323,8 +338,14 @@ pub const OptimizedChaCha20Poly1305 = struct {
     ) !void {
         _ = self;
 
-        const cipher = zcrypto.symmetric.ChaCha20Poly1305.init(key[0..32].*);
-        try cipher.decrypt(plaintext, ciphertext, tag[0..16].*, aad, nonce[0..12].*);
+        std.crypto.aead.chacha_poly.ChaCha20Poly1305.decrypt(
+            plaintext[0..ciphertext.len],
+            ciphertext,
+            tag[0..16].*,
+            aad,
+            nonce[0..12].*,
+            key[0..32].*,
+        ) catch return error.AuthenticationFailed;
     }
 
     fn decryptNeon(
@@ -338,8 +359,14 @@ pub const OptimizedChaCha20Poly1305 = struct {
     ) !void {
         _ = self;
 
-        const cipher = zcrypto.symmetric.ChaCha20Poly1305.init(key[0..32].*);
-        try cipher.decrypt(plaintext, ciphertext, tag[0..16].*, aad, nonce[0..12].*);
+        std.crypto.aead.chacha_poly.ChaCha20Poly1305.decrypt(
+            plaintext[0..ciphertext.len],
+            ciphertext,
+            tag[0..16].*,
+            aad,
+            nonce[0..12].*,
+            key[0..32].*,
+        ) catch return error.AuthenticationFailed;
     }
 
     fn decryptBasic(
@@ -353,8 +380,14 @@ pub const OptimizedChaCha20Poly1305 = struct {
     ) !void {
         _ = self;
 
-        const cipher = zcrypto.symmetric.ChaCha20Poly1305.init(key[0..32].*);
-        try cipher.decrypt(plaintext, ciphertext, tag[0..16].*, aad, nonce[0..12].*);
+        std.crypto.aead.chacha_poly.ChaCha20Poly1305.decrypt(
+            plaintext[0..ciphertext.len],
+            ciphertext,
+            tag[0..16].*,
+            aad,
+            nonce[0..12].*,
+            key[0..32].*,
+        ) catch return error.AuthenticationFailed;
     }
 };
 

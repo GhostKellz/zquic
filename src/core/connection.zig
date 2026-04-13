@@ -1,8 +1,9 @@
 //! QUIC Connection with async channel support
 //!
-//! ZQUIC v0.9.4 - High-performance connection management without external dependencies
+//! High-performance connection management without external dependencies
 
 const std = @import("std");
+const zcrypto = @import("zcrypto");
 const Error = @import("../utils/error.zig");
 const Time = @import("../utils/time.zig");
 const Packet = @import("packet.zig");
@@ -116,14 +117,37 @@ pub const SuperConnection = struct {
     allocator: std.mem.Allocator,
     is_running: bool = false,
 
+    // Stream ID counters per RFC 9000:
+    // - Client bidi: 0, 4, 8, ... (0x0)
+    // - Server bidi: 1, 5, 9, ... (0x1)
+    // - Client uni:  2, 6, 10, ... (0x2)
+    // - Server uni:  3, 7, 11, ... (0x3)
+    next_bidi_stream_id: u64,
+    next_uni_stream_id: u64,
+
     const Self = @This();
 
-    pub fn init(allocator: std.mem.Allocator, role: Role, params: ConnectionParams) !Self {
-        const local_conn_id = try Packet.ConnectionId.init(&[_]u8{ 0x12, 0x34, 0x56, 0x78 });
+    /// Generate a cryptographically random connection ID
+    fn generateConnectionId() !Packet.ConnectionId {
+        var random_bytes: [8]u8 = undefined;
+        zcrypto.rand.fill(&random_bytes);
+        return Packet.ConnectionId.init(&random_bytes);
+    }
 
-        const initial_stream_id: u64 = switch (role) {
-            .client => 0, // Client-initiated bidirectional streams start at 0
-            .server => 1, // Server-initiated bidirectional streams start at 1
+    pub fn init(allocator: std.mem.Allocator, role: Role, params: ConnectionParams) !Self {
+        // Generate cryptographically random connection ID
+        const local_conn_id = try generateConnectionId();
+
+        // Initialize stream ID counters per RFC 9000 Section 2.1:
+        // - Bits 0-1 encode stream type: 0x0 = client bidi, 0x1 = server bidi,
+        //                                 0x2 = client uni, 0x3 = server uni
+        const initial_bidi_id: u64 = switch (role) {
+            .client => 0, // Client-initiated bidirectional: 0, 4, 8, ...
+            .server => 1, // Server-initiated bidirectional: 1, 5, 9, ...
+        };
+        const initial_uni_id: u64 = switch (role) {
+            .client => 2, // Client-initiated unidirectional: 2, 6, 10, ...
+            .server => 3, // Server-initiated unidirectional: 3, 7, 11, ...
         };
 
         return Self{
@@ -133,7 +157,9 @@ pub const SuperConnection = struct {
             .remote_conn_id = null,
             .params = params,
             .stats = ConnectionStats{},
-            .next_stream_id = initial_stream_id,
+            .next_stream_id = initial_bidi_id, // Legacy field for backward compat
+            .next_bidi_stream_id = initial_bidi_id,
+            .next_uni_stream_id = initial_uni_id,
             .incoming_packets = .empty,
             .outgoing_packets = .empty,
             .stream_events = .empty,
@@ -213,13 +239,21 @@ pub const SuperConnection = struct {
         try self.streams.put(self.allocator, stream_id, stream);
     }
 
-    /// Handle stream data
+    /// Handle incoming stream data - routes to receive buffer, not send buffer
     fn handleStreamData(self: *Self, stream_id: u64, data: []const u8, fin: bool) !void {
         if (self.streams.get(stream_id)) |stream| {
-            _ = try stream.write(data, fin);
+            // Write incoming data to the stream's read buffer (not write buffer)
+            try stream.handleIncomingData(data);
+            self.stats.bytes_received += data.len;
+
+            // Handle FIN flag - mark stream as half-closed from remote
             if (fin) {
                 try stream.close();
             }
+        } else {
+            // Stream doesn't exist - per RFC 9000, this could be a new stream
+            // initiated by the peer. Log for debugging.
+            std.log.debug("Received data for unknown stream {}", .{stream_id});
         }
     }
 
@@ -316,20 +350,71 @@ pub const SuperConnection = struct {
     }
 
     /// Queue a CONNECTION_CLOSE frame for transmission.
+    /// Per RFC 9000 Section 19.19, CONNECTION_CLOSE frame format:
+    /// - Error Code (variable-length integer)
+    /// - Frame Type (variable-length integer, 0 for transport errors)
+    /// - Reason Phrase Length (variable-length integer)
+    /// - Reason Phrase (bytes)
     fn queueConnectionClose(self: *Self, error_code: u64, reason: ?[]const u8) !void {
-        _ = reason;
-        // Create a CONNECTION_CLOSE packet
-        // In a full implementation, this would create the actual frame
-        const close_packet = Packet.Packet{
-            .packet_type = .short,
-            .version = 1,
-            .dest_conn_id = self.remote_conn_id orelse self.local_conn_id,
-            .src_conn_id = self.local_conn_id,
-            .packet_number = 0,
-            .payload = &[_]u8{},
-        };
-        _ = error_code;
+        // Build CONNECTION_CLOSE frame payload
+        // Frame type 0x1c = CONNECTION_CLOSE (application)
+        // Frame type 0x1d = CONNECTION_CLOSE (transport)
+        var frame_buf: [256]u8 = undefined;
+        var frame_len: usize = 0;
 
+        // Frame type (0x1c for application-level close)
+        frame_buf[frame_len] = 0x1c;
+        frame_len += 1;
+
+        // Error code as varint (simplified: 1-byte for small codes, 2-byte otherwise)
+        if (error_code < 64) {
+            frame_buf[frame_len] = @intCast(error_code);
+            frame_len += 1;
+        } else if (error_code < 16384) {
+            frame_buf[frame_len] = @intCast(0x40 | (error_code >> 8));
+            frame_buf[frame_len + 1] = @intCast(error_code & 0xFF);
+            frame_len += 2;
+        } else {
+            // 4-byte varint for larger codes
+            frame_buf[frame_len] = @intCast(0x80 | (error_code >> 24));
+            frame_buf[frame_len + 1] = @intCast((error_code >> 16) & 0xFF);
+            frame_buf[frame_len + 2] = @intCast((error_code >> 8) & 0xFF);
+            frame_buf[frame_len + 3] = @intCast(error_code & 0xFF);
+            frame_len += 4;
+        }
+
+        // Frame type that triggered close (0 for application close)
+        frame_buf[frame_len] = 0x00;
+        frame_len += 1;
+
+        // Reason phrase length and content
+        const reason_bytes = reason orelse "";
+        const reason_len = @min(reason_bytes.len, 200); // Cap reason length
+        frame_buf[frame_len] = @intCast(reason_len);
+        frame_len += 1;
+        if (reason_len > 0) {
+            @memcpy(frame_buf[frame_len..][0..reason_len], reason_bytes[0..reason_len]);
+            frame_len += reason_len;
+        }
+
+        // Build packet header - use 1-RTT (short header) if established, else handshake
+        const packet_type: Packet.PacketType = if (self.state == .established)
+            .one_rtt
+        else
+            .handshake;
+
+        const header = Packet.PacketHeader{
+            .packet_type = packet_type,
+            .version = if (packet_type == .one_rtt) null else 1,
+            .dest_conn_id = self.remote_conn_id orelse self.local_conn_id,
+            .src_conn_id = if (packet_type == .one_rtt) null else self.local_conn_id,
+            .packet_number = self.stats.packets_sent,
+            .packet_number_len = 2,
+            .token = null,
+            .header_length = 0, // Not used for outgoing packets
+        };
+
+        const close_packet = Packet.Packet.init(header, frame_buf[0..frame_len]);
         try self.outgoing_packets.append(self.allocator, close_packet);
         self.stats.packets_sent += 1;
     }
@@ -430,6 +515,45 @@ pub const SuperConnection = struct {
     pub fn isShuttingDown(self: *const Self) bool {
         return self.state == .closing or self.state == .draining;
     }
+
+    /// Reset connection state for pool reuse.
+    /// Clears all streams, queues, stats, and regenerates connection ID.
+    pub fn reset(self: *Self) !void {
+        // Close and clean up all streams
+        var stream_iter = self.streams.iterator();
+        while (stream_iter.next()) |entry| {
+            entry.value_ptr.*.deinit();
+            self.allocator.destroy(entry.value_ptr.*);
+        }
+        self.streams.clearRetainingCapacity();
+
+        // Clear packet queues
+        self.incoming_packets.clearRetainingCapacity();
+        self.outgoing_packets.clearRetainingCapacity();
+        self.stream_events.clearRetainingCapacity();
+
+        // Reset statistics
+        self.stats = ConnectionStats{};
+
+        // Generate new connection ID for privacy/security
+        self.local_conn_id = try generateConnectionId();
+        self.remote_conn_id = null;
+
+        // Reset stream ID counters based on role
+        self.next_bidi_stream_id = switch (self.role) {
+            .client => 0,
+            .server => 1,
+        };
+        self.next_uni_stream_id = switch (self.role) {
+            .client => 2,
+            .server => 3,
+        };
+        self.next_stream_id = self.next_bidi_stream_id;
+
+        // Reset connection state
+        self.state = .initial;
+        self.is_running = false;
+    }
 };
 
 /// Legacy connection wrapper for backward compatibility
@@ -448,10 +572,24 @@ pub const Connection = struct {
         self.super_connection.deinit();
     }
 
-    /// Create a new stream (legacy interface)
+    /// Create a new stream with proper RFC 9000 stream ID allocation
     pub fn createStream(self: *Self, stream_type: Stream.StreamType) !*Stream.Stream {
-        const stream_id = self.super_connection.next_stream_id;
-        self.super_connection.next_stream_id += 4; // Increment by 4 for proper stream ID space
+        // Allocate stream ID based on type (RFC 9000 Section 2.1):
+        // - Bidirectional streams: increment by 4 from role-specific base
+        // - Unidirectional streams: increment by 4 from role-specific base
+        const stream_id = switch (stream_type) {
+            .client_bidirectional, .server_bidirectional => blk: {
+                const id = self.super_connection.next_bidi_stream_id;
+                self.super_connection.next_bidi_stream_id += 4;
+                self.super_connection.next_stream_id = id; // Keep legacy field updated
+                break :blk id;
+            },
+            .client_unidirectional, .server_unidirectional => blk: {
+                const id = self.super_connection.next_uni_stream_id;
+                self.super_connection.next_uni_stream_id += 4;
+                break :blk id;
+            },
+        };
 
         self.super_connection.createStreamAsync(stream_id, stream_type) catch return error.InternalError;
 
@@ -459,6 +597,11 @@ pub const Connection = struct {
             return stream;
         }
         return error.InternalError;
+    }
+
+    /// Get an existing stream by ID
+    pub fn getStream(self: *Self, stream_id: u64) ?*Stream.Stream {
+        return self.super_connection.streams.get(stream_id);
     }
 
     /// Get connection state
@@ -576,9 +719,9 @@ pub const SuperConnectionPool = struct {
         self.mutex.lock();
         defer self.mutex.unlock();
 
-        // Reset connection state
-        conn.state = .initial;
-        conn.is_running = false;
+        // Fully reset connection state for reuse
+        // This clears streams, queues, stats, and regenerates connection ID
+        try conn.reset();
 
         // Remove from active
         for (self.active.items, 0..) |c, i| {

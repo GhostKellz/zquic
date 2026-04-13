@@ -1,0 +1,13 @@
+services:
+  zquic-verify:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+      network: host
+    network_mode: host
+    working_dir: /workspace
+    volumes:
+      - ..:/workspace
+      - ${HOST_ZIG_PATH:-/opt/zig-0.16.0-dev}:/opt/zig:ro
+    tty: true
+    stdin_open: true

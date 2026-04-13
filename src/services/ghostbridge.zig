@@ -35,7 +35,7 @@ pub const GhostBridgeConfig = struct {
     /// Private key path for TLS
     key_path: ?[]const u8 = null,
     /// Enable post-quantum crypto
-    enable_post_quantum: bool = true,
+    enable_post_quantum: bool = false, // Experimental: requires -Dpost-quantum=true -Dexperimental-crypto=true
 };
 
 /// gRPC message types

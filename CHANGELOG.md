@@ -1,3 +1,188 @@
+## [0.9.9] - 2026-04-12
+
+### Bug Fixes, zcrypto v1.0.1 Migration & Zig 0.16.0-dev Compatibility
+
+**ZQUIC v0.9.9** - Comprehensive bug fixes, zcrypto v1.0.1 migration, post-quantum crypto corrections, and full compatibility with Zig 0.16.0-dev.3144+. This release addresses critical issues in core transport, HTTP/3, DoQ, crypto, and services.
+
+### Fixed
+
+#### zcrypto v1.0.1 Migration
+- **API updates** - Migrated to zcrypto v1.0.1 stable API surface
+  - `.init()` without arguments (was `.init(.{})`)
+  - `.final()` instead of `.finalResult()`
+  - `zcrypto.rand.fill()` instead of `.fillBytes()`
+  - Blake3 moved to `zcrypto.blake3.Blake3` module
+- **SHA-384 support** - Now uses `zcrypto.hash.Sha384` for TLS 1.3 cipher suites
+
+#### Post-Quantum Crypto Correctness
+- **ML-KEM-1024 real implementation** - `ml_kem_1024_x25519_sha384` now uses real 1568-byte keys (was using ML-KEM-768 as stub)
+- **Renamed misleading suite** - `ml_kem_1024_x448_sha384` → `ml_kem_1024_x25519_sha384` (honest about using X25519)
+- **Fixed hybrid handshake flow** - `hybrid_pq_tls.zig` server now encapsulates to client's ML-KEM public key (was incorrectly calling decapsulate)
+- **Fixed SHA-384 Finished** - `comprehensive_tls.zig` now handles both SHA-256 (32-byte) and SHA-384 (48-byte) verify data
+- **Fixed session ticket format** - `comprehensive_tls.zig` generates `random_state (32 bytes) || MAC (32 bytes)` format
+- **Added CryptoKeys.secret field** - Required for TLS Finished computation
+- **Fixed variable packet numbers** - `enhanced_tls.zig` header protection now handles 1-4 byte packet numbers correctly
+- **Removed dead PQUtils stubs** - Removed placeholder functions returning `undefined` from `post_quantum.zig`
+- **Added optimization re-exports** - `CpuOptimizer`, `OptimizedBlake3`, `OptimizedChaCha20Poly1305`, `OptimizedPacketProcessor`
+
+#### Build System
+- **Removed broken example references** from `build.zig`
+  - Removed non-existent `ghostbridge_demo.zig` target
+  - Removed `crypto_trading_demo.zig` (used non-existent APIs)
+- **Fixed `dev/build_release.sh`** - Now forwards arguments with `"$@"`
+
+#### Core Transport (RFC 9000 Compliance)
+- **Connection ID generation** - Now uses `zcrypto.rand.fill()` for random connection IDs instead of hardcoded values
+- **Stream receive path** - Fixed `handleStreamData()` to route incoming data to `handleIncomingData()` instead of `write()` (was writing to send buffer)
+- **CONNECTION_CLOSE packet** - Fixed `queueConnectionClose()` to build proper CONNECTION_CLOSE frame with error_code
+- **Stream ID allocation** - Implemented proper RFC 9000 stream ID spacing:
+  - Client bidi: 0, 4, 8... | Server bidi: 1, 5, 9...
+  - Client uni: 2, 6, 10... | Server uni: 3, 7, 11...
+  - Added separate `next_bidi_stream_id` and `next_uni_stream_id` counters
+- **Connection pool reset** - Added full `reset()` method that clears streams, packet queues, statistics, and regenerates connection IDs
+- **Event loop FD handling** - Fixed duplicate FD check on register; unregister now removes all occurrences
+
+#### HTTP/3 Correctness
+- **Response dispatch** - Added `sendResponse()` calls after `processRequest()` completes
+- **JSON serialization** - Fixed `Response.json()` to use `std.json.Stringify` for actual data serialization (was always returning `{}`)
+- **Varint parsing** - Changed `parseVarintFrom()` to return `?VarintResult` to distinguish incomplete data from zero values
+- **Rate limiting key** - Changed from `stream_id` to connection ID hash (prevents per-stream bypass)
+- **Symlink escape check** - Fixed for Zig 0.16.0-dev API using `std.os.linux.statx()` with `AT.SYMLINK_NOFOLLOW`
+
+#### HTTP/3 Request Lifecycle (Phase 1)
+- **Handler timing for body-bearing requests** - Fixed `processHeadersFrame()` to only invoke handlers immediately for non-body requests; POST/PUT/PATCH now wait for complete body
+- **Response stream routing** - Fixed `sendFrameToConnection()` to use existing request stream via `Connection.getStream()` instead of creating new streams
+- **Request cleanup** - Added cleanup of completed requests from `active_requests` HashMap after response is sent to prevent memory leaks
+
+#### Middleware Instance Isolation (Phase 2)
+- **Removed 13 global variables** - All middleware state now stored per-server instance
+- **Added `MiddlewareConfig` struct** - Holds all middleware configuration (auth, rate limiting, compression, security headers, static files)
+- **Request-scoped config** - Added `middleware_config` field to `Request` for middleware to read server-specific settings
+- **Thread-safe middleware** - Middleware handlers now read configuration from request context instead of global state
+
+#### DNS Cache Concurrency (Phase 3)
+- **Fixed data race in `DnsCache.get()`** - Now clones answers while holding shared lock; caller owns returned ArrayList
+- **Atomic hit_count** - Changed `hit_count` increment to use `@atomicRmw` for thread-safe statistics under shared lock
+- **Proper ownership** - Updated `CnsResolver.buildResponse()` call site to handle owned ArrayList with proper cleanup
+
+#### Telemetry Fix (Phase 5)
+- **Fixed rate calculation drift** - `CryptoTelemetrySystem.collectMetrics()` now calculates rates from stored previous counter values instead of deriving from prior rates
+
+#### zcrypto v1.0.0 Migration
+- **Updated to stable zcrypto APIs** - Migrated from deprecated namespaces to v1.0.0 stable modules
+- **Changed PQ default** - `-Dpost-quantum` now defaults to `false` (was `true`)
+- **Added `-Dexperimental-crypto` flag** - Required alongside `-Dpost-quantum` for PQ features
+- **Build contract** - zcrypto now receives explicit feature flags: `tls=true`, `hardware-accel=true`, PQ only when both flags enabled
+- **Core crypto migration** - Replaced `zcrypto.aead`, `zcrypto.block`, `zcrypto.stream` with `std.crypto` equivalents
+- **Signature verification** - Updated to use `zcrypto.asym.verifyEd25519()`
+- **Key exchange** - Updated to use `zcrypto.kex.X25519.generateKeypair()` and `.computeSharedSecret()`
+- **Random generation** - Updated to use `zcrypto.rand.fill()`
+- **Secure memory** - Updated to use `zcrypto.util.secureZero()` and `.constantTimeCompare()`
+- **PQ module gating** - `hybrid_pq_tls.zig` and `pq_quic.zig` now require both flags at compile time
+
+#### DoQ (RFC 9250) Correctness
+- **Stream multiplexing** - Server now handles queries on any stream ID (was rejecting non-zero streams)
+- **Client stream creation** - Fixed to use `createStream(.client_bidirectional)` instead of non-existent `openStream(0)`
+- **Stream write signature** - Fixed to use correct `write(data, fin)` signature with FIN flag
+
+#### DNS Message Parsing (RFC 1035)
+- **Compression pointer support** - Implemented full RFC 1035 Section 4.1.4 compression pointer handling in `decodeDomainName()`
+  - Detects pointer marker `(length & 0xC0) == 0xC0`
+  - Reads 14-bit offset and follows pointer into message
+  - Loop detection with 128-level maximum
+  - Updated all call sites to pass message data for pointer resolution
+
+#### CNS Resolver Ownership
+- **CacheEntry memory** - Fixed to clone question on init (was storing borrowed reference)
+- **buildResponse memory** - Fixed to clone question and answers (prevents double-free)
+- **DnsCache.put signature** - Changed to accept `*const DnsQuestion` pointer
+
+#### Recovery & Congestion Control
+- **ACK processing order** - Fixed to call `space.onAckReceived()` before congestion controller uses `largest_acked_time`
+
+#### Multiplexer API
+- **Payload extraction** - Added `header_length` field to `PacketHeader`; multiplexer now extracts only payload bytes after header
+
+#### Dependency Cleanup (Phase 4)
+- **Removed zsync from dependencies** - Async runtime is fully in-tree, no external dependency needed
+- **Fixed `dev/deps.sh`** - Now uses `zig build --fetch` for validation instead of `--save` with branch refs
+- **Added tests/ to package paths** - Complete package now includes test files
+
+### Added
+
+#### Test Infrastructure
+- **Split zcrypto tests** - Stable API tests now run on every build
+  - `tests/zcrypto_stable_test.zig` - 12 tests for hash, kex, kdf, rand, util (always runs)
+  - `tests/zcrypto_integration_test.zig` - 15 PQ tests (requires `-Dpost-quantum=true -Dexperimental-crypto=true`)
+- **ML-KEM-1024 test coverage** - Verifies 1568-byte key sizes and 48-byte shared secrets
+- **SHA-384 streaming test** - Validates zcrypto v1.0.1 SHA-384 support
+- **Regression tests** - Prevents recurrence of decapsulation and stack memory bugs
+
+#### Docker Verification Environment
+- **`docker/`** - Clean Linux verification using host Zig and valgrind
+  - Debian-based container with pinned `0.16.0-dev` fallback toolchain
+  - Host networking for build and runtime
+  - `entrypoint.sh` - Prefer mounted host Zig when available
+  - `run-verify.sh` - 6-step verification (stable tests, stable integration, PQ tests, PQ integration, validation, memory pass)
+  - `compose.yml` includes both standalone and host-Zig verification services
+
+#### Stream API
+- **`readWithTimeout()`** - Polling-based read with deadline for timeout support in DoQ client
+
+#### DNS Types
+- **`DnsQuestion.clone()`** - Deep clone method duplicating all allocated memory
+- **`DnsResourceRecord.clone()`** - Deep clone method duplicating name and data fields
+
+#### Connection API
+- **`Connection.getStream()`** - Get existing stream by ID for response routing
+
+#### Error Types
+- **`ZquicError.StreamNotFound`** - New error for when a stream ID does not exist
+
+#### Middleware Types
+- **`MiddlewareConfig`** - Per-server middleware configuration struct
+- **`getConfig()`** - Helper to retrieve config from request context
+
+### Changed
+
+#### Documentation
+- **README.md** - Fixed stale example code
+  - Removed non-existent `enable_post_quantum`, `cert_path`, `key_path` config fields
+  - Removed non-existent `PQAuthMiddleware`
+  - Updated to use actual `server.router.get()` API
+  - Changed Post-Quantum status from ✅ to ⚠️ Experimental with build flag requirements
+- **docs/integrations/zcrypto.md** - Updated to v1.0.1
+  - Fixed PQ implementation status table (ML-KEM-1024 now Real, not Stub)
+  - Removed X448 stub references
+  - Added v1.0.0 → v1.0.1 migration guide
+
+#### Zig 0.16.0-dev API Updates
+- **Filesystem API** - Replaced `std.fs.cwd()` with `std.os.linux.statx()` syscall
+- **JSON API** - Replaced `std.json.stringifyAlloc()` with `std.json.Stringify` streaming API
+- **Logging** - Added `.{}` format args to all `std.log.info` calls without arguments
+
+### Files Modified
+
+| Module | Files |
+|--------|-------|
+| Build | `build.zig`, `build.zig.zon`, `dev/build_release.sh`, `dev/deps.sh` |
+| Crypto | `src/crypto/pq_quic.zig`, `src/crypto/hybrid_pq_tls.zig`, `src/crypto/comprehensive_tls.zig`, `src/crypto/enhanced_tls.zig` |
+| PQ | `src/post_quantum.zig` |
+| Tests | `tests/zcrypto_stable_test.zig` (new), `tests/zcrypto_integration_test.zig` |
+| Docker | `docker/Dockerfile`, `docker/compose.yml`, `docker/entrypoint.sh`, `docker/run-verify.sh`, `docker/README.md` |
+| Docs | `README.md`, `docs/integrations/zcrypto.md`, `CHANGELOG.md` |
+| Core | `src/core/connection.zig`, `src/core/stream.zig`, `src/core/packet.zig`, `src/core/recovery.zig` |
+| Utils | `src/utils/error.zig` |
+| Async | `src/async/event_loop.zig` |
+| HTTP/3 | `src/http3/server.zig`, `src/http3/response.zig`, `src/http3/frame.zig`, `src/http3/middleware.zig`, `src/http3/request.zig` |
+| DoQ | `src/doq/server.zig`, `src/doq/client.zig`, `src/doq/message.zig` |
+| Services | `src/services/cns_resolver.zig` |
+| Net | `src/net/multiplexer.zig` |
+| Monitoring | `src/monitoring/crypto_telemetry.zig` |
+| Tests | `tests/http3_integration_test.zig` |
+
+---
+
 ## [0.9.6] - 2026-02-11
 
 ### SSH/QUIC Integration & Zig 0.16.0 Compatibility

@@ -38,7 +38,7 @@ pub const WraithConfig = struct {
     /// Private key path for TLS
     key_path: []const u8 = "/etc/ssl/private/wraith.key",
     /// Enable post-quantum crypto
-    enable_post_quantum: bool = true,
+    enable_post_quantum: bool = false, // Experimental: requires -Dpost-quantum=true -Dexperimental-crypto=true
     /// Enable compression
     enable_compression: bool = true,
     /// Cache size in MB
