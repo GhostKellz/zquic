@@ -4,6 +4,7 @@
 //! crypto/blockchain workloads with support for DoQ, HTTP/3, and gRPC-over-QUIC
 
 const std = @import("std");
+const Time = @import("../utils/time.zig");
 const Error = @import("../utils/error.zig");
 const Connection = @import("../core/connection.zig").Connection;
 const ZeroRttContext = @import("../crypto/zero_rtt_resumption.zig").ZeroRttContext;
@@ -137,7 +138,7 @@ pub const MultiplexedConnection = struct {
     const Self = @This();
 
     pub fn init(allocator: std.mem.Allocator, connection: *Connection, id: u64, protocols: std.EnumSet(ProtocolType)) !Self {
-        const now = std.time.microTimestamp();
+        const now = Time.nowMicros();
 
         return Self{
             .connection = connection,
@@ -211,7 +212,7 @@ pub const MultiplexedConnection = struct {
         self.health.packet_loss_rate = loss_rate;
         self.health.congestion_window = cwnd;
         self.health.bandwidth_estimate = bandwidth;
-        self.health.last_health_check = std.time.microTimestamp();
+        self.health.last_health_check = Time.nowMicros();
 
         // Reset failure count on successful health update
         if (self.health.isHealthy()) {
@@ -221,7 +222,7 @@ pub const MultiplexedConnection = struct {
 
     /// Mark connection as used for specific priority
     pub fn markUsed(self: *Self, priority: ConnectionPriority) void {
-        _ = self.last_used.store(std.time.microTimestamp(), .Monotonic);
+        _ = self.last_used.store(Time.nowMicros(), .Monotonic);
         _ = self.use_count.fetchAdd(1, .Monotonic);
         _ = self.requests_served.fetchAdd(1, .Monotonic);
         _ = self.current_priority.store(@intFromEnum(priority), .Monotonic);
@@ -244,7 +245,7 @@ pub const MultiplexedConnection = struct {
     pub fn getEfficiencyScore(self: *const Self) f32 {
         const health_score = self.health.getHealthScore();
         const load_factor = 1.0 - (@as(f32, @floatFromInt(self.use_count.load(.Monotonic))) / 1000.0);
-        const age_factor = 1.0 - (@as(f32, @floatFromInt(std.time.microTimestamp() - self.created_at)) / 3600_000_000.0); // 1 hour
+        const age_factor = 1.0 - (@as(f32, @floatFromInt(Time.nowMicros() - self.created_at)) / 3600_000_000.0); // 1 hour
 
         return health_score * load_factor * @max(age_factor, 0.1);
     }
@@ -489,7 +490,7 @@ pub const CryptoConnectionMultiplexer = struct {
         self.pool_mutex.lock();
         defer self.pool_mutex.unlock();
 
-        const now = std.time.microTimestamp();
+        const now = Time.nowMicros();
         var connections_to_remove = .{};
         defer connections_to_remove.deinit(allocator);
 

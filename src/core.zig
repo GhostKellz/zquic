@@ -49,6 +49,7 @@ pub const Udp = @import("net/udp.zig");
 pub const UdpMultiplexer = @import("net/multiplexer.zig");
 pub const Socket = @import("net/socket.zig");
 pub const IPv6 = @import("net/ipv6.zig");
+pub const NetAddress = @import("net/address.zig");
 
 /// Core encryption levels
 pub const EncryptionLevel = enum {

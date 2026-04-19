@@ -254,10 +254,10 @@ pub const DnsMessage = struct {
     }
 
     pub fn serialize(self: *const DnsMessage) ![]u8 {
-        var buffer: std.ArrayListUnmanaged(u8) = .{};
-        defer buffer.deinit(self.allocator);
+        var buffer: std.Io.Writer.Allocating = .init(self.allocator);
+        defer buffer.deinit();
 
-        const writer = buffer.writer();
+        const writer = &buffer.writer;
 
         // Write header
         try writer.writeInt(u16, self.header.id, .big);
@@ -287,7 +287,7 @@ pub const DnsMessage = struct {
             try additional.serialize(writer);
         }
 
-        return try self.allocator.dupe(u8, buffer.items);
+        return try buffer.toOwnedSlice();
     }
 };
 
@@ -436,7 +436,7 @@ pub const DnsCache = struct {
                 _ = @atomicRmw(u32, &entry.hit_count, .Add, 1, .monotonic);
 
                 // Clone answers while holding lock - caller owns the returned list
-                var cloned = std.ArrayList(DnsResourceRecord).init(allocator);
+                var cloned = std.array_list.Managed(DnsResourceRecord).init(allocator);
                 errdefer {
                     for (cloned.items) |*a| a.deinit(allocator);
                     cloned.deinit();
@@ -567,9 +567,9 @@ pub const CnsResolver = struct {
     }
 
     pub fn resolveQuery(self: *CnsResolver, question: *const DnsQuestion) !DnsMessage {
-        const start_time = std.time.microTimestamp();
+        const start_time = Time.nowMicros();
         defer {
-            const elapsed = @as(u64, @intCast(std.time.microTimestamp() - start_time));
+            const elapsed = Time.nowMicros() - start_time;
             // Update average response time
             if (self.stats.avg_response_time_us == 0) {
                 self.stats.avg_response_time_us = elapsed;

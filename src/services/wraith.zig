@@ -299,14 +299,14 @@ pub const ProxyRequest = struct {
         return ProxyRequest{
             .original_request = request,
             .backend = backend,
-            .start_time = std.time.microTimestamp(),
+            .start_time = Time.nowMicros(),
             .client_ip = client_ip,
             .headers_modified = false,
         };
     }
 
     pub fn getElapsedTime(self: *const ProxyRequest) u64 {
-        return @intCast(std.time.microTimestamp() - self.start_time);
+        return @intCast(Time.nowMicros() - self.start_time);
     }
 };
 
@@ -378,7 +378,7 @@ pub const HealthChecker = struct {
             return .unhealthy;
         };
 
-        const start_time = std.time.microTimestamp();
+        const start_time = Time.nowMicros();
 
         // Make health check request with timeout
         var request = client.open(.GET, std.Uri.parse(health_url) catch {
@@ -409,7 +409,7 @@ pub const HealthChecker = struct {
             return .unhealthy;
         };
 
-        const response_time = std.time.microTimestamp() - start_time;
+        const response_time = Time.nowMicros() - start_time;
         backend.recordResponseTime(@intCast(response_time));
 
         // Check response status
@@ -422,7 +422,7 @@ pub const HealthChecker = struct {
         };
 
         // Read response body for additional health info (optional)
-        var response_body = std.ArrayList(u8).init(self.allocator);
+        var response_body = std.array_list.Managed(u8).init(self.allocator);
         defer response_body.deinit();
 
         const reader = request.reader();
@@ -709,7 +709,7 @@ fn proxyHandler(req: *Request, res: *Response) !void {
     // Get proxy instance from request context (would be set during routing)
     // For now, we'll implement a basic proxy that forwards to a backend
 
-    const start_time = std.time.microTimestamp();
+    const start_time = Time.nowMicros();
 
     // TODO: Get actual proxy instance and select backend
     // const proxy = getProxyFromContext(req);
@@ -818,7 +818,7 @@ fn proxyHandler(req: *Request, res: *Response) !void {
     try res.setHeader("X-Wraith-Proxy", "v0.4.0");
     try res.setHeader("X-Proxy-Backend", backend_host);
 
-    const response_time = std.time.microTimestamp() - start_time;
+    const response_time = Time.nowMicros() - start_time;
     var time_buffer: [32]u8 = undefined;
     const time_str = std.fmt.bufPrint(&time_buffer, "{}", .{response_time}) catch "unknown";
     try res.setHeader("X-Response-Time-Microseconds", time_str);

@@ -178,7 +178,7 @@ When enabled, ML-KEM-768 + X25519 hybrid key exchange is available. See [zcrypto
 ## Troubleshooting
 
 ### Build Issues
-- Ensure you have Zig 0.16.0-dev.3144+ or later
+- Ensure you have Zig 0.17.0-dev.27+ or later
 - Check that zcrypto dependencies are available
 - Try `rm -rf zig-cache .zig-cache` and rebuild
 
@@ -201,9 +201,9 @@ zig fmt src/ docs/ examples/
 ./dev/test.sh   # zig build test + integration-tests + fuzz-tests
 ```
 
-## Zig 0.16 Migration Notes
+## Zig 0.17 Migration Notes
 
-Zig 0.16.0-dev introduced notable changes that ZQUIC follows:
+Zig 0.17.0-dev introduced notable changes that ZQUIC follows:
 
 - `std.ArrayList` is unmanaged by default - always pass an allocator
 - Use `std.posix.clock_gettime()` for timing

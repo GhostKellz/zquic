@@ -5,6 +5,7 @@
 
 const std = @import("std");
 const Error = @import("../utils/error.zig");
+const Time = @import("../utils/time.zig");
 
 /// Telemetry configuration for crypto workloads
 pub const CryptoTelemetryConfig = struct {
@@ -84,7 +85,7 @@ pub const CryptoPerformanceMetrics = struct {
 
     pub fn init() Self {
         return Self{
-            .timestamp = std.time.microTimestamp(),
+            .timestamp = Time.nowMicros(),
             .total_connections = 0,
             .active_connections = 0,
             .connections_per_second = 0.0,
@@ -305,7 +306,7 @@ pub const CryptoTelemetrySystem = struct {
             .active_alerts = .{},
             .alert_history = .{},
             .next_alert_id = std.atomic.Atomic(u64).init(1),
-            .last_collection_time = std.time.microTimestamp(),
+            .last_collection_time = Time.nowMicros(),
             .collection_counter = 0,
             .connection_count = std.atomic.Atomic(u32).init(0),
             .request_count = std.atomic.Atomic(u64).init(0),
@@ -398,7 +399,7 @@ pub const CryptoTelemetrySystem = struct {
         self.metrics_mutex.lock();
         defer self.metrics_mutex.unlock();
 
-        const now = std.time.microTimestamp();
+        const now = Time.nowMicros();
         const time_delta = now - self.last_collection_time;
         const time_delta_seconds = @as(f64, @floatFromInt(time_delta)) / 1_000_000.0;
 
@@ -505,7 +506,7 @@ pub const CryptoTelemetrySystem = struct {
     fn raiseAlert(self: *Self, severity: AlertSeverity, category: []const u8, message: []const u8, metric_name: []const u8, current_value: f64, threshold_value: f64, suggested_action: ?[]const u8) void {
         const alert = CryptoAlert{
             .id = self.next_alert_id.fetchAdd(1, .Monotonic),
-            .timestamp = std.time.microTimestamp(),
+            .timestamp = Time.nowMicros(),
             .severity = severity,
             .category = category,
             .message = message,

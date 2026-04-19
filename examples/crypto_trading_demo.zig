@@ -12,7 +12,7 @@
 
 const std = @import("std");
 const zquic = @import("zquic");
-const Time = zquic.Time;
+const Time = @import("../src/utils/time.zig");
 
 // Import crypto features (requires -Dpost-quantum=true -Dexperimental-crypto=true)
 const HybridPQTlsContext = zquic.crypto.HybridPQTlsContext;
@@ -173,7 +173,7 @@ const CryptoTradingClient = struct {
 
     /// Send high-priority trading order with ultra-low latency
     pub fn sendTradingOrder(self: *Self, order: TradingOrder) !void {
-        const start_time = std.time.microTimestamp();
+        const start_time = Time.nowMicros();
 
         // Determine connection priority based on order priority
         const conn_priority = switch (order.priority) {
@@ -203,7 +203,7 @@ const CryptoTradingClient = struct {
         self.congestion_controller.onPacketSent(@as(u32, @intCast(order_data.len)));
 
         // Track metrics
-        const end_time = std.time.microTimestamp();
+        const end_time = Time.nowMicros();
         const latency = end_time - start_time;
 
         _ = self.orders_sent.fetchAdd(1, .Monotonic);
@@ -276,7 +276,7 @@ const CryptoTradingClient = struct {
 
     /// Process incoming market data updates
     pub fn processMarketUpdate(self: *Self, update: MarketUpdate) !void {
-        const processing_start = std.time.microTimestamp();
+        const processing_start = Time.nowMicros();
 
         // Simulate market data processing
         // In a real implementation, this would trigger trading algorithms
@@ -284,7 +284,7 @@ const CryptoTradingClient = struct {
         const market_data = try update.serialize(self.allocator);
         defer self.allocator.free(market_data);
 
-        const processing_time = std.time.microTimestamp() - processing_start;
+        const processing_time = Time.nowMicros() - processing_start;
 
         // Record market data processing
         self.telemetry_system.recordRequest(.http3, .normal, processing_time, market_data.len);
@@ -388,7 +388,7 @@ pub fn runCryptoTradingDemo(allocator: std.mem.Allocator) !void {
             .priority = priorities[order_id % priorities.len],
             .quantity = 0.1 + (@as(f64, @floatFromInt(order_id % 100)) / 100.0), // 0.1 to 1.1
             .price = if (order_id % 2 == 0) 50000.0 + (@as(f64, @floatFromInt(order_id % 1000))) else null,
-            .timestamp = std.time.microTimestamp(),
+            .timestamp = Time.nowMicros(),
         };
 
         // Send trading order
@@ -402,7 +402,7 @@ pub fn runCryptoTradingDemo(allocator: std.mem.Allocator) !void {
                 .ask = 50050.0 + (@as(f64, @floatFromInt(order_id % 100))),
                 .last_price = 50000.0 + (@as(f64, @floatFromInt(order_id % 100))),
                 .volume_24h = 1000000.0 + (@as(f64, @floatFromInt(order_id % 100000))),
-                .timestamp = std.time.microTimestamp(),
+                .timestamp = Time.nowMicros(),
             };
 
             try trading_client.processMarketUpdate(market_update);

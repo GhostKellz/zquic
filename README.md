@@ -12,9 +12,9 @@
   <img src="https://img.shields.io/badge/License-Apache%202.0-blue?style=for-the-badge" alt="License">
 </p>
 
-ZQUIC is a **modular, high-performance QUIC transport stack** built entirely in Zig 0.16.0-dev. It ships with a native async runtime (no external deps), hybrid post-quantum TLS via `zcrypto`, SSH/QUIC secret injection support, and a suite of HTTP/3, DoQ, VPN, and service layers tuned for Ghost production workloads.
+ZQUIC is a **modular, high-performance QUIC transport stack** built entirely in Zig 0.17.0-dev. It ships with a native async runtime (no external deps), hybrid post-quantum TLS via `zcrypto`, SSH/QUIC secret injection support, and a suite of HTTP/3, DoQ, VPN, and service layers tuned for Ghost production workloads.
 
-> ✅ Builds cleanly with Zig 0.16.0-dev on Linux/macOS/Windows and passes the `dev/test.sh` suite.
+> ✅ Builds cleanly with Zig 0.17.0-dev on Linux/macOS/Windows and passes the `dev/test.sh` suite.
 
 ## 🎯 Purpose & Vision
 
@@ -154,7 +154,7 @@ cd zquic
 zig build        # produces all enabled binaries under zig-out/bin/
 ```
 
-Keep the dependency metadata intact (`build.zig.zon` pins dependencies) and build with the latest Zig 0.16.0-dev toolchain. Use `zig build -Dtarget=<triple>` for cross compilation.
+Keep the dependency metadata intact (`build.zig.zon` pins dependencies) and build with the latest Zig 0.17.0-dev toolchain. Use `zig build -Dtarget=<triple>` for cross compilation.
 
 ### Local Development Loop
 
@@ -191,7 +191,7 @@ The `dev/` scripts wrap the raw `zig` commands and provide the configuration we 
 
 ### 🚀 Key Achievements
 - 6 shipping binaries under `zig-out/bin/`
-- Clean Zig 0.16.0-dev builds across Linux/macOS/Windows
+- Clean Zig 0.17.0-dev builds across Linux/macOS/Windows
 - Internal async runtime + connection pool validated via new tests
 - Documentation refreshed to match current feature flags
 
@@ -276,5 +276,4 @@ Please read `CONTRIBUTING.md` for coding standards, testing expectations, and PR
 ## 📄 License
 
 Apache 2.0 — built to power the post-quantum future with modern Zig applications.
-
 

@@ -6,6 +6,8 @@
 const std = @import("std");
 const zquic_core = @import("zquic_core");
 const zcrypto = @import("zcrypto");
+const NetAddress = @import("net/address.zig");
+const Address = NetAddress.Address;
 
 // Re-export VPN functionality
 pub const PacketRouter = @import("vpn/router.zig").PacketRouter;
@@ -29,8 +31,8 @@ pub const VpnProtocol = enum {
 pub const VpnConfig = struct {
     mode: VpnMode = .client,
     protocol: VpnProtocol = .wireguard_over_quic,
-    local_address: std.net.Address,
-    remote_address: std.net.Address,
+    local_address: Address,
+    remote_address: Address,
     mtu: u32 = 1420,
     enable_nat: bool = true,
     enable_compression: bool = false,

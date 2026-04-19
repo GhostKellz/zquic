@@ -12,6 +12,9 @@
 //! - Error propagation aligned with Zig stdlib
 
 const std = @import("std");
+const NetAddress = @import("../net/address.zig");
+const Address = NetAddress.Address;
+const PosixAddress = NetAddress.PosixAddress;
 
 /// Errors that can occur during I/O operations
 pub const IoError = error{
@@ -150,13 +153,14 @@ pub const PacketReader = struct {
     }
 
     /// Read packet with source address information
-    pub fn readFrom(self: *Self, buffer: []u8, address: *std.net.Address) IoError!usize {
-        var addr_len: std.posix.socklen_t = @sizeOf(std.posix.sockaddr);
+    pub fn readFrom(self: *Self, buffer: []u8, address: *Address) IoError!usize {
+        var addr_storage: PosixAddress = undefined;
+        var addr_len: std.posix.socklen_t = @sizeOf(PosixAddress);
         const bytes_read = std.posix.recvfrom(
             self.socket,
             buffer,
             0,
-            @ptrCast(&address.any),
+            @ptrCast(&addr_storage),
             &addr_len,
         ) catch |err| switch (err) {
             error.WouldBlock => return IoError.WouldBlock,
@@ -164,6 +168,7 @@ pub const PacketReader = struct {
             error.NetworkUnreachable => return IoError.NetworkError,
             else => return IoError.NetworkError,
         };
+        address.* = NetAddress.fromPosix(&addr_storage);
         return bytes_read;
     }
 };
@@ -209,13 +214,15 @@ pub const PacketWriter = struct {
     }
 
     /// Write packet to specific address
-    pub fn writeTo(self: *Self, bytes: []const u8, address: std.net.Address) IoError!usize {
+    pub fn writeTo(self: *Self, bytes: []const u8, address: Address) IoError!usize {
+        var addr_storage: PosixAddress = undefined;
+        const addr_len = NetAddress.toPosix(&address, &addr_storage);
         const bytes_written = std.posix.sendto(
             self.socket,
             bytes,
             0,
-            &address.any,
-            address.getOsSockLen(),
+            @ptrCast(&addr_storage),
+            addr_len,
         ) catch |err| switch (err) {
             error.WouldBlock => return IoError.WouldBlock,
             error.ConnectionResetByPeer => return IoError.ConnectionClosed,

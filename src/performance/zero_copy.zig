@@ -16,6 +16,7 @@ const std = @import("std");
 const zcrypto = @import("zcrypto");
 const Error = @import("../utils/error.zig");
 const builtin = @import("builtin");
+const NetAddress = @import("../net/address.zig");
 
 // Import zcrypto v0.6.0 hardware acceleration
 const HardwareCrypto = zcrypto.HardwareCrypto;
@@ -604,26 +605,26 @@ pub const CacheAwareAllocator = struct {
 pub const BatchNetworkOps = struct {
     const BatchSend = struct {
         data: []const u8,
-        destination: std.net.Address,
+        destination: NetAddress.Address,
         flags: u32,
     };
 
     const BatchReceive = struct {
         buffer: []u8,
-        source: std.net.Address,
+        source: NetAddress.Address,
         bytes_received: usize,
         flags: u32,
     };
 
-    send_batch: std.ArrayList(BatchSend),
-    receive_batch: std.ArrayList(BatchReceive),
+    send_batch: std.array_list.Managed(BatchSend),
+    receive_batch: std.array_list.Managed(BatchReceive),
     max_batch_size: usize,
     allocator: std.mem.Allocator,
 
     pub fn init(allocator: std.mem.Allocator, max_batch_size: usize) BatchNetworkOps {
         return BatchNetworkOps{
-            .send_batch = .{},
-            .receive_batch = .{},
+            .send_batch = std.array_list.Managed(BatchSend).init(allocator),
+            .receive_batch = std.array_list.Managed(BatchReceive).init(allocator),
             .max_batch_size = max_batch_size,
             .allocator = allocator,
         };
@@ -634,7 +635,7 @@ pub const BatchNetworkOps = struct {
         self.receive_batch.deinit();
     }
 
-    pub fn queueSend(self: *BatchNetworkOps, data: []const u8, destination: std.net.Address, flags: u32) !void {
+    pub fn queueSend(self: *BatchNetworkOps, data: []const u8, destination: NetAddress.Address, flags: u32) !void {
         if (self.send_batch.items.len >= self.max_batch_size) {
             return error.BatchFull;
         }
@@ -672,12 +673,14 @@ pub const BatchNetworkOps = struct {
 
         // Fallback: individual sends
         for (self.send_batch.items) |batch_item| {
+            var addr_storage: NetAddress.PosixAddress = undefined;
+            const addr_len = NetAddress.toPosix(&batch_item.destination, &addr_storage);
             const bytes_sent = std.posix.sendto(
                 socket,
                 batch_item.data,
                 batch_item.flags,
-                &batch_item.destination.any,
-                batch_item.destination.getOsSockLen(),
+                @ptrCast(&addr_storage),
+                addr_len,
             ) catch continue;
 
             if (bytes_sent == batch_item.data.len) {
@@ -702,15 +705,17 @@ pub const BatchNetworkOps = struct {
 
         // Fallback: individual receives
         for (self.receive_batch.items) |*batch_item| {
-            var addr_len: std.posix.socklen_t = @sizeOf(std.net.Address);
+            var addr_storage: NetAddress.PosixAddress = undefined;
+            var addr_len: std.posix.socklen_t = @sizeOf(NetAddress.PosixAddress);
             const bytes_received = std.posix.recvfrom(
                 socket,
                 batch_item.buffer,
                 batch_item.flags,
-                &batch_item.source.any,
+                @ptrCast(&addr_storage),
                 &addr_len,
             ) catch continue;
 
+            batch_item.source = NetAddress.fromPosix(&addr_storage);
             batch_item.bytes_received = bytes_received;
             received_count += 1;
         }
@@ -830,8 +835,7 @@ pub const PerformanceMonitor = struct {
         if (comptime builtin.cpu.arch == .x86_64) {
             return asm volatile ("rdtsc"
                 : [ret] "={rax}" (-> u64),
-                :
-                : .{ .rdx = true });
+            );
         }
         return 0;
     }
@@ -842,7 +846,7 @@ pub const PerformanceMonitor = struct {
             return asm volatile ("rdpmc"
                 : [ret] "={rax}" (-> u64),
                 : [index] "{rcx}" (index),
-                : .{ .rdx = true });
+            );
         }
         return 0;
     }

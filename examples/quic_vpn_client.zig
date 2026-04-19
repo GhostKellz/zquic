@@ -5,6 +5,7 @@
 
 const std = @import("std");
 const zquic = @import("zquic");
+const NetAddress = zquic.NetAddress;
 
 comptime {
     if (!@hasDecl(zquic, "vpn") or !@hasDecl(zquic.vpn, "PacketRouter")) {
@@ -29,17 +30,17 @@ pub fn main() !void {
     var metrics = zquic.monitoring.PrometheusMetrics.init(allocator);
     router.attachPrometheus(&metrics);
 
-    const client_iface = try std.net.Address.resolveIp("10.0.5.2", 0);
+    const client_iface = try NetAddress.resolveIp("10.0.5.2", 0);
     try router.addInterface("ghostmesh-client0", client_iface, 1350);
 
-    const exit_gateway = try std.net.Address.resolveIp("100.64.0.1", 4433);
-    const any_dest = try std.net.Address.resolveIp("0.0.0.0", 0);
+    const exit_gateway = try NetAddress.resolveIp("100.64.0.1", 4433);
+    const any_dest = try NetAddress.resolveIp("0.0.0.0", 0);
     const route_conn = try zquic.Packet.ConnectionId.init("client-demo");
     try router.addRoute(any_dest, exit_gateway, "ghostmesh-client0", route_conn);
 
     const payload = "client-probe";
-    const local = try std.net.Address.resolveIp("10.0.5.2", 4242);
-    const remote = try std.net.Address.resolveIp("192.0.2.99", 443);
+    const local = try NetAddress.resolveIp("10.0.5.2", 4242);
+    const remote = try NetAddress.resolveIp("192.0.2.99", 443);
     _ = try router.forwardPacket(payload, local, remote);
 
     const metrics_blob = try metrics.render(allocator);

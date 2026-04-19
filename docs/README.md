@@ -1,6 +1,6 @@
 # ZQUIC Documentation
 
-Welcome to ZQUIC documentation. This guide covers the modular QUIC transport library for Zig 0.16.0-dev.
+Welcome to ZQUIC documentation. This guide covers the modular QUIC transport library for Zig 0.17.0-dev.
 
 ## Overview
 

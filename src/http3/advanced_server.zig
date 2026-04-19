@@ -20,6 +20,8 @@ const QpackDecoder = @import("qpack.zig").QpackDecoder;
 const Request = @import("request.zig").Request;
 const Response = @import("response.zig").Response;
 const EnhancedUdpMultiplexer = @import("../transport/enhanced_multiplexer.zig").EnhancedUdpMultiplexer;
+const NetAddress = @import("../net/address.zig");
+const Time = @import("../utils/time.zig");
 
 /// Load balancing algorithms
 pub const LoadBalancingAlgorithm = enum {
@@ -92,8 +94,8 @@ pub const BackendConfig = struct {
     enable_tls: bool = true,
     sni_hostname: ?[]const u8 = null,
 
-    pub fn getAddress(self: *const BackendConfig) !std.net.Address {
-        return std.net.Address.resolveIp(self.host, self.port);
+    pub fn getAddress(self: *const BackendConfig) !NetAddress.Address {
+        return NetAddress.resolveIp(self.host, self.port);
     }
 };
 
@@ -150,7 +152,7 @@ pub const HealthStatus = struct {
     pub fn init() HealthStatus {
         return HealthStatus{
             .is_healthy = true,
-            .last_check = (try std.time.Instant.now()).timestamp.sec,
+            .last_check = Time.nowSeconds(),
             .consecutive_failures = 0,
             .consecutive_successes = 0,
         };
@@ -159,13 +161,13 @@ pub const HealthStatus = struct {
     pub fn markSuccess(self: *HealthStatus) void {
         self.consecutive_successes += 1;
         self.consecutive_failures = 0;
-        self.last_check = (try std.time.Instant.now()).timestamp.sec;
+        self.last_check = Time.nowSeconds();
     }
 
     pub fn markFailure(self: *HealthStatus) void {
         self.consecutive_failures += 1;
         self.consecutive_successes = 0;
-        self.last_check = (try std.time.Instant.now()).timestamp.sec;
+        self.last_check = Time.nowSeconds();
     }
 
     pub fn updateHealthStatus(self: *HealthStatus, config: HealthCheckConfig) void {
@@ -200,7 +202,7 @@ pub const CircuitBreaker = struct {
     pub fn canExecute(self: *CircuitBreaker) bool {
         if (!self.config.enabled) return true;
 
-        const now = (try std.time.Instant.now()).timestamp.sec;
+        const now = Time.nowSeconds();
 
         switch (self.state) {
             .closed => return true,
@@ -241,7 +243,7 @@ pub const CircuitBreaker = struct {
         if (!self.config.enabled) return;
 
         self.failure_count += 1;
-        self.last_failure_time = (try std.time.Instant.now()).timestamp.sec;
+        self.last_failure_time = Time.nowSeconds();
 
         switch (self.state) {
             .closed => {
@@ -279,7 +281,7 @@ pub const ConnectionPool = struct {
         request_count: u32,
 
         pub fn init() PooledConnection {
-            const now = (try std.time.Instant.now()).timestamp.sec;
+            const now = Time.nowSeconds();
             return PooledConnection{
                 .connection = null,
                 .in_use = false,
@@ -290,7 +292,7 @@ pub const ConnectionPool = struct {
         }
 
         pub fn isExpired(self: *const PooledConnection, max_age_ms: u32) bool {
-            const now = (try std.time.Instant.now()).timestamp.sec;
+            const now = Time.nowSeconds();
             return now - self.last_used > max_age_ms;
         }
     };
@@ -319,7 +321,7 @@ pub const ConnectionPool = struct {
         if (self.available_connections.popOrNull()) |index| {
             var pooled_conn = &self.connections.items[index];
             pooled_conn.in_use = true;
-            pooled_conn.last_used = (try std.time.Instant.now()).timestamp.sec;
+            pooled_conn.last_used = Time.nowSeconds();
             return pooled_conn.connection;
         }
 
@@ -334,7 +336,6 @@ pub const ConnectionPool = struct {
     }
 
     pub fn returnConnection(self: *ConnectionPool, connection: *Connection) void {
-        const Time = @import("../utils/time.zig");
         for (self.connections.items, 0..) |*conn, i| {
             if (conn.connection == connection) {
                 conn.in_use = false;
@@ -894,7 +895,7 @@ pub const AdvancedHttp3Server = struct {
 
     /// Handle individual stream
     fn handleStream(self: *Self, context: *ConnectionContext, stream: *Stream.Stream) !void {
-        const request_start = std.time.microTimestamp();
+        const request_start = Time.nowMicros();
 
         // Parse HTTP/3 request
         const request = try self.parseRequest(stream);
@@ -922,7 +923,7 @@ pub const AdvancedHttp3Server = struct {
         try self.sendResponse(stream, &response);
 
         // Update statistics
-        const request_duration = std.time.microTimestamp() - request_start;
+        const request_duration = Time.nowMicros() - request_start;
         self.stats.incrementRequest();
         self.stats.addBytesReceived(request.getContentLength());
         self.stats.addBytesSent(response.getContentLength());
@@ -1067,7 +1068,7 @@ pub const ConnectionContext = struct {
         return ConnectionContext{
             .connection = connection,
             .active_streams = .empty,
-            .last_activity = (try std.time.Instant.now()).timestamp.sec,
+            .last_activity = Time.nowSeconds(),
             .allocator = allocator,
         };
     }
@@ -1077,7 +1078,7 @@ pub const ConnectionContext = struct {
     }
 
     pub fn updateActivity(self: *ConnectionContext) void {
-        self.last_activity = (try std.time.Instant.now()).timestamp.sec;
+        self.last_activity = Time.nowSeconds();
     }
 };
 
@@ -1092,7 +1093,7 @@ pub const ServerStats = struct {
 
     pub fn init() ServerStats {
         return ServerStats{
-            .start_time = (try std.time.Instant.now()).timestamp.sec,
+            .start_time = Time.nowSeconds(),
         };
     }
 
@@ -1109,7 +1110,7 @@ pub const ServerStats = struct {
     }
 
     pub fn uptime(self: *const ServerStats) i64 {
-        return (try std.time.Instant.now()).timestamp.sec - self.start_time;
+        return Time.nowSeconds() - self.start_time;
     }
 };
 

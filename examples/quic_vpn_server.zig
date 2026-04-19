@@ -5,6 +5,7 @@
 
 const std = @import("std");
 const zquic = @import("zquic");
+const NetAddress = zquic.NetAddress;
 
 comptime {
     if (!@hasDecl(zquic, "vpn") or !@hasDecl(zquic.vpn, "PacketRouter")) {
@@ -32,17 +33,17 @@ pub fn main() !void {
     var metrics = zquic.monitoring.PrometheusMetrics.init(allocator);
     router.attachPrometheus(&metrics);
 
-    const tunnel_interface = try std.net.Address.resolveIp("10.9.0.1", 0);
+    const tunnel_interface = try NetAddress.resolveIp("10.9.0.1", 0);
     try router.addInterface("ghostmesh0", tunnel_interface, 1400);
 
-    const protected_subnet = try std.net.Address.resolveIp("10.42.0.0", 0);
-    const peer_gateway = try std.net.Address.resolveIp("10.9.0.2", 4433);
+    const protected_subnet = try NetAddress.resolveIp("10.42.0.0", 0);
+    const peer_gateway = try NetAddress.resolveIp("10.9.0.2", 4433);
     const route_conn = try zquic.Packet.ConnectionId.init("ghostmesh-demo");
     try router.addRoute(protected_subnet, peer_gateway, "ghostmesh0", route_conn);
 
     const packet = "hello-from-quic";
-    const source = try std.net.Address.resolveIp("10.42.0.10", 5555);
-    const destination = try std.net.Address.resolveIp("10.99.0.5", 8080);
+    const source = try NetAddress.resolveIp("10.42.0.10", 5555);
+    const destination = try NetAddress.resolveIp("10.99.0.5", 8080);
 
     const forwarded = try router.forwardPacket(packet, source, destination);
     std.debug.print(

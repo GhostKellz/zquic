@@ -5,6 +5,7 @@
 
 const std = @import("std");
 const posix = std.posix;
+const NetAddress = @import("../net/address.zig");
 const EventLoop = @import("event_loop.zig").EventLoop;
 const Timer = @import("event_loop.zig").Timer;
 const TimerWheel = @import("event_loop.zig").TimerWheel;
@@ -117,7 +118,7 @@ pub const QuicRuntime = struct {
 
     const Self = @This();
 
-    pub fn init(allocator: std.mem.Allocator, local_address: std.net.Address, config: QuicRuntimeConfig) Error.ZquicError!Self {
+    pub fn init(allocator: std.mem.Allocator, local_address: NetAddress.Address, config: QuicRuntimeConfig) Error.ZquicError!Self {
         const multiplexer_config = MultiplexerConfig{
             .max_connections = config.max_connections,
             .connection_timeout_ms = config.connection_timeout_ms,
@@ -204,7 +205,7 @@ test "runtime initialization" {
         .max_connections = 10,
     };
 
-    const local_addr = std.net.Address.initIp4([4]u8{ 127, 0, 0, 1 }, 0);
+    const local_addr = NetAddress.initIp4([4]u8{ 127, 0, 0, 1 }, 0);
 
     var runtime = QuicRuntime.init(std.testing.allocator, local_addr, config) catch return; // Skip if bind fails
     defer runtime.deinit();

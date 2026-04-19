@@ -1,3 +1,26 @@
+## [Unreleased]
+
+### Zig 0.17 Migration
+
+#### Changed
+- Added a local Zig 0.17-compatible network address layer in `src/net/address.zig` backed by `std.Io.net.IpAddress`
+- Updated low-level UDP and socket code to use Zig 0.17 POSIX/IP conversion helpers instead of removed `std.net.Address` internals
+- Exported `NetAddress` through the public `zquic` module for internal and example use
+- Migrated the VPN path, related examples, and connection-migration code away from removed `std.net` APIs
+
+#### Fixed
+- Restored optional VPN/monitoring builds on Zig 0.17 by replacing removed `std.net.Address` usage in exercised code paths
+- Updated surfaced `ArrayList` callsites to Zig 0.17-compatible managed/unmanaged usage where required by the current build surface
+- Replaced surfaced removed `std.time.microTimestamp()` usage in exercised code with the repo time helper where required for successful builds
+- Fixed Prometheus exporter buffering and formatting against the installed Zig 0.17 stdlib API
+
+#### Verified
+- `zig build test` passes on Zig `0.17.0-dev.27+0dd99c37c`
+- `zig build -Dservices=true -Dvpn=true -Dpost-quantum=true -Dexperimental-crypto=true -Dmonitoring=true` passes on Zig `0.17.0-dev.27+0dd99c37c`
+
+#### Notes
+- Current release-facing documentation now targets Zig `0.17.0-dev` instead of the older `0.16.0-dev` baseline.
+
 ## [0.9.9] - 2026-04-12
 
 ### Bug Fixes, zcrypto v1.0.1 Migration & Zig 0.16.0-dev Compatibility

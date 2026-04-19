@@ -405,7 +405,7 @@ pub const ZvmQuicServer = struct {
         const active_execution = self.active_executions.get(request_id) orelse return;
         const request = active_execution.request;
 
-        const start_time = std.time.microTimestamp();
+        const start_time = Time.nowMicros();
 
         // Execute the WASM module (placeholder implementation)
         const result = self.executeWasmModule(request) catch |err| {
@@ -421,7 +421,7 @@ pub const ZvmQuicServer = struct {
                 .status = .runtime_error,
                 .return_value = "",
                 .gas_consumed = 0,
-                .execution_time_us = @intCast(std.time.microTimestamp() - start_time),
+                .execution_time_us = @intCast(Time.nowMicros() - start_time),
                 .error_message = error_msg,
                 .modified_state = "",
             };
@@ -437,7 +437,7 @@ pub const ZvmQuicServer = struct {
 
     /// Execute a WASM module (real implementation)
     fn executeWasmModule(self: *ZvmQuicServer, request: WasmExecutionRequest) !WasmExecutionResult {
-        const start_time = std.time.microTimestamp();
+        const start_time = Time.nowMicros();
 
         // Initialize WASM runtime context
         var wasm_runtime = try WasmRuntime.init(self.allocator, request.gas_limit);
@@ -457,7 +457,7 @@ pub const ZvmQuicServer = struct {
         );
 
         // Monitor execution time and gas consumption
-        const end_time = std.time.microTimestamp();
+        const end_time = Time.nowMicros();
         const execution_time = @as(u64, @intCast(end_time - start_time));
 
         std.debug.print("Successfully executed WASM function: {s}\n", .{request.function_name});

@@ -1,5 +1,5 @@
 //! Time utilities for ZQUIC
-//! Provides portable sleep and time helpers compatible with Zig 0.16.0-dev.
+//! Provides portable sleep and time helpers compatible with Zig 0.17.0-dev.
 
 const std = @import("std");
 const builtin = @import("builtin");

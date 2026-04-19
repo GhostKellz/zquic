@@ -108,42 +108,41 @@ pub const PrometheusMetrics = struct {
     }
 
     pub fn render(self: *Self, allocator: std.mem.Allocator) ![]u8 {
-        var buffer = std.ArrayList(u8).init(allocator);
+        var buffer = std.array_list.Managed(u8).init(allocator);
         errdefer buffer.deinit();
-        const writer = buffer.writer();
 
-        try self.writeMetric(writer, "zquic_http3_requests_total", "counter", "Total HTTP/3 requests processed", self.http3_requests_total.load(.acquire));
-        try self.writeMetric(writer, "zquic_http3_errors_total", "counter", "HTTP/3 request failures", self.http3_errors_total.load(.acquire));
-        try self.writeMetric(writer, "zquic_http3_bytes_received_total", "counter", "HTTP/3 request payload bytes", self.http3_bytes_in_total.load(.acquire));
-        try self.writeMetric(writer, "zquic_http3_bytes_sent_total", "counter", "HTTP/3 response payload bytes", self.http3_bytes_out_total.load(.acquire));
+        try self.writeMetric(&buffer, "zquic_http3_requests_total", "counter", "Total HTTP/3 requests processed", self.http3_requests_total.load(.acquire));
+        try self.writeMetric(&buffer, "zquic_http3_errors_total", "counter", "HTTP/3 request failures", self.http3_errors_total.load(.acquire));
+        try self.writeMetric(&buffer, "zquic_http3_bytes_received_total", "counter", "HTTP/3 request payload bytes", self.http3_bytes_in_total.load(.acquire));
+        try self.writeMetric(&buffer, "zquic_http3_bytes_sent_total", "counter", "HTTP/3 response payload bytes", self.http3_bytes_out_total.load(.acquire));
 
         const samples = self.http3_latency_samples.load(.acquire);
         const latency_avg = if (samples == 0) 0 else self.http3_latency_total_us.load(.acquire) / samples;
-        try self.writeMetric(writer, "zquic_http3_latency_average_us", "gauge", "Average HTTP/3 latency (μs)", latency_avg);
-        try self.writeMetric(writer, "zquic_http3_connections_active", "gauge", "Active HTTP/3 QUIC connections", @intCast(self.http3_connections_active.load(.acquire)));
+        try self.writeMetric(&buffer, "zquic_http3_latency_average_us", "gauge", "Average HTTP/3 latency (μs)", latency_avg);
+        try self.writeMetric(&buffer, "zquic_http3_connections_active", "gauge", "Active HTTP/3 QUIC connections", @as(u64, @intCast(self.http3_connections_active.load(.acquire))));
 
-        try self.writeMetric(writer, "zquic_doq_queries_total", "counter", "Total DNS-over-QUIC queries", self.doq_queries_total.load(.acquire));
-        try self.writeMetric(writer, "zquic_doq_failures_total", "counter", "Failed DNS-over-QUIC queries", self.doq_failures_total.load(.acquire));
-        try self.writeMetric(writer, "zquic_doq_bytes_received_total", "counter", "DNS-over-QUIC request bytes", self.doq_bytes_in_total.load(.acquire));
-        try self.writeMetric(writer, "zquic_doq_bytes_sent_total", "counter", "DNS-over-QUIC response bytes", self.doq_bytes_out_total.load(.acquire));
-        try self.writeMetric(writer, "zquic_doq_connections_active", "gauge", "Active DoQ connections", @intCast(self.doq_connections_active.load(.acquire)));
+        try self.writeMetric(&buffer, "zquic_doq_queries_total", "counter", "Total DNS-over-QUIC queries", self.doq_queries_total.load(.acquire));
+        try self.writeMetric(&buffer, "zquic_doq_failures_total", "counter", "Failed DNS-over-QUIC queries", self.doq_failures_total.load(.acquire));
+        try self.writeMetric(&buffer, "zquic_doq_bytes_received_total", "counter", "DNS-over-QUIC request bytes", self.doq_bytes_in_total.load(.acquire));
+        try self.writeMetric(&buffer, "zquic_doq_bytes_sent_total", "counter", "DNS-over-QUIC response bytes", self.doq_bytes_out_total.load(.acquire));
+        try self.writeMetric(&buffer, "zquic_doq_connections_active", "gauge", "Active DoQ connections", @as(u64, @intCast(self.doq_connections_active.load(.acquire))));
 
-        try self.writeMetric(writer, "zquic_vpn_packets_forwarded_total", "counter", "Packets forwarded through the QUIC VPN router", self.vpn_packets_forwarded_total.load(.acquire));
-        try self.writeMetric(writer, "zquic_vpn_bytes_forwarded_total", "counter", "Total bytes forwarded by the QUIC VPN router", self.vpn_bytes_forwarded_total.load(.acquire));
-        try self.writeMetric(writer, "zquic_vpn_routes_active", "gauge", "Active VPN routes", self.vpn_routes_active.load(.acquire));
-        try self.writeMetric(writer, "zquic_vpn_interfaces_active", "gauge", "Active VPN interfaces", self.vpn_interfaces_active.load(.acquire));
-        try self.writeMetric(writer, "zquic_vpn_nat_entries_active", "gauge", "Active VPN NAT entries", self.vpn_nat_entries_active.load(.acquire));
+        try self.writeMetric(&buffer, "zquic_vpn_packets_forwarded_total", "counter", "Packets forwarded through the QUIC VPN router", self.vpn_packets_forwarded_total.load(.acquire));
+        try self.writeMetric(&buffer, "zquic_vpn_bytes_forwarded_total", "counter", "Total bytes forwarded by the QUIC VPN router", self.vpn_bytes_forwarded_total.load(.acquire));
+        try self.writeMetric(&buffer, "zquic_vpn_routes_active", "gauge", "Active VPN routes", self.vpn_routes_active.load(.acquire));
+        try self.writeMetric(&buffer, "zquic_vpn_interfaces_active", "gauge", "Active VPN interfaces", self.vpn_interfaces_active.load(.acquire));
+        try self.writeMetric(&buffer, "zquic_vpn_nat_entries_active", "gauge", "Active VPN NAT entries", self.vpn_nat_entries_active.load(.acquire));
 
-        try self.writeMetric(writer, "zquic_metrics_uptime_seconds", "gauge", "Exporter uptime in seconds", self.uptimeSeconds());
+        try self.writeMetric(&buffer, "zquic_metrics_uptime_seconds", "gauge", "Exporter uptime in seconds", self.uptimeSeconds());
 
         return buffer.toOwnedSlice();
     }
 
-    fn writeMetric(self: *const Self, writer: anytype, name: []const u8, metric_type: []const u8, help: []const u8, value: anytype) !void {
+    fn writeMetric(self: *const Self, buffer: *std.array_list.Managed(u8), name: []const u8, metric_type: []const u8, help: []const u8, value: anytype) !void {
         _ = self;
-        try writer.print("# HELP {s} {s}\n", .{ name, help });
-        try writer.print("# TYPE {s} {s}\n", .{ name, metric_type });
-        try writer.print("{s} {any}\n", .{ name, value });
+        try buffer.print("# HELP {s} {s}\n", .{ name, help });
+        try buffer.print("# TYPE {s} {s}\n", .{ name, metric_type });
+        try buffer.print("{s} {any}\n", .{ name, value });
     }
 };
 

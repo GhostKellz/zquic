@@ -163,7 +163,7 @@ pub const PacketSpace = struct {
         now: u64,
     ) void {
         _ = ack_delay; // TODO: Use for RTT calculation
-        var newly_acked_packets = std.ArrayList(PacketNumber).init(self.allocator);
+        var newly_acked_packets = std.array_list.Managed(PacketNumber).init(self.allocator);
         defer newly_acked_packets.deinit();
 
         // Find newly acknowledged packets
@@ -200,7 +200,7 @@ pub const PacketSpace = struct {
         time_threshold: u64,
         packet_threshold: u32,
     ) std.ArrayList(PacketNumber) {
-        var lost_packets = std.ArrayList(PacketNumber).init(self.allocator);
+        var lost_packets: std.ArrayList(PacketNumber) = .empty;
 
         if (self.largest_acked_packet == null) {
             return lost_packets;
@@ -219,7 +219,7 @@ pub const PacketSpace = struct {
             const packet_lost = packet.isPacketLost(largest_acked, packet_threshold);
 
             if (time_lost or packet_lost) {
-                lost_packets.append(packet.packet_number) catch continue;
+                lost_packets.append(self.allocator, packet.packet_number) catch continue;
             }
         }
 

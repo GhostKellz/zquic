@@ -4,6 +4,7 @@
 
 const std = @import("std");
 const Connection = @import("../core/connection.zig");
+const NetAddress = @import("../net/address.zig");
 
 /// Load balancing strategy
 pub const LoadBalanceStrategy = enum {
@@ -16,7 +17,7 @@ pub const LoadBalanceStrategy = enum {
 /// Backend server configuration
 pub const Backend = struct {
     id: []const u8,
-    address: std.net.Address,
+    address: NetAddress.Address,
     weight: u32 = 1,
     max_connections: u32 = 100,
     current_connections: std.atomic.Value(u32),
@@ -25,7 +26,7 @@ pub const Backend = struct {
 
     const Self = @This();
 
-    pub fn init(id: []const u8, address: std.net.Address) Self {
+    pub fn init(id: []const u8, address: NetAddress.Address) Self {
         return Self{
             .id = id,
             .address = address,
@@ -220,7 +221,7 @@ test "load balancer add backend" {
     var lb = LoadBalancer.init(std.testing.allocator, .round_robin);
     defer lb.deinit();
 
-    const addr = std.net.Address.initIp4([4]u8{ 10, 0, 0, 1 }, 8080);
+    const addr = NetAddress.initIp4([4]u8{ 10, 0, 0, 1 }, 8080);
     try lb.addBackend(Backend.init("backend1", addr));
 
     try std.testing.expect(lb.backends.items.len == 1);
@@ -231,8 +232,8 @@ test "load balancer round robin" {
     var lb = LoadBalancer.init(std.testing.allocator, .round_robin);
     defer lb.deinit();
 
-    const addr1 = std.net.Address.initIp4([4]u8{ 10, 0, 0, 1 }, 8080);
-    const addr2 = std.net.Address.initIp4([4]u8{ 10, 0, 0, 2 }, 8080);
+    const addr1 = NetAddress.initIp4([4]u8{ 10, 0, 0, 1 }, 8080);
+    const addr2 = NetAddress.initIp4([4]u8{ 10, 0, 0, 2 }, 8080);
     try lb.addBackend(Backend.init("b1", addr1));
     try lb.addBackend(Backend.init("b2", addr2));
 

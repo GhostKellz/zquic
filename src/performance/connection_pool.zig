@@ -79,7 +79,7 @@ pub const PooledConnection = struct {
     const Self = @This();
 
     pub fn init(connection: *Connection, pool: *ConnectionPool, id: u64) Self {
-        const now = std.time.microTimestamp();
+        const now = Time.nowMicros();
         return Self{
             .connection = connection,
             .pool = pool,
@@ -94,14 +94,14 @@ pub const PooledConnection = struct {
 
     /// Mark connection as used
     pub fn markUsed(self: *Self) void {
-        _ = self.last_used.store(std.time.microTimestamp(), .Monotonic);
+        _ = self.last_used.store(Time.nowMicros(), .Monotonic);
         _ = self.use_count.fetchAdd(1, .Monotonic);
     }
 
     /// Check if connection is idle
     pub fn isIdle(self: *const Self, idle_timeout_us: i64) bool {
         const last_used = self.last_used.load(.Monotonic);
-        const now = std.time.microTimestamp();
+        const now = Time.nowMicros();
         return (now - last_used) > idle_timeout_us;
     }
 
@@ -130,7 +130,7 @@ pub const PooledConnection = struct {
 
         // Check if connection is still responsive
         const last_activity = self.connection.getLastActivity();
-        const now = std.time.microTimestamp();
+        const now = Time.nowMicros();
         const max_silence = 60_000_000; // 60 seconds
 
         if (now - last_activity > max_silence) {
@@ -288,7 +288,7 @@ pub const ConnectionPool = struct {
     pub fn acquireConnection(self: *Self, target_host: []const u8, target_port: u16) !*PooledConnection {
         _ = self.stats.acquire_requests.fetchAdd(1, .Monotonic);
 
-        const start_time = std.time.microTimestamp();
+        const start_time = Time.nowMicros();
         const timeout_us = self.config.acquire_timeout_ms * 1000;
 
         while (true) {
@@ -324,7 +324,7 @@ pub const ConnectionPool = struct {
             }
 
             // Check timeout
-            const now = std.time.microTimestamp();
+            const now = Time.nowMicros();
             if (now - start_time > timeout_us) {
                 _ = self.stats.acquire_timeouts.fetchAdd(1, .Monotonic);
                 return Error.ZquicError.Timeout;
@@ -429,12 +429,12 @@ pub const ConnectionPool = struct {
     /// Health check worker thread
     fn healthCheckWorker(pool: *ConnectionPool) void {
         while (!pool.shutdown.load(.Monotonic)) {
-            const start_time = std.time.microTimestamp();
+            const start_time = Time.nowMicros();
 
             // Check health of all connections
             pool.pool_mutex.lock();
             var iterator = pool.all_connections.iterator();
-            var unhealthy_connections = std.ArrayList(u64).init(pool.allocator);
+            var unhealthy_connections = std.array_list.Managed(u64).init(pool.allocator);
             defer unhealthy_connections.deinit();
 
             while (iterator.next()) |entry| {
@@ -463,7 +463,7 @@ pub const ConnectionPool = struct {
             }
 
             // Sleep until next health check
-            const elapsed = std.time.microTimestamp() - start_time;
+            const elapsed = Time.nowMicros() - start_time;
             const sleep_time = pool.config.health_check_interval_ms * 1000;
             if (elapsed < sleep_time) {
                 Time.sleep(sleep_time - elapsed);

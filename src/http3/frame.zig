@@ -417,14 +417,14 @@ test "frame parser incremental data frame" {
     var parser = FrameParser.init(std.testing.allocator);
     defer parser.deinit(std.testing.allocator);
 
-    var out = std.ArrayList(u8).init(std.testing.allocator);
+    var out: std.Io.Writer.Allocating = .init(std.testing.allocator);
     defer out.deinit();
 
     const payload = "hello";
     const frame = DataFrame.init(payload);
-    try frame.serialize(out.writer());
+    try frame.serialize(&out.writer);
 
-    const bytes = out.items;
+    const bytes = std.Io.Writer.buffered(&out.writer);
     const split = bytes.len / 2;
 
     const first = bytes[0..split];

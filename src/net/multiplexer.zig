@@ -8,12 +8,13 @@ const Time = @import("../utils/time.zig");
 const Connection = @import("../core/connection.zig");
 const Packet = @import("../core/packet.zig");
 const UdpSocket = @import("udp.zig").UdpSocket;
+const NetAddress = @import("address.zig");
 
 /// Connection routing entry
 pub const ConnectionEntry = struct {
     connection_id: Packet.ConnectionId,
     connection: *Connection.Connection,
-    remote_address: std.net.Address,
+    remote_address: NetAddress.Address,
     last_activity: i64, // timestamp in microseconds
 
     pub fn isExpired(self: *const @This(), current_time: i64, timeout_us: i64) bool {
@@ -32,7 +33,7 @@ pub const MultiplexerConfig = struct {
 /// Outbound packet for sending
 pub const OutboundPacket = struct {
     data: []const u8,
-    destination: std.net.Address,
+    destination: NetAddress.Address,
     connection_id: ?Packet.ConnectionId = null,
 };
 
@@ -56,7 +57,7 @@ pub const UdpMultiplexer = struct {
 
     const Self = @This();
 
-    pub fn init(allocator: std.mem.Allocator, local_address: std.net.Address, config: MultiplexerConfig) Error.ZquicError!Self {
+    pub fn init(allocator: std.mem.Allocator, local_address: NetAddress.Address, config: MultiplexerConfig) Error.ZquicError!Self {
         const socket = UdpSocket.init(local_address) catch |err| switch (err) {
             error.AddressInUse => return Error.ZquicError.AddressInUse,
             error.AddressNotAvailable => return Error.ZquicError.InvalidArgument,
@@ -83,7 +84,7 @@ pub const UdpMultiplexer = struct {
     }
 
     /// Add a new connection to the multiplexer
-    pub fn addConnection(self: *Self, connection_id: Packet.ConnectionId, connection: *Connection.Connection, remote_address: std.net.Address) Error.ZquicError!void {
+    pub fn addConnection(self: *Self, connection_id: Packet.ConnectionId, connection: *Connection.Connection, remote_address: NetAddress.Address) Error.ZquicError!void {
         if (self.connection_count >= self.config.max_connections) {
             return Error.ZquicError.ConnectionLimitReached;
         }
@@ -111,7 +112,7 @@ pub const UdpMultiplexer = struct {
     }
 
     /// Route an incoming packet to the appropriate connection
-    pub fn routePacket(self: *Self, packet_data: []const u8, source_address: std.net.Address) Error.ZquicError!void {
+    pub fn routePacket(self: *Self, packet_data: []const u8, source_address: NetAddress.Address) Error.ZquicError!void {
         // Parse packet header to extract connection ID
         const packet = Packet.PacketHeader.parse(packet_data, self.allocator) catch return Error.ZquicError.InvalidPacket;
 
@@ -155,7 +156,7 @@ pub const UdpMultiplexer = struct {
     }
 
     /// Send a packet through the multiplexer
-    pub fn sendPacket(self: *Self, packet_data: []const u8, destination: std.net.Address, connection_id: ?Packet.ConnectionId) Error.ZquicError!void {
+    pub fn sendPacket(self: *Self, packet_data: []const u8, destination: NetAddress.Address, connection_id: ?Packet.ConnectionId) Error.ZquicError!void {
         _ = self.socket.sendTo(packet_data, destination) catch return Error.ZquicError.NetworkError;
 
         self.packets_sent += 1;
@@ -171,7 +172,7 @@ pub const UdpMultiplexer = struct {
     }
 
     /// Queue a packet for sending (for async operation)
-    pub fn queuePacket(self: *Self, packet_data: []const u8, destination: std.net.Address, connection_id: ?Packet.ConnectionId) Error.ZquicError!void {
+    pub fn queuePacket(self: *Self, packet_data: []const u8, destination: NetAddress.Address, connection_id: ?Packet.ConnectionId) Error.ZquicError!void {
         const packet_copy = self.allocator.dupe(u8, packet_data) catch return Error.ZquicError.OutOfMemory;
 
         const outbound_packet = OutboundPacket{
@@ -206,7 +207,7 @@ pub const UdpMultiplexer = struct {
         const current_time = Time.nowMicros();
         const timeout_us = @as(i64, self.config.connection_timeout_ms) * 1000;
 
-        var expired_connections = std.ArrayList(u64).init(self.allocator);
+        var expired_connections = std.array_list.Managed(u64).init(self.allocator);
         defer expired_connections.deinit();
 
         var iterator = self.connections.iterator();
@@ -263,7 +264,7 @@ pub const UdpMultiplexer = struct {
 
 test "multiplexer initialization" {
     const config = MultiplexerConfig{};
-    const local_addr = std.net.Address.initIp4([4]u8{ 127, 0, 0, 1 }, 0); // Port 0 = OS assigns
+    const local_addr = NetAddress.initIp4([4]u8{ 127, 0, 0, 1 }, 0); // Port 0 = OS assigns
 
     var multiplexer = UdpMultiplexer.init(std.testing.allocator, local_addr, config) catch return; // Skip if bind fails
     defer multiplexer.deinit();
@@ -274,7 +275,7 @@ test "multiplexer initialization" {
 
 test "connection management" {
     const config = MultiplexerConfig{};
-    const local_addr = std.net.Address.initIp4([4]u8{ 127, 0, 0, 1 }, 0); // Port 0 = OS assigns
+    const local_addr = NetAddress.initIp4([4]u8{ 127, 0, 0, 1 }, 0); // Port 0 = OS assigns
 
     var multiplexer = UdpMultiplexer.init(std.testing.allocator, local_addr, config) catch return; // Skip if bind fails
     defer multiplexer.deinit();
@@ -283,7 +284,7 @@ test "connection management" {
     var connection = Connection.Connection.init(std.testing.allocator, .client, conn_id);
     defer connection.deinit();
 
-    const remote_addr = std.net.Address.initIp4([4]u8{ 192, 168, 1, 1 }, 4433);
+    const remote_addr = NetAddress.initIp4([4]u8{ 192, 168, 1, 1 }, 4433);
 
     try multiplexer.addConnection(conn_id, &connection, remote_addr);
     try std.testing.expect(multiplexer.connection_count == 1);

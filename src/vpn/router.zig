@@ -6,11 +6,14 @@ const std = @import("std");
 const Error = @import("../utils/error.zig");
 const Packet = @import("../core/packet.zig");
 const PrometheusMetrics = @import("../monitoring/prometheus_exporter.zig").PrometheusMetrics;
+const Time = @import("../utils/time.zig");
+const NetAddress = @import("../net/address.zig");
+const Address = NetAddress.Address;
 
 /// VPN route entry
 pub const Route = struct {
-    destination: std.net.Address,
-    gateway: std.net.Address,
+    destination: Address,
+    gateway: Address,
     connection_id: Packet.ConnectionId,
     metric: u32 = 1,
     interface: []const u8,
@@ -24,7 +27,7 @@ pub const Route = struct {
 /// Network interface for VPN routing
 pub const VpnInterface = struct {
     name: []const u8,
-    local_address: std.net.Address,
+    local_address: Address,
     mtu: u32 = 1420, // MTU suitable for QUIC over UDP
     is_active: bool = true,
     connection_id: ?Packet.ConnectionId = null,
@@ -47,8 +50,8 @@ pub const RoutingConfig = struct {
 
 /// NAT (Network Address Translation) entry
 pub const NatEntry = struct {
-    internal_addr: std.net.Address,
-    external_addr: std.net.Address,
+    internal_addr: Address,
+    external_addr: Address,
     connection_id: Packet.ConnectionId,
     created_at: i64,
     last_used: i64,
@@ -68,14 +71,14 @@ pub const PacketRouter = struct {
     metrics: ?*PrometheusMetrics = null,
 
     // Default route
-    default_gateway: ?std.net.Address = null,
+    default_gateway: ?Address = null,
     default_interface: ?[]const u8 = null,
 
     const Self = @This();
 
     pub fn init(allocator: std.mem.Allocator, config: RoutingConfig) Self {
         return Self{
-            .routes = .{},
+            .routes = .empty,
             .interfaces = std.HashMap(u64, VpnInterface, std.hash_map.AutoContext(u64), std.hash_map.default_max_load_percentage).init(allocator),
             .nat_table = std.HashMap(u64, NatEntry, std.hash_map.AutoContext(u64), std.hash_map.default_max_load_percentage).init(allocator),
             .config = config,
@@ -96,13 +99,13 @@ pub const PacketRouter = struct {
             self.allocator.free(route.interface);
         }
 
-        self.routes.deinit();
+        self.routes.deinit(self.allocator);
         self.interfaces.deinit();
         self.nat_table.deinit();
     }
 
     /// Add a VPN interface
-    pub fn addInterface(self: *Self, name: []const u8, local_address: std.net.Address, mtu: u32) Error.ZquicError!void {
+    pub fn addInterface(self: *Self, name: []const u8, local_address: Address, mtu: u32) Error.ZquicError!void {
         const interface_name = self.allocator.dupe(u8, name) catch return Error.ZquicError.OutOfMemory;
 
         const interface = VpnInterface{
@@ -126,7 +129,7 @@ pub const PacketRouter = struct {
     }
 
     /// Add a route to the routing table
-    pub fn addRoute(self: *Self, destination: std.net.Address, gateway: std.net.Address, interface: []const u8, connection_id: Packet.ConnectionId) Error.ZquicError!void {
+    pub fn addRoute(self: *Self, destination: Address, gateway: Address, interface: []const u8, connection_id: Packet.ConnectionId) Error.ZquicError!void {
         if (self.routes.items.len >= self.config.max_routes) {
             return Error.ZquicError.ResourceExhausted;
         }
@@ -140,17 +143,17 @@ pub const PacketRouter = struct {
             .metric = self.config.default_metric,
             .interface = interface_name,
             .expires_at = if (self.config.route_timeout_ms > 0)
-                std.time.microTimestamp() + @as(i64, self.config.route_timeout_ms) * 1000
+                Time.nowMicros() + @as(i64, self.config.route_timeout_ms) * 1000
             else
                 null,
         };
 
-        self.routes.append(route) catch return Error.ZquicError.OutOfMemory;
+        self.routes.append(self.allocator, route) catch return Error.ZquicError.OutOfMemory;
         self.publishVpnSnapshot();
     }
 
     /// Remove a route from the routing table
-    pub fn removeRoute(self: *Self, destination: std.net.Address) bool {
+    pub fn removeRoute(self: *Self, destination: Address) bool {
         for (self.routes.items, 0..) |route, i| {
             if (addressEqual(route.destination, destination)) {
                 const removed_route = self.routes.swapRemove(i);
@@ -163,7 +166,7 @@ pub const PacketRouter = struct {
     }
 
     /// Set default gateway
-    pub fn setDefaultGateway(self: *Self, gateway: std.net.Address, interface: []const u8) Error.ZquicError!void {
+    pub fn setDefaultGateway(self: *Self, gateway: Address, interface: []const u8) Error.ZquicError!void {
         if (self.default_interface) |old_interface| {
             self.allocator.free(old_interface);
         }
@@ -173,12 +176,12 @@ pub const PacketRouter = struct {
     }
 
     /// Route a packet to the appropriate destination
-    pub fn routePacket(self: *Self, packet_data: []const u8, source: std.net.Address, destination: std.net.Address) Error.ZquicError!RoutingResult {
+    pub fn routePacket(self: *Self, packet_data: []const u8, source: Address, destination: Address) Error.ZquicError!RoutingResult {
         // Check if we have a specific route for this destination
         var best_route: ?*const Route = null;
         var best_metric: u32 = std.math.maxInt(u32);
 
-        const current_time = std.time.microTimestamp();
+        const current_time = Time.nowMicros();
 
         for (self.routes.items) |*route| {
             if (route.isExpired(current_time)) continue;
@@ -220,7 +223,7 @@ pub const PacketRouter = struct {
     }
 
     /// Forward a packet through the VPN
-    pub fn forwardPacket(self: *Self, packet_data: []const u8, source: std.net.Address, destination: std.net.Address) Error.ZquicError!ForwardingResult {
+    pub fn forwardPacket(self: *Self, packet_data: []const u8, source: Address, destination: Address) Error.ZquicError!ForwardingResult {
         const routing_result = try self.routePacket(packet_data, source, destination);
 
         const forwarded_packet = packet_data;
@@ -249,9 +252,9 @@ pub const PacketRouter = struct {
     }
 
     /// Apply Network Address Translation
-    pub fn applyNat(self: *Self, internal_source: std.net.Address, internal_dest: std.net.Address, connection_id: Packet.ConnectionId) Error.ZquicError!NatResult {
+    pub fn applyNat(self: *Self, internal_source: Address, internal_dest: Address, connection_id: Packet.ConnectionId) Error.ZquicError!NatResult {
         const nat_key = hashAddressPair(internal_source, internal_dest);
-        const current_time = std.time.microTimestamp();
+        const current_time = Time.nowMicros();
 
         // Check if NAT entry already exists
         if (self.nat_table.getPtr(nat_key)) |entry| {
@@ -284,7 +287,7 @@ pub const PacketRouter = struct {
 
     /// Clean up expired routes and NAT entries
     pub fn cleanup(self: *Self) u32 {
-        const current_time = std.time.microTimestamp();
+        const current_time = Time.nowMicros();
         var cleaned_count: u32 = 0;
 
         // Clean up expired routes
@@ -302,7 +305,7 @@ pub const PacketRouter = struct {
         // Clean up expired NAT entries
         const nat_timeout_us = @as(i64, self.config.route_timeout_ms) * 1000;
         var nat_iterator = self.nat_table.iterator();
-        var expired_nat_keys = std.ArrayList(u64).init(self.allocator);
+        var expired_nat_keys = std.array_list.Managed(u64).init(self.allocator);
         defer expired_nat_keys.deinit();
 
         while (nat_iterator.next()) |entry| {
@@ -357,23 +360,23 @@ pub const PacketRouter = struct {
     }
 
     // Helper functions
-    fn addressEqual(addr1: std.net.Address, addr2: std.net.Address) bool {
+    fn addressEqual(addr1: Address, addr2: Address) bool {
         return std.meta.eql(addr1, addr2);
     }
 
-    fn isDestinationMatch(destination: std.net.Address, route_dest: std.net.Address) bool {
+    fn isDestinationMatch(destination: Address, route_dest: Address) bool {
         // Simplified matching - in real implementation would support subnet masks
         return addressEqual(destination, route_dest);
     }
 
-    fn needsNat(source: std.net.Address, destination: std.net.Address) bool {
+    fn needsNat(source: Address, destination: Address) bool {
         _ = source;
         _ = destination;
         // Simplified NAT decision - in real implementation would check private/public address ranges
         return true;
     }
 
-    fn hashAddressPair(addr1: std.net.Address, addr2: std.net.Address) u64 {
+    fn hashAddressPair(addr1: Address, addr2: Address) u64 {
         // Simple hash combining two addresses
         const bytes1 = std.mem.asBytes(&addr1);
         const bytes2 = std.mem.asBytes(&addr2);
@@ -399,7 +402,7 @@ pub const PacketRouter = struct {
 
 /// Result of packet routing
 pub const RoutingResult = struct {
-    next_hop: std.net.Address,
+    next_hop: Address,
     interface: []const u8,
     connection_id: ?Packet.ConnectionId,
     requires_nat: bool,
@@ -408,17 +411,17 @@ pub const RoutingResult = struct {
 /// Result of packet forwarding
 pub const ForwardingResult = struct {
     packet_data: []const u8,
-    source: std.net.Address,
-    destination: std.net.Address,
-    next_hop: std.net.Address,
+    source: Address,
+    destination: Address,
+    next_hop: Address,
     interface: []const u8,
     connection_id: ?Packet.ConnectionId,
 };
 
 /// Result of NAT application
 pub const NatResult = struct {
-    external_source: std.net.Address,
-    external_destination: std.net.Address,
+    external_source: Address,
+    external_destination: Address,
 };
 
 /// Routing statistics
@@ -447,7 +450,7 @@ test "interface management" {
     var router = PacketRouter.init(std.testing.allocator, config);
     defer router.deinit();
 
-    const local_addr = std.net.Address.initIp4([4]u8{ 10, 0, 0, 1 }, 0);
+    const local_addr = NetAddress.initIp4([4]u8{ 10, 0, 0, 1 }, 0);
     try router.addInterface("tun0", local_addr, 1420);
 
     const interface = router.getInterface("tun0");
@@ -460,8 +463,8 @@ test "routing table operations" {
     var router = PacketRouter.init(std.testing.allocator, config);
     defer router.deinit();
 
-    const dest_addr = std.net.Address.initIp4([4]u8{ 192, 168, 1, 0 }, 0);
-    const gateway_addr = std.net.Address.initIp4([4]u8{ 10, 0, 0, 1 }, 0);
+    const dest_addr = NetAddress.initIp4([4]u8{ 192, 168, 1, 0 }, 0);
+    const gateway_addr = NetAddress.initIp4([4]u8{ 10, 0, 0, 1 }, 0);
     const conn_id = try Packet.ConnectionId.init(&[_]u8{ 1, 2, 3, 4 });
 
     try router.addRoute(dest_addr, gateway_addr, "tun0", conn_id);

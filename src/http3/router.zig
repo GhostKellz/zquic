@@ -603,7 +603,7 @@ test "router middleware executes global then route" {
     var response = Response.init(allocator, 1);
     defer response.deinit();
 
-    var call_order = std.ArrayList(u8).init(allocator);
+    var call_order = std.array_list.Managed(u8).init(allocator);
     defer call_order.deinit();
 
     var state = TestHelpers.MiddlewareState{ .log = &call_order };
@@ -649,7 +649,7 @@ test "router middleware can short circuit handler" {
     var response = Response.init(allocator, 2);
     defer response.deinit();
 
-    var call_order = std.ArrayList(u8).init(allocator);
+    var call_order = std.array_list.Managed(u8).init(allocator);
     defer call_order.deinit();
 
     var state = TestHelpers.MiddlewareState{ .log = &call_order };

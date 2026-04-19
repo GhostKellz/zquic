@@ -13,12 +13,14 @@ const Error = @import("../utils/error.zig");
 const Connection = @import("../core/connection.zig");
 const Packet = @import("../core/packet.zig");
 const UdpSocket = @import("../net/udp.zig").UdpSocket;
+const NetAddress = @import("../net/address.zig");
+const Time = @import("../utils/time.zig");
 
 /// Enhanced connection routing entry with optimization features
 pub const ConnectionEntry = struct {
     connection_id: Packet.ConnectionId,
     connection: *Connection.Connection,
-    remote_address: std.net.Address,
+    remote_address: NetAddress.Address,
     last_activity: i64,
     preferred_socket_index: u8, // For load balancing
     migration_state: MigrationState,
@@ -59,16 +61,16 @@ pub const EnhancedMultiplexerConfig = struct {
 /// Batched packet for efficient processing
 pub const BatchedPacket = struct {
     data: []u8,
-    source_address: std.net.Address,
+    source_address: NetAddress.Address,
     socket_index: u8,
     timestamp: i64,
 
-    pub fn init(data: []u8, source: std.net.Address, socket_idx: u8) BatchedPacket {
+    pub fn init(data: []u8, source: NetAddress.Address, socket_idx: u8) BatchedPacket {
         return BatchedPacket{
             .data = data,
             .source_address = source,
             .socket_index = socket_idx,
-            .timestamp = std.time.microTimestamp(),
+            .timestamp = Time.nowMicros(),
         };
     }
 };
@@ -76,14 +78,14 @@ pub const BatchedPacket = struct {
 /// Coalesced outbound packet for efficient sending
 pub const CoalescedPacket = struct {
     data: []u8,
-    destinations: []std.net.Address,
+    destinations: []NetAddress.Address,
     socket_index: u8,
     packet_count: u32,
 
     pub fn init(allocator: std.mem.Allocator, socket_idx: u8) !CoalescedPacket {
         return CoalescedPacket{
             .data = try allocator.alloc(u8, 1400), // MTU-sized buffer
-            .destinations = try allocator.alloc(std.net.Address, 16),
+            .destinations = try allocator.alloc(NetAddress.Address, 16),
             .socket_index = socket_idx,
             .packet_count = 0,
         };
@@ -124,7 +126,7 @@ pub const EnhancedUdpMultiplexer = struct {
 
     const Self = @This();
 
-    pub fn init(allocator: std.mem.Allocator, local_addresses: []std.net.Address, config: EnhancedMultiplexerConfig) Error.ZquicError!Self {
+    pub fn init(allocator: std.mem.Allocator, local_addresses: []NetAddress.Address, config: EnhancedMultiplexerConfig) Error.ZquicError!Self {
         if (local_addresses.len == 0 or local_addresses.len > config.num_sockets) {
             return Error.ZquicError.InvalidArgument;
         }
@@ -243,7 +245,7 @@ pub const EnhancedUdpMultiplexer = struct {
     }
 
     /// Add connection with enhanced routing and load balancing
-    pub fn addConnection(self: *Self, connection: *Connection.Connection, remote_address: std.net.Address) Error.ZquicError!Packet.ConnectionId {
+    pub fn addConnection(self: *Self, connection: *Connection.Connection, remote_address: NetAddress.Address) Error.ZquicError!Packet.ConnectionId {
         if (self.connections.count() >= self.config.max_connections) {
             return Error.ZquicError.ConnectionLimitReached;
         }
@@ -256,7 +258,7 @@ pub const EnhancedUdpMultiplexer = struct {
             .connection_id = connection_id,
             .connection = connection,
             .remote_address = remote_address,
-            .last_activity = std.time.microTimestamp(),
+            .last_activity = Time.nowMicros(),
             .preferred_socket_index = socket_index,
             .migration_state = .stable,
         };
@@ -328,7 +330,7 @@ pub const EnhancedUdpMultiplexer = struct {
     }
 
     /// Route packet with connection migration support
-    pub fn routePacket(self: *Self, packet_data: []const u8, source_address: std.net.Address, socket_index: u8) Error.ZquicError!void {
+    pub fn routePacket(self: *Self, packet_data: []const u8, source_address: NetAddress.Address, socket_index: u8) Error.ZquicError!void {
         const packet = Packet.PacketHeader.parse(packet_data, self.allocator) catch return Error.ZquicError.InvalidPacket;
         defer packet.deinit(self.allocator);
 
@@ -336,7 +338,7 @@ pub const EnhancedUdpMultiplexer = struct {
 
         if (self.connections.getPtr(conn_id_hash)) |entry| {
             // Update activity
-            entry.last_activity = std.time.microTimestamp();
+            entry.last_activity = Time.nowMicros();
 
             // Handle connection migration
             if (!std.meta.eql(entry.remote_address, source_address)) {
@@ -359,7 +361,7 @@ pub const EnhancedUdpMultiplexer = struct {
     }
 
     /// Handle connection migration with path validation
-    fn handleConnectionMigration(self: *Self, entry: *ConnectionEntry, new_address: std.net.Address, socket_index: u8) Error.ZquicError!void {
+    fn handleConnectionMigration(self: *Self, entry: *ConnectionEntry, new_address: NetAddress.Address, socket_index: u8) Error.ZquicError!void {
         if (!entry.canMigrate()) {
             return Error.ZquicError.ConnectionMigrationInProgress;
         }
@@ -381,7 +383,7 @@ pub const EnhancedUdpMultiplexer = struct {
     }
 
     /// Send packet with coalescing support
-    pub fn sendPacket(self: *Self, packet_data: []const u8, destination: std.net.Address, connection_id: ?Packet.ConnectionId) Error.ZquicError!void {
+    pub fn sendPacket(self: *Self, packet_data: []const u8, destination: NetAddress.Address, connection_id: ?Packet.ConnectionId) Error.ZquicError!void {
         const socket_index = if (connection_id) |conn_id| blk: {
             const conn_id_hash = self.hashConnectionId(&conn_id);
             if (self.connections.get(conn_id_hash)) |entry| {
@@ -420,7 +422,7 @@ pub const EnhancedUdpMultiplexer = struct {
         if (connection_id) |conn_id| {
             const conn_id_hash = self.hashConnectionId(&conn_id);
             if (self.connections.getPtr(conn_id_hash)) |entry| {
-                entry.last_activity = std.time.microTimestamp();
+                entry.last_activity = Time.nowMicros();
             }
         }
     }
@@ -450,7 +452,7 @@ pub const EnhancedUdpMultiplexer = struct {
 
     /// Clean up expired connections with efficient batch processing
     pub fn cleanupExpiredConnections(self: *Self) u32 {
-        const current_time = std.time.microTimestamp();
+        const current_time = Time.nowMicros();
         const timeout_us = @as(i64, self.config.connection_timeout_ms) * 1000;
 
         var expired_connections = .{};
@@ -517,8 +519,8 @@ pub const MigrationTracker = struct {
 
     const MigrationEntry = struct {
         connection_id: Packet.ConnectionId,
-        old_address: std.net.Address,
-        new_address: std.net.Address,
+        old_address: NetAddress.Address,
+        new_address: NetAddress.Address,
         start_time: i64,
         validated: bool,
     };
@@ -534,14 +536,14 @@ pub const MigrationTracker = struct {
         self.active_migrations.deinit(allocator);
     }
 
-    pub fn startMigration(self: *MigrationTracker, connection_id: Packet.ConnectionId, old_address: std.net.Address, new_address: std.net.Address) Error.ZquicError!void {
+    pub fn startMigration(self: *MigrationTracker, connection_id: Packet.ConnectionId, old_address: NetAddress.Address, new_address: NetAddress.Address) Error.ZquicError!void {
         const conn_id_hash = std.hash_map.hashString(connection_id.bytes());
 
         const entry = MigrationEntry{
             .connection_id = connection_id,
             .old_address = old_address,
             .new_address = new_address,
-            .start_time = std.time.microTimestamp(),
+            .start_time = Time.nowMicros(),
             .validated = false,
         };
 
@@ -571,12 +573,12 @@ pub const MultiplexerStats = struct {
 
     pub fn init() MultiplexerStats {
         return MultiplexerStats{
-            .start_time = std.time.microTimestamp(),
+            .start_time = Time.nowMicros(),
         };
     }
 
     pub fn uptime(self: *const MultiplexerStats) i64 {
-        return std.time.microTimestamp() - self.start_time;
+        return Time.nowMicros() - self.start_time;
     }
 
     pub fn packetsPerSecond(self: *const MultiplexerStats) f64 {

@@ -1,9 +1,9 @@
 # Contributing to ZQUIC
 
-Thanks for helping keep ZQUIC fast, stable, and ready for Zig 0.16.0-dev. This guide captures the expectations we follow for local development, code review, and release prep.
+Thanks for helping keep ZQUIC fast, stable, and ready for Zig 0.17.0-dev. This guide captures the expectations we follow for local development, code review, and release prep.
 
 ## 1. Prerequisites
-- Zig `0.16.0-dev.164` or newer on your PATH
+- Zig `0.17.0-dev.27` or newer on your PATH
 - Git, curl, and a POSIX-compatible shell (the `dev/` scripts assume `bash`/`zsh`)
 - Optional: `valgrind` or `asan` equivalents for leak checks on Linux/macOS
 

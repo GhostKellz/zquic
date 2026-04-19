@@ -4,7 +4,7 @@ Clean Linux environment for ZQUIC verification using host Zig and valgrind.
 
 ## Requirements
 
-- Host Zig at `/opt/zig-0.16.0-dev` (or set `HOST_ZIG_PATH`)
+- Host Zig at `/opt/zig-dev` (or set `HOST_ZIG_PATH`)
 - Docker with compose
 - Linux host
 

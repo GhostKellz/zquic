@@ -4,29 +4,35 @@
 
 const std = @import("std");
 const posix = std.posix;
+const NetAddress = @import("address.zig");
+const Address = NetAddress.Address;
+const PosixAddress = NetAddress.PosixAddress;
 
 /// UDP socket for QUIC transport
 pub const UdpSocket = struct {
     socket_fd: posix.socket_t,
-    local_address: std.net.Address,
+    local_address: Address,
     is_non_blocking: bool = false,
 
     const Self = @This();
 
-    pub fn init(local_address: std.net.Address) !Self {
-        const socket_fd = try posix.socket(local_address.any.family, posix.SOCK.DGRAM, posix.IPPROTO.UDP);
+    pub fn init(local_address: Address) !Self {
+        const socket_fd = try posix.socket(NetAddress.family(&local_address), posix.SOCK.DGRAM, posix.IPPROTO.UDP);
         errdefer _ = posix.system.close(socket_fd);
 
         // Allow address reuse
         try posix.setsockopt(socket_fd, posix.SOL.SOCKET, posix.SO.REUSEADDR, &std.mem.toBytes(@as(c_int, 1)));
 
         // Bind to address
-        try posix.bind(socket_fd, &local_address.any, local_address.getOsSockLen());
+        var bind_addr: PosixAddress = undefined;
+        const bind_addr_len = NetAddress.toPosix(&local_address, &bind_addr);
+        try posix.bind(socket_fd, @ptrCast(&bind_addr), bind_addr_len);
 
         // Get actual bound address (useful when port is 0)
-        var bound_addr: std.net.Address = undefined;
-        var addr_len: posix.socklen_t = @sizeOf(std.net.Address);
-        try posix.getsockname(socket_fd, &bound_addr.any, &addr_len);
+        var bound_addr_storage: PosixAddress = undefined;
+        var addr_len: posix.socklen_t = @sizeOf(PosixAddress);
+        try posix.getsockname(socket_fd, @ptrCast(&bound_addr_storage), &addr_len);
+        const bound_addr = NetAddress.fromPosix(&bound_addr_storage);
 
         return Self{
             .socket_fd = socket_fd,
@@ -51,49 +57,51 @@ pub const UdpSocket = struct {
     }
 
     /// Send data to a specific address
-    pub fn sendTo(self: *Self, data: []const u8, dest_addr: std.net.Address) !usize {
+    pub fn sendTo(self: *Self, data: []const u8, dest_addr: Address) !usize {
+        var dest_addr_storage: PosixAddress = undefined;
+        const dest_addr_len = NetAddress.toPosix(&dest_addr, &dest_addr_storage);
         return posix.sendto(
             self.socket_fd,
             data,
             0,
-            &dest_addr.any,
-            dest_addr.getOsSockLen(),
+            @ptrCast(&dest_addr_storage),
+            dest_addr_len,
         );
     }
 
     /// Receive data and get source address
-    pub fn receiveFrom(self: *Self, buffer: []u8) !struct { bytes_received: usize, remote_address: std.net.Address } {
-        var src_addr: std.net.Address = undefined;
-        var addr_len: posix.socklen_t = @sizeOf(std.net.Address);
+    pub fn receiveFrom(self: *Self, buffer: []u8) !struct { bytes_received: usize, remote_address: Address } {
+        var src_addr_storage: PosixAddress = undefined;
+        var addr_len: posix.socklen_t = @sizeOf(PosixAddress);
 
         const received = try posix.recvfrom(
             self.socket_fd,
             buffer,
             0,
-            &src_addr.any,
+            @ptrCast(&src_addr_storage),
             &addr_len,
         );
 
         return .{
             .bytes_received = received,
-            .remote_address = src_addr,
+            .remote_address = NetAddress.fromPosix(&src_addr_storage),
         };
     }
 
     /// Try to receive without blocking (returns null if no data)
-    pub fn tryReceiveFrom(self: *Self, buffer: []u8) !?struct { bytes_received: usize, remote_address: std.net.Address } {
+    pub fn tryReceiveFrom(self: *Self, buffer: []u8) !?struct { bytes_received: usize, remote_address: Address } {
         if (!self.is_non_blocking) {
             try self.setNonBlocking(true);
         }
 
-        var src_addr: std.net.Address = undefined;
-        var addr_len: posix.socklen_t = @sizeOf(std.net.Address);
+        var src_addr_storage: PosixAddress = undefined;
+        var addr_len: posix.socklen_t = @sizeOf(PosixAddress);
 
         const received = posix.recvfrom(
             self.socket_fd,
             buffer,
             0,
-            &src_addr.any,
+            @ptrCast(&src_addr_storage),
             &addr_len,
         ) catch |err| switch (err) {
             error.WouldBlock => return null,
@@ -102,7 +110,7 @@ pub const UdpSocket = struct {
 
         return .{
             .bytes_received = received,
-            .remote_address = src_addr,
+            .remote_address = NetAddress.fromPosix(&src_addr_storage),
         };
     }
 
@@ -119,7 +127,7 @@ pub const PacketBatch = struct {
 
     pub const Packet = struct {
         data: []u8,
-        addr: std.net.Address,
+        addr: Address,
         len: usize,
     };
 
@@ -136,7 +144,7 @@ pub const PacketBatch = struct {
 };
 
 test "udp socket creation" {
-    const address = std.net.Address.initIp4([4]u8{ 127, 0, 0, 1 }, 0);
+    const address = NetAddress.initIp4([4]u8{ 127, 0, 0, 1 }, 0);
     var socket = UdpSocket.init(address) catch return; // Skip if bind fails
     defer socket.deinit();
 
@@ -145,7 +153,7 @@ test "udp socket creation" {
 }
 
 test "udp send to self" {
-    const address = std.net.Address.initIp4([4]u8{ 127, 0, 0, 1 }, 0);
+    const address = NetAddress.initIp4([4]u8{ 127, 0, 0, 1 }, 0);
     var socket = UdpSocket.init(address) catch return;
     defer socket.deinit();
 

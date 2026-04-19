@@ -12,6 +12,8 @@ const NewConnectionIdFrame = @import("quic_frames.zig").NewConnectionIdFrame;
 const RetireConnectionIdFrame = @import("quic_frames.zig").RetireConnectionIdFrame;
 const ComprehensiveTlsContext = @import("../crypto/comprehensive_tls.zig").ComprehensiveTlsContext;
 const SessionTicket = @import("../crypto/comprehensive_tls.zig").SessionTicket;
+const NetAddress = @import("../net/address.zig");
+const Address = NetAddress.Address;
 
 /// Path validation states
 pub const PathValidationState = enum {
@@ -32,8 +34,8 @@ pub const MigrationState = enum {
 
 /// Path information for connection migration
 pub const PathInfo = struct {
-    local_address: std.net.Address,
-    remote_address: std.net.Address,
+    local_address: Address,
+    remote_address: Address,
     path_id: u64,
     validation_state: PathValidationState,
     challenge_data: ?[8]u8,
@@ -44,7 +46,7 @@ pub const PathInfo = struct {
     bytes_received: u64,
     last_activity: i64,
 
-    pub fn init(local_address: std.net.Address, remote_address: std.net.Address, path_id: u64) PathInfo {
+    pub fn init(local_address: Address, remote_address: Address, path_id: u64) PathInfo {
         return PathInfo{
             .local_address = local_address,
             .remote_address = remote_address,
@@ -329,7 +331,7 @@ pub const ConnectionMigrator = struct {
     enable_migration: bool,
     allocator: std.mem.Allocator,
 
-    pub fn init(alloc: std.mem.Allocator, local_address: std.net.Address, remote_address: std.net.Address) ConnectionMigrator {
+    pub fn init(alloc: std.mem.Allocator, local_address: Address, remote_address: Address) ConnectionMigrator {
         return ConnectionMigrator{
             .current_path = PathInfo.init(local_address, remote_address, 0),
             .candidate_paths = .{},
@@ -349,7 +351,7 @@ pub const ConnectionMigrator = struct {
         self.connection_id_manager.deinit();
     }
 
-    pub fn addCandidatePath(self: *ConnectionMigrator, local_address: std.net.Address, remote_address: std.net.Address) !void {
+    pub fn addCandidatePath(self: *ConnectionMigrator, local_address: Address, remote_address: Address) !void {
         const path_id = self.candidate_paths.items.len + 1;
         const path_info = PathInfo.init(local_address, remote_address, path_id);
         try self.candidate_paths.append(self.allocator, path_info);
@@ -710,7 +712,7 @@ pub const MigrationAndZeroRTTManager = struct {
     tls_context: ?*ComprehensiveTlsContext,
     allocator: std.mem.Allocator,
 
-    pub fn init(alloc: std.mem.Allocator, local_address: std.net.Address, remote_address: std.net.Address) MigrationAndZeroRTTManager {
+    pub fn init(alloc: std.mem.Allocator, local_address: Address, remote_address: Address) MigrationAndZeroRTTManager {
         return MigrationAndZeroRTTManager{
             .migrator = ConnectionMigrator.init(alloc, local_address, remote_address),
             .zero_rtt_manager = ZeroRTTManager.init(alloc),
@@ -823,8 +825,8 @@ pub const TestUtilities = struct {
     }
 
     pub fn createMockPathInfo(local_port: u16, remote_port: u16) PathInfo {
-        const local_addr = std.net.Address.initIp4([4]u8{ 127, 0, 0, 1 }, local_port);
-        const remote_addr = std.net.Address.initIp4([4]u8{ 192, 168, 1, 1 }, remote_port);
+        const local_addr = NetAddress.initIp4([4]u8{ 127, 0, 0, 1 }, local_port);
+        const remote_addr = NetAddress.initIp4([4]u8{ 192, 168, 1, 1 }, remote_port);
         return PathInfo.init(local_addr, remote_addr, 1);
     }
 

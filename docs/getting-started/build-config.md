@@ -1,6 +1,6 @@
 # Build Configuration (v0.9.9)
 
-ZQUIC ships with a small set of build flags that mirror the switches inside `build.zig`. Keeping this list tight makes migrating to Zig 0.16.0-dev straightforward.
+ZQUIC ships with a small set of build flags that mirror the switches inside `build.zig`. Keeping this list tight makes migrating to Zig 0.17.0-dev straightforward.
 
 ## Feature Flags
 
@@ -82,7 +82,7 @@ pub fn build(b: *std.Build) !void {
 }
 ```
 
-The dependency inherits the same Zig toolchain, so ensure you are on `zig 0.16.0-dev.164+` or later.
+The dependency inherits the same Zig toolchain, so ensure you are on `zig 0.17.0-dev.27+` or later.
 
 ## 🔬 Development Tips
 

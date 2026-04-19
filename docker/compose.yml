@@ -8,6 +8,6 @@ services:
     working_dir: /workspace
     volumes:
       - ..:/workspace
-      - ${HOST_ZIG_PATH:-/opt/zig-0.16.0-dev}:/opt/zig:ro
+      - ${HOST_ZIG_PATH:-/opt/zig-dev}:/opt/zig:ro
     tty: true
     stdin_open: true

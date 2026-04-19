@@ -70,7 +70,7 @@
 //!
 //! - Library version: 0.9.9
 //! - QUIC version: RFC 9000 (v1)
-//! - Zig compatibility: 0.16.0-dev.3144+
+//! - Zig compatibility: 0.17.0-dev.27+
 
 const std = @import("std");
 const build_options = @import("build_options");
@@ -181,6 +181,9 @@ pub const UdpMultiplexer = core.UdpMultiplexer;
 /// Generic socket abstraction layer.
 pub const Socket = core.Socket;
 
+/// Zig 0.17-compatible IP address helpers and types.
+pub const NetAddress = core.NetAddress;
+
 /// IPv6 address handling utilities.
 pub const IPv6 = core.IPv6;
 
@@ -209,7 +212,7 @@ pub const Error = core.Error;
 
 /// Time utilities for portable clock access.
 ///
-/// Provides platform-independent time functions compatible with Zig 0.16.0-dev,
+/// Provides platform-independent time functions compatible with the current Zig 0.17 dev toolchain,
 /// including `nowSeconds()`, `nowMicros()`, `nowNanos()`, and `sleep()`.
 pub const Time = core.Time;
 
