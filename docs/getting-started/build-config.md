@@ -1,4 +1,4 @@
-# Build Configuration (v0.9.9)
+# Build Configuration (v0.9.11)
 
 ZQUIC ships with a small set of build flags that mirror the switches inside `build.zig`. Keeping this list tight makes migrating to Zig 0.17.0-dev straightforward.
 

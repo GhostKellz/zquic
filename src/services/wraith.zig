@@ -8,6 +8,7 @@ const zcrypto = @import("zcrypto");
 const build_options = @import("build_options");
 const Error = @import("../utils/error.zig");
 const Time = @import("../utils/time.zig");
+const VERSION = zquic_core.version;
 
 /// Conditionally import HTTP/3 if enabled
 const http3 = if (build_options.enable_http3) @import("../http3.zig") else struct {};
@@ -846,7 +847,7 @@ fn healthHandler(req: *Request, res: *Response) !void {
     res.setStatus(.ok);
     try res.json(.{
         .status = "healthy",
-        .version = "1.0.0",
+        .version = VERSION,
         .timestamp = Time.nowSeconds(),
     });
 }

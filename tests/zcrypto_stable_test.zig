@@ -65,8 +65,16 @@ test "zcrypto hash: Blake3 streaming" {
 // ============================================================================
 
 test "std.crypto: AES-256-GCM baseline" {
-    const key: [32]u8 = [_]u8{0x42} ** 32;
-    const nonce: [12]u8 = [_]u8{0x11} ** 12;
+    const key: [32]u8 = blk: {
+        var bytes = std.mem.zeroes([32]u8);
+        @memset(bytes[0..], 0x42);
+        break :blk bytes;
+    };
+    const nonce: [12]u8 = blk: {
+        var bytes = std.mem.zeroes([12]u8);
+        @memset(bytes[0..], 0x11);
+        break :blk bytes;
+    };
     const plaintext = "Secret QUIC packet data";
     const aad = "additional authenticated data";
 
@@ -84,8 +92,16 @@ test "std.crypto: AES-256-GCM baseline" {
 }
 
 test "std.crypto: ChaCha20-Poly1305 baseline" {
-    const key: [32]u8 = [_]u8{0x42} ** 32;
-    const nonce: [12]u8 = [_]u8{0x11} ** 12;
+    const key: [32]u8 = blk: {
+        var bytes = std.mem.zeroes([32]u8);
+        @memset(bytes[0..], 0x42);
+        break :blk bytes;
+    };
+    const nonce: [12]u8 = blk: {
+        var bytes = std.mem.zeroes([12]u8);
+        @memset(bytes[0..], 0x11);
+        break :blk bytes;
+    };
     const plaintext = "QUIC packet with ChaCha20";
     const aad = "header data";
 
@@ -199,7 +215,11 @@ test "zcrypto.rand: fill produces unique output" {
 // ============================================================================
 
 test "zcrypto.util: secureZero clears memory" {
-    var sensitive: [64]u8 = [_]u8{0xFF} ** 64;
+    var sensitive: [64]u8 = blk: {
+        var bytes = std.mem.zeroes([64]u8);
+        @memset(bytes[0..], 0xFF);
+        break :blk bytes;
+    };
 
     zcrypto.util.secureZero(&sensitive);
 

@@ -1,25 +1,27 @@
-## [Unreleased]
+## [0.9.11] - 2026-05-04
 
-### Zig 0.17 Migration
+### Zig Latest Compatibility & Dependency Refresh
 
 #### Changed
-- Added a local Zig 0.17-compatible network address layer in `src/net/address.zig` backed by `std.Io.net.IpAddress`
-- Updated low-level UDP and socket code to use Zig 0.17 POSIX/IP conversion helpers instead of removed `std.net.Address` internals
-- Exported `NetAddress` through the public `zquic` module for internal and example use
-- Migrated the VPN path, related examples, and connection-migration code away from removed `std.net` APIs
+- Updated the package version metadata to `v0.9.11`.
+- Updated the `zcrypto` dependency to `v1.0.3`.
+- Wired runtime/library version reporting to `build.zig.zon` through `build_options` so the package version is no longer hardcoded in source.
 
 #### Fixed
-- Restored optional VPN/monitoring builds on Zig 0.17 by replacing removed `std.net.Address` usage in exercised code paths
-- Updated surfaced `ArrayList` callsites to Zig 0.17-compatible managed/unmanaged usage where required by the current build surface
-- Replaced surfaced removed `std.time.microTimestamp()` usage in exercised code with the repo time helper where required for successful builds
-- Fixed Prometheus exporter buffering and formatting against the installed Zig 0.17 stdlib API
+- Restored `zig build` compatibility on the current Zig `0.17.0-dev` toolchain by replacing parser-fragile repeat-expression initializers in the active `zquic` build surface.
+- Fixed the same Zig parser breakages in the `zquic` test and integration-test surface so verification targets no longer fail after the main build succeeds.
+- Kept the `zsync` and `zcrypto` dependency chain aligned with the same Zig-dev compatibility pass, eliminating the downstream dependency parse failures that were surfacing through `zquic`.
 
 #### Verified
-- `zig build test` passes on Zig `0.17.0-dev.27+0dd99c37c`
-- `zig build -Dservices=true -Dvpn=true -Dpost-quantum=true -Dexperimental-crypto=true -Dmonitoring=true` passes on Zig `0.17.0-dev.27+0dd99c37c`
+- `zig build`
+- `zig build test --summary all`
+- `zig build integration-tests`
 
 #### Notes
-- Current release-facing documentation now targets Zig `0.17.0-dev` instead of the older `0.16.0-dev` baseline.
+- `v0.9.11` is the current Zig-latest compatibility release line.
+- Historical docs and changelog entries for earlier releases were left intact unless they were current-release runtime/version metadata.
+
+## [Unreleased]
 
 ## [0.9.9] - 2026-04-12
 

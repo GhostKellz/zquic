@@ -228,7 +228,13 @@ fn healthHandler(request: *zquic.Http3.Request, response: *zquic.Http3.Response)
     _ = request;
 
     response.setStatus(.ok);
-    try response.text("{\"status\": \"healthy\", \"timestamp\": 1703462400, \"uptime_seconds\": 3600, \"version\": \"1.0.0\", \"http3_enabled\": true}");
+    var buffer: [256]u8 = undefined;
+    const body = std.fmt.bufPrint(&buffer, "{{\"status\":\"healthy\",\"timestamp\":1703462400,\"uptime_seconds\":3600,\"version\":\"{s}\",\"http3_enabled\":true}}", .{zquic.version}) catch {
+        response.setStatus(.internal_server_error);
+        try response.text("Response too large");
+        return;
+    };
+    try response.text(body);
 }
 
 fn getUserHandler(request: *zquic.Http3.Request, response: *zquic.Http3.Response) zquic.Error.ZquicError!void {
@@ -288,33 +294,16 @@ fn deleteUserHandler(request: *zquic.Http3.Request, response: *zquic.Http3.Respo
 fn statsHandler(request: *zquic.Http3.Request, response: *zquic.Http3.Response) zquic.Error.ZquicError!void {
     _ = request;
 
-    const stats_json =
-        \\{
-        \\    "server_info": {
-        \\        "name": "ZQUIC HTTP/3 Server",
-        \\        "version": "1.0.0",
-        \\        "protocol": "HTTP/3",
-        \\        "start_time": "2024-12-24T00:00:00Z"
-        \\    },
-        \\    "metrics": {
-        \\        "connections_active": 1,
-        \\        "connections_total": 5,
-        \\        "requests_handled": 25,
-        \\        "bytes_sent": 51200,
-        \\        "bytes_received": 12800,
-        \\        "errors_count": 0,
-        \\        "uptime_seconds": 7200
-        \\    },
-        \\    "features": {
-        \\        "routing": true,
-        \\        "middleware": true,
-        \\        "compression": true,
-        \\        "server_push": true,
-        \\        "tls_1_3": true
-        \\    }
-        \\}
-    ;
-
+    var buffer: [1024]u8 = undefined;
+    const stats_json = std.fmt.bufPrint(
+        &buffer,
+        "{{\"server_info\":{{\"name\":\"ZQUIC HTTP/3 Server\",\"version\":\"{s}\",\"protocol\":\"HTTP/3\",\"start_time\":\"2024-12-24T00:00:00Z\"}},\"metrics\":{{\"connections_active\":1,\"connections_total\":5,\"requests_handled\":25,\"bytes_sent\":51200,\"bytes_received\":12800,\"errors_count\":0,\"uptime_seconds\":7200}},\"features\":{{\"routing\":true,\"middleware\":true,\"compression\":true,\"server_push\":true,\"tls_1_3\":true}}}}",
+        .{zquic.version},
+    ) catch {
+        response.setStatus(.internal_server_error);
+        try response.text("Response too large");
+        return;
+    };
     try response.text(stats_json);
 }
 

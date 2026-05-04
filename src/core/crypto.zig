@@ -344,7 +344,7 @@ pub const HeaderProtection = struct {
                 const key_array: [32]u8 = hp_key[0..32].*;
                 const counter = std.mem.readInt(u32, sample[0..4], .little);
                 const nonce_array: [12]u8 = sample[4..16].*;
-                var zeros: [5]u8 = [_]u8{0} ** 5;
+                var zeros: [5]u8 = std.mem.zeroes([5]u8);
                 std.crypto.stream.chacha.ChaCha20IETF.xor(mask, &zeros, counter, key_array, nonce_array);
             },
         }
@@ -404,7 +404,7 @@ pub const QuicCrypto = struct {
     /// Initialize QUIC crypto context
     pub fn init(allocator: std.mem.Allocator, cipher_suite: CipherSuite) Self {
         return Self{
-            .keys = [_]?KeyPair{null} ** 4,
+            .keys = [_]?KeyPair{ null, null, null, null },
             .aead = AeadOps.init(cipher_suite),
             .hp = HeaderProtection.init(cipher_suite),
             .allocator = allocator,

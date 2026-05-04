@@ -7,7 +7,7 @@ Welcome to ZQUIC documentation. This guide covers the modular QUIC transport lib
 ZQUIC provides a production-ready QUIC (RFC 9000) and HTTP/3 (RFC 9114) implementation in pure Zig with:
 
 - **Modular builds**: Core-only (~1.3 MB) to full-stack (~5.5 MB)
-- **Stable crypto**: AES-GCM, ChaCha20-Poly1305, X25519, Ed25519 via zcrypto v1.0.1
+- **Stable crypto**: AES-GCM, ChaCha20-Poly1305, X25519, Ed25519 via zcrypto v1.0.3
 - **Experimental PQ crypto**: ML-KEM-768 hybrid key exchange (requires explicit flags)
 - **Native async runtime**: No external dependencies
 - **SSH/QUIC integration**: Bypass TLS handshake using SSH-derived secrets
@@ -27,7 +27,7 @@ ZQUIC provides a production-ready QUIC (RFC 9000) and HTTP/3 (RFC 9114) implemen
 - **[Core API](api/core.md)** - Connection, Packet, Stream management
 
 ### Integrations
-- **[zcrypto](integrations/zcrypto.md)** - zcrypto v1.0.1 integration guide
+- **[zcrypto](integrations/zcrypto.md)** - zcrypto v1.0.3 integration guide
 - **[Prometheus](integrations/prometheus.md)** - Metrics exporter integration
 
 ### Features
@@ -37,7 +37,7 @@ ZQUIC provides a production-ready QUIC (RFC 9000) and HTTP/3 (RFC 9114) implemen
 - **[QUIC VPN](features/quic_vpn.md)** - Experimental QUIC-over-UDP VPN notes
 
 ### Guides
-- **[Future Features](future-features.md)** - Scoped features intentionally deferred past v0.9.9
+- **[Future Features](future-features.md)** - Scoped features intentionally deferred past v0.9.11
 
 ## Quick Navigation
 

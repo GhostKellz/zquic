@@ -37,7 +37,7 @@ pub const IPv6 = struct {
 
 test "ipv6 utilities" {
     const ipv4_addr = NetAddress.initIp4([4]u8{ 127, 0, 0, 1 }, 8080);
-    const ipv6_addr = NetAddress.initIp6([16]u8{0} ** 15 ++ [1]u8{1}, 8080, 0, 0);
+    const ipv6_addr = NetAddress.initIp6(std.mem.zeroes([15]u8) ++ [1]u8{1}, 8080, 0, 0);
 
     try std.testing.expect(IPv6.isIPv4(ipv4_addr));
     try std.testing.expect(!IPv6.isIPv6(ipv4_addr));

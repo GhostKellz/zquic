@@ -227,8 +227,8 @@ const KeyExchange = struct {
                 return Error.ZquicError.CryptoError;
             };
             // Zero-pad to 56 bytes (X448 key size) - purely for type compatibility
-            var public_key: [56]u8 = [_]u8{0} ** 56;
-            var secret_key: [56]u8 = [_]u8{0} ** 56;
+            var public_key: [56]u8 = std.mem.zeroes([56]u8);
+            var secret_key: [56]u8 = std.mem.zeroes([56]u8);
             @memcpy(public_key[0..32], &keypair.public_key);
             @memcpy(secret_key[0..32], &keypair.private_key);
             return .{
@@ -276,7 +276,12 @@ const ZKP = struct {
             _ = value;
             _ = min;
             _ = max;
-            return try allocator.dupe(u8, &[_]u8{12} ** 256);
+            const fill = blk: {
+                var bytes = std.mem.zeroes([256]u8);
+                @memset(bytes[0..], 12);
+                break :blk bytes;
+            };
+            return try allocator.dupe(u8, &fill);
         }
 
         pub fn verifyRangeProof(allocator: std.mem.Allocator, proof: []const u8, value: u64) !bool {

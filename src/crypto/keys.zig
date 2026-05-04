@@ -190,7 +190,11 @@ test "key manager initialization and update" {
 test "packet protection" {
     var header = [_]u8{ 0x40, 0x01, 0x02, 0x03 };
     const sample = [_]u8{ 0x12, 0x34, 0x56, 0x78, 0x9a, 0xbc, 0xde, 0xf0, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88 };
-    const hp_key = [_]u8{0xaa} ** 32;
+    const hp_key = blk: {
+        var bytes = std.mem.zeroes([32]u8);
+        @memset(bytes[0..], 0xaa);
+        break :blk bytes;
+    };
 
     const original_header = header;
 

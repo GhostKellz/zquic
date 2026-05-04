@@ -15,6 +15,7 @@
 //! - TLS integration (basic)
 
 const std = @import("std");
+const build_options = @import("build_options");
 const zcrypto = @import("zcrypto");
 
 // Core QUIC protocol components
@@ -93,7 +94,7 @@ pub const StreamState = enum(u8) {
     closed = 4,
 };
 
-pub const version = "0.9.9";
+pub const version = build_options.version;
 pub const quic_version = 0x00000001; // QUIC version 1 (RFC 9000)
 
 /// Initialize the ZQUIC core library

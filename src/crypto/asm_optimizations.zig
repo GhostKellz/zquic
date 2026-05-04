@@ -661,8 +661,8 @@ test "optimized chacha20-poly1305 basic functionality" {
     var optimizer = CpuOptimizer.init();
     var chacha_opt = OptimizedChaCha20Poly1305.init(&optimizer);
 
-    const key = [_]u8{0} ** 32;
-    const nonce = [_]u8{0} ** 12;
+    const key = std.mem.zeroes([32]u8);
+    const nonce = std.mem.zeroes([12]u8);
     const aad = "";
     const plaintext = "Hello, ZQUIC!";
 

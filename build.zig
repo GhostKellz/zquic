@@ -16,6 +16,7 @@
 //!   zig build -Dservices=true -Dvpn=true  # Full enterprise build
 
 const std = @import("std");
+const build_zon = @import("build.zig.zon");
 
 pub fn build(b: *std.Build) !void {
     const target = b.standardTargetOptions(.{});
@@ -60,6 +61,7 @@ pub fn build(b: *std.Build) !void {
 
     // Add build options for conditional compilation
     const build_options = b.addOptions();
+    build_options.addOption([]const u8, "version", build_zon.version);
     build_options.addOption(bool, "enable_http3", enable_http3);
     build_options.addOption(bool, "enable_doq", enable_doq);
     build_options.addOption(bool, "enable_vpn", enable_vpn);

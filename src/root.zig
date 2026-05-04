@@ -68,7 +68,7 @@
 //!
 //! ## Version Information
 //!
-//! - Library version: 0.9.9
+//! - Library version: build.zig.zon version
 //! - QUIC version: RFC 9000 (v1)
 //! - Zig compatibility: 0.17.0-dev.27+
 

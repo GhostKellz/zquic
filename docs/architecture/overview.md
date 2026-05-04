@@ -17,7 +17,7 @@ ZQUIC architecture and design principles for high-performance networking.
 │                   QUIC Core Transport                      │
 │     (connection.zig, packet.zig, stream.zig)              │
 ├─────────────────────────────────────────────────────────────┤
-│              Crypto Layer (zcrypto v1.0.1)                │
+│              Crypto Layer (zcrypto v1.0.3)                │
 │   ML-KEM-768, SLH-DSA, Ed25519, Secp256k1, Blake3, SHA256  │
 ├─────────────────────────────────────────────────────────────┤
 │                 Networking Foundation                      │

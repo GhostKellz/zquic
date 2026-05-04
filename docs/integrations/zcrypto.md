@@ -1,6 +1,6 @@
-# zcrypto v1.0.1 Integration Guide
+# zcrypto Integration Guide
 
-ZQUIC uses [`zcrypto`](https://github.com/ghostkellz/zcrypto) for cryptographic operations. This document covers the stable v1.0.1 API contract and build configuration.
+ZQUIC uses [`zcrypto`](https://github.com/ghostkellz/zcrypto) for cryptographic operations. This document covers the current stable API contract and build configuration.
 
 ## Stable Core Modules
 
@@ -52,13 +52,13 @@ zig build -Dpost-quantum=true -Dexperimental-crypto=true
 ```zig
 const zcrypto = @import("zcrypto");
 
-// Streaming API (v1.0.1 uses .init() without args)
+// Streaming API
 var hasher = zcrypto.hash.Sha256.init();
 hasher.update(chunk1);
 hasher.update(chunk2);
 const digest = hasher.final();  // returns [32]u8
 
-// SHA-384 (new in v1.0.1)
+// SHA-384
 var sha384 = zcrypto.hash.Sha384.init();
 sha384.update(data);
 const hash384 = sha384.final();  // returns [48]u8
@@ -79,7 +79,7 @@ defer allocator.free(okm);
 ### Random bytes
 ```zig
 var buffer: [32]u8 = undefined;
-zcrypto.rand.fill(&buffer);  // v1.0.1 uses .fill()
+zcrypto.rand.fill(&buffer);
 ```
 
 ### Key exchange (X25519)
@@ -148,25 +148,25 @@ const pq_suite = zquic.PQCipherSuite{
 };
 ```
 
-## Migration from v1.0.0 to v1.0.1
+## Migration Notes
 
-Key changes in zcrypto v1.0.1:
+Key changes in the current stable zcrypto API:
 
-| v1.0.0 | v1.0.1 |
-|--------|--------|
+| Older API | Current API |
+|-----------|-------------|
 | `zcrypto.hash.Sha256.init(.{})` | `zcrypto.hash.Sha256.init()` |
 | `hasher.finalResult()` | `hasher.final()` |
 | `zcrypto.rand.fillBytes()` | `zcrypto.rand.fill()` |
 | No SHA-384 | `zcrypto.hash.Sha384` available |
 | `zcrypto.hash.Blake3` | `zcrypto.blake3.Blake3` |
 
-### ML-KEM API changes (v1.0.1)
+### ML-KEM API changes
 
 ```zig
-// v1.0.0 (old)
+// Older API
 const keypair = try ML_KEM_768.generateKeypair();
 
-// v1.0.1 (new - seed-based)
+// Current API (seed-based)
 var seed: [32]u8 = undefined;
 zcrypto.rand.fill(&seed);
 const keypair = ML_KEM_768.KeyPair.generate(seed);
@@ -176,7 +176,7 @@ const keypair = ML_KEM_768.KeyPair.generate(seed);
 
 If upgrading from zcrypto v0.9.x, update these deprecated namespaces:
 
-| Old (deprecated) | New (v1.0.1) |
+| Old (deprecated) | Current |
 |------------------|--------------|
 | `zcrypto.aead` | `zcrypto.sym` |
 | `zcrypto.block` | Use `std.crypto.core.aes` |

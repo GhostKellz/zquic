@@ -63,7 +63,7 @@ const TEST_CONFIG = ZQuicConfig{
     .connection_timeout_ms = 30000,
     .enable_ipv6 = 1,
     .tls_verify = 0,
-    .reserved = [_]u8{0} ** 16,
+    .reserved = std.mem.zeroes([16]u8),
 };
 
 pub fn main() !void {

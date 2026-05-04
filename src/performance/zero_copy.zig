@@ -981,7 +981,7 @@ pub const ZeroCopyQuicProcessor = struct {
 
         return Self{
             .allocator = allocator,
-            .crypto_buffers = [_][1500]u8{[_]u8{0} ** 1500} ** 128,
+            .crypto_buffers = std.mem.zeroes([128][1500]u8),
             .hw_caps = hw_caps,
             .simd_processor = simd_processor,
         };

@@ -499,8 +499,8 @@ pub const BBR = struct {
 
         pub fn init() MaxFilter {
             return MaxFilter{
-                .values = [_]f64{0.0} ** 3,
-                .timestamps = [_]u64{0} ** 3,
+                .values = std.mem.zeroes([3]f64),
+                .timestamps = std.mem.zeroes([3]u64),
                 .index = 0,
             };
         }

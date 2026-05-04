@@ -271,8 +271,16 @@ pub const SshQuicContext = struct {
 };
 
 test "SSH secret derivation" {
-    const client_secret = [_]u8{0xAA} ** 32;
-    const server_secret = [_]u8{0xBB} ** 32;
+    const client_secret = blk: {
+        var bytes = std.mem.zeroes([32]u8);
+        @memset(bytes[0..], 0xAA);
+        break :blk bytes;
+    };
+    const server_secret = blk: {
+        var bytes = std.mem.zeroes([32]u8);
+        @memset(bytes[0..], 0xBB);
+        break :blk bytes;
+    };
 
     var secrets = SshQuicSecrets.init(client_secret, server_secret);
     const keys = try secrets.deriveKeys();
@@ -282,13 +290,21 @@ test "SSH secret derivation" {
 
     // Test zeroization
     secrets.zeroize();
-    try std.testing.expect(std.mem.eql(u8, &secrets.client_secret, &([_]u8{0} ** 32)));
-    try std.testing.expect(std.mem.eql(u8, &secrets.server_secret, &([_]u8{0} ** 32)));
+    try std.testing.expect(std.mem.eql(u8, &secrets.client_secret, &std.mem.zeroes([32]u8)));
+    try std.testing.expect(std.mem.eql(u8, &secrets.server_secret, &std.mem.zeroes([32]u8)));
 }
 
 test "SSH QUIC context initialization" {
-    const client_secret = [_]u8{0xAA} ** 32;
-    const server_secret = [_]u8{0xBB} ** 32;
+    const client_secret = blk: {
+        var bytes = std.mem.zeroes([32]u8);
+        @memset(bytes[0..], 0xAA);
+        break :blk bytes;
+    };
+    const server_secret = blk: {
+        var bytes = std.mem.zeroes([32]u8);
+        @memset(bytes[0..], 0xBB);
+        break :blk bytes;
+    };
     var secrets = SshQuicSecrets.init(client_secret, server_secret);
     defer secrets.zeroize();
 
@@ -320,8 +336,16 @@ test "Normal TLS mode still works" {
 
 test "Client-server interop: encrypt/decrypt roundtrip" {
     // Both client and server use the same secrets (as they would after SSH key exchange)
-    const client_secret = [_]u8{0xAA} ** 32;
-    const server_secret = [_]u8{0xBB} ** 32;
+    const client_secret = blk: {
+        var bytes = std.mem.zeroes([32]u8);
+        @memset(bytes[0..], 0xAA);
+        break :blk bytes;
+    };
+    const server_secret = blk: {
+        var bytes = std.mem.zeroes([32]u8);
+        @memset(bytes[0..], 0xBB);
+        break :blk bytes;
+    };
 
     var client_secrets = SshQuicSecrets.init(client_secret, server_secret);
     defer client_secrets.zeroize();
@@ -371,8 +395,16 @@ test "Client-server interop: encrypt/decrypt roundtrip" {
 }
 
 test "initFromPtrs avoids extra copies" {
-    const client_secret = [_]u8{0xCC} ** 32;
-    const server_secret = [_]u8{0xDD} ** 32;
+    const client_secret = blk: {
+        var bytes = std.mem.zeroes([32]u8);
+        @memset(bytes[0..], 0xCC);
+        break :blk bytes;
+    };
+    const server_secret = blk: {
+        var bytes = std.mem.zeroes([32]u8);
+        @memset(bytes[0..], 0xDD);
+        break :blk bytes;
+    };
 
     var secrets = SshQuicSecrets.initFromPtrs(&client_secret, &server_secret);
     defer secrets.zeroize();
