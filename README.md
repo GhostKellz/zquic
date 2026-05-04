@@ -1,7 +1,7 @@
 <h1 align="center">ZQUIC</h1>
 
 <p align="center">
-  <strong>Production-Ready QUIC Transport for Zig</strong>
+  <strong>QUIC Transport for Zig</strong>
 </p>
 
 <p align="center">
