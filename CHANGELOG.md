@@ -1,3 +1,25 @@
+## [0.9.12] - 2026-05-12
+
+### Fixed
+- **Zig latest compatibility** - Replaced removed Zig stdlib path-formatting APIs in the active HTTP/3 and DoQ code paths
+  - `src/http3/response.zig` no longer relies on `std.fmt.bufPrintZ`
+  - `src/doq/server.zig` no longer relies on `std.fmt.bufPrintZ`
+- **Nightly/toolchain validation** - Restored `zig build test` compatibility on newer Zig `0.17.0-dev` toolchains used by the self-hosted runner
+
+### Changed
+- **Minimum Zig version** - Updated package metadata to require `0.17.0-dev.292+fc1c83a36`
+- **GitHub Actions runtime** - Updated workflow action pins to Node 24-capable versions
+  - `actions/checkout@v6`
+  - `actions/cache@v5`
+
+### Verified
+- `zig build`
+- `zig build test`
+- `zig build integration-tests -Dhttp3=true -Ddoq=true`
+- `./dev/test.sh`
+- `bash docker/valgrind-check.sh`
+- `docker compose -f docker/compose.yml run --rm zquic-verify bash docker/run-verify.sh`
+
 ## [0.9.11] - 2026-05-04
 
 ### Zig Latest Compatibility & Dependency Refresh
