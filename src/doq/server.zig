@@ -309,11 +309,13 @@ pub const DoQServer = struct {
         // Use posix to check if certificate files exist
         const posix = std.posix;
 
-        var cert_path_buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
-        const cert_path_z = std.fmt.bufPrintZ(&cert_path_buf, "{s}", .{self.config.cert_path}) catch {
+        var cert_path_buf: [std.Io.Dir.max_path_bytes + 1]u8 = undefined;
+        const cert_path = std.fmt.bufPrint(cert_path_buf[0..std.Io.Dir.max_path_bytes], "{s}", .{self.config.cert_path}) catch {
             std.log.err("DoQ: Certificate path too long: {s}", .{self.config.cert_path});
             return error.InvalidArgument;
         };
+        cert_path_buf[cert_path.len] = 0;
+        const cert_path_z: [:0]const u8 = cert_path_buf[0..cert_path.len :0];
 
         const cert_fd = posix.openat(posix.AT.FDCWD, cert_path_z, .{}, 0) catch |err| {
             std.log.err("DoQ: Failed to load certificate {s}: {}", .{ self.config.cert_path, err });
@@ -321,11 +323,13 @@ pub const DoQServer = struct {
         };
         _ = posix.system.close(cert_fd);
 
-        var key_path_buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
-        const key_path_z = std.fmt.bufPrintZ(&key_path_buf, "{s}", .{self.config.key_path}) catch {
+        var key_path_buf: [std.Io.Dir.max_path_bytes + 1]u8 = undefined;
+        const key_path = std.fmt.bufPrint(key_path_buf[0..std.Io.Dir.max_path_bytes], "{s}", .{self.config.key_path}) catch {
             std.log.err("DoQ: Key path too long: {s}", .{self.config.key_path});
             return error.InvalidArgument;
         };
+        key_path_buf[key_path.len] = 0;
+        const key_path_z: [:0]const u8 = key_path_buf[0..key_path.len :0];
 
         const key_fd = posix.openat(posix.AT.FDCWD, key_path_z, .{}, 0) catch |err| {
             std.log.err("DoQ: Failed to load private key {s}: {}", .{ self.config.key_path, err });

@@ -320,12 +320,14 @@ pub const Response = struct {
         const linux = std.os.linux;
 
         // Convert path to null-terminated
-        var path_buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
-        const path_z = std.fmt.bufPrintZ(&path_buf, "{s}", .{file_path}) catch {
+        var path_buf: [std.Io.Dir.max_path_bytes + 1]u8 = undefined;
+        const path = std.fmt.bufPrint(path_buf[0..std.Io.Dir.max_path_bytes], "{s}", .{file_path}) catch {
             self.setStatus(.uri_too_long);
             try self.text("Path too long");
             return;
         };
+        path_buf[path.len] = 0;
+        const path_z: [:0]const u8 = path_buf[0..path.len :0];
 
         const fd = posix.openat(posix.AT.FDCWD, path_z, .{}, 0) catch |err| switch (err) {
             error.FileNotFound => {
