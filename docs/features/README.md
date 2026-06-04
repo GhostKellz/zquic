@@ -22,6 +22,11 @@ ZQUIC ships as a collection of composable subsystems. Every directory under `src
 - `src/doq/` exposes a DNS resolver/server stack with post-quantum TLS hooks.
 - The server now emits Prometheus metrics for query counts, errors, and active connections so operators can monitor real deployments.
 
+## Post-Quantum Crypto (Experimental)
+- PQ code paths require both `-Dpost-quantum=true` and `-Dexperimental-crypto=true`.
+- Current primitives use zcrypto `v1.0.4`: ML-KEM for key encapsulation and ML-DSA-65 for authentication helpers.
+- PQ multiplexer integration remains deferred; see `docs/future-features.md` for that release boundary.
+
 ## QUIC VPN (Experimental)
 - `src/vpn/router.zig` implements an in-progress packet router that pushes QUIC-encrypted traffic over UDP tunnels.
 - Think of it as a **conceptual alternative to mesh VPNs (Tailscale, NetBird, etc.)**—useful for research and lab topologies but not a drop-in replacement yet.

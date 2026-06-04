@@ -227,11 +227,8 @@ pub fn build(b: *std.Build) !void {
         // ... other run steps would go here
     }
 
-    // Allow passing arguments to the applications
-    if (b.args) |args| {
-        run_cmd.addArgs(args);
-        // Add args to other run commands as needed
-    }
+    // Allow passing arguments to the application with `zig build run -- <args>`.
+    run_cmd.addPassthruArgs();
 
     // ============================================================================
     // TESTS

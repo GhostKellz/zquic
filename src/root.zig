@@ -142,7 +142,7 @@ pub const Crypto = core.Crypto;
 /// Enhanced cryptographic layer with post-quantum support.
 ///
 /// Extends base crypto with hybrid key exchange (X25519 + ML-KEM-768)
-/// and quantum-safe signatures (SLH-DSA).
+/// and quantum-safe signatures (ML-DSA-65).
 pub const EnhancedCrypto = core.EnhancedCrypto;
 
 /// TLS 1.3 handshake state machine for QUIC.
@@ -275,7 +275,7 @@ pub const services = if (build_options.enable_services) @import("services.zig") 
 ///
 /// Provides:
 /// - ML-KEM-768 key encapsulation
-/// - SLH-DSA digital signatures
+/// - ML-DSA-65 digital signatures
 /// - Hybrid key exchange (classical + PQ)
 pub const post_quantum = if (build_options.enable_post_quantum) @import("post_quantum.zig") else struct {};
 

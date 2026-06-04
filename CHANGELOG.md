@@ -1,3 +1,18 @@
+## [0.9.13] - 2026-06-04
+
+### Changed
+- Updated package metadata for `v0.9.13` and Zig `0.17.0-dev.657+2faf8debf`.
+- Updated `zcrypto` to `v1.0.4`.
+- Migrated post-quantum authentication references from removed SLH-DSA scaffolding to zcrypto-backed ML-DSA-65.
+
+### Fixed
+- Restored Zig dev build compatibility by replacing removed `std.Build.args` run-step forwarding with `Run.addPassthruArgs()`.
+- Removed the stale `slh_dsa_128f` pseudo-suite from the PQ cipher suite enum.
+
+### Verified
+- `/opt/zig-dev/zig build test --summary all`
+- `/opt/zig-dev/zig build test -Dpost-quantum=true -Dexperimental-crypto=true --summary all`
+
 ## [0.9.12] - 2026-05-12
 
 ### Fixed

@@ -1,6 +1,6 @@
 //! ZCrypto Stable API Tests
 //!
-//! Tests for stable zcrypto v1.0.1 APIs that run on every build.
+//! Tests for stable zcrypto APIs that run on every build.
 //! These do not require post-quantum flags.
 //!
 //! Stable modules tested:
@@ -39,7 +39,7 @@ test "zcrypto hash: SHA-256 one-shot" {
     try std.testing.expect(digest.len == 32);
 }
 
-test "zcrypto hash: SHA-384 streaming (v1.0.1)" {
+test "zcrypto hash: SHA-384 streaming" {
     const data = "Hello, ZQUIC with SHA-384!";
 
     var hasher = zcrypto.hash.Sha384.init();

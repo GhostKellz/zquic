@@ -1,6 +1,6 @@
 //! Post-Quantum QUIC Demo
 //!
-//! Demonstrates using ZQUIC with zcrypto v0.5.0 for quantum-safe networking
+//! Demonstrates using ZQUIC with zcrypto for quantum-safe networking
 
 const std = @import("std");
 const zquic = @import("zquic");
@@ -19,9 +19,9 @@ pub fn main() !void {
     // Demonstrate post-quantum cipher suites
     std.debug.print("Available Post-Quantum Cipher Suites:\n", .{});
     std.debug.print("  - ML-KEM-768 + X25519 (hybrid, recommended)\n", .{});
-    std.debug.print("  - ML-KEM-1024 + X448 (hybrid, higher security)\n", .{});
+    std.debug.print("  - ML-KEM-1024 + X25519 (hybrid, higher PQ security)\n", .{});
     std.debug.print("  - ML-KEM-768 (pure post-quantum)\n", .{});
-    std.debug.print("  - SLH-DSA-128f (post-quantum signatures)\n\n", .{});
+    std.debug.print("  - ML-DSA-65 (post-quantum signatures)\n\n", .{});
 
     // Create enhanced TLS context
     var tls_ctx = try zquic.EnhancedCrypto.EnhancedTlsContext.init(
@@ -104,8 +104,8 @@ pub fn main() !void {
     std.debug.print("  - Blake3: >3 GB/sec\n", .{});
     std.debug.print("  - Post-quantum handshake: <2ms\n", .{});
 
-    std.debug.print("\n✓ Post-Quantum QUIC is ready for production use!\n", .{});
-    std.debug.print("  Your QUIC connections are now quantum-safe.\n", .{});
+    std.debug.print("\n✓ Experimental Post-Quantum QUIC initialized successfully.\n", .{});
+    std.debug.print("  Use only with explicit post-quantum and experimental crypto flags.\n", .{});
 
     // Demonstrate server creation
     std.debug.print("\nDemonstrating quantum-safe server creation...\n", .{});

@@ -1,6 +1,6 @@
 //! Zero-Copy Networking and Performance Optimizations
 //!
-//! Advanced performance optimizations enhanced with zcrypto v0.6.0:
+//! Advanced performance optimizations enhanced with zcrypto:
 //! - Zero-copy packet processing with vectorized I/O
 //! - Memory-mapped buffers for large data transfers
 //! - SIMD-optimized cryptographic operations with hardware acceleration
@@ -18,7 +18,7 @@ const Error = @import("../utils/error.zig");
 const builtin = @import("builtin");
 const NetAddress = @import("../net/address.zig");
 
-// Import zcrypto v0.6.0 hardware acceleration
+// Import zcrypto hardware acceleration
 const HardwareCrypto = zcrypto.HardwareCrypto;
 const QuicCrypto = zcrypto.QuicCrypto;
 

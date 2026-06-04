@@ -4,9 +4,9 @@
 
 | Version | Status |
 |---------|--------|
-| `0.9.11` | Supported |
+| `0.9.13` | Supported |
 | `main` | Best effort |
-| `< 0.9.11` | Not supported |
+| `< 0.9.13` | Not supported |
 
 Security fixes are targeted at the current release line first.
 
@@ -43,7 +43,7 @@ It also includes integration risks where `zquic` misuses dependencies in a way t
 
 ## Crypto Status
 
-`zquic` uses `zcrypto v1.0.3` for parts of its cryptographic implementation.
+`zquic` uses `zcrypto v1.0.4` for parts of its cryptographic implementation.
 
 Current support posture:
 

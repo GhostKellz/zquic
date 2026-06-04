@@ -112,8 +112,8 @@ const equal = zcrypto.util.constantTimeCompare(&a, &b);
 
 Post-quantum modules require `-Dpost-quantum=true -Dexperimental-crypto=true`:
 
-- `zcrypto.post_quantum.ML_KEM_768` - ML-KEM key encapsulation (stdlib-backed)
-- `zcrypto.post_quantum.pq.slh_dsa.SLH_DSA_128s` - SLH-DSA signatures
+- `zcrypto.post_quantum.pq.ml_kem.ML_KEM_768` - ML-KEM key encapsulation (stdlib-backed)
+- `zcrypto.post_quantum.pq.ml_dsa.ML_DSA_65` - ML-DSA-65 signatures (FIPS 204, stdlib-backed)
 
 **Important caveats:**
 
@@ -129,7 +129,7 @@ Post-quantum modules require `-Dpost-quantum=true -Dexperimental-crypto=true`:
 | ML-KEM-768 | Real | Uses zcrypto's stdlib-backed ML-KEM-768 (1184-byte keys) |
 | ML-KEM-1024 | Real | Uses zcrypto's stdlib-backed ML-KEM-1024 (1568-byte keys) |
 | X25519 | Real | Uses zcrypto's X25519 implementation |
-| SLH-DSA-128s | Real | Uses zcrypto's SLH-DSA implementation |
+| ML-DSA-65 | Real | Uses zcrypto's stdlib-backed ML-DSA-65 implementation |
 
 **Note**: The `ml_kem_1024_x25519_sha384` cipher suite uses real ML-KEM-1024 for post-quantum security and X25519 for classical security. The former X448 suite was renamed to accurately reflect the classical algorithm used.
 
@@ -141,11 +141,8 @@ For QUIC connections, configure the TLS profile:
 // Standard TLS 1.3 with X25519
 const suite = zquic.CipherSuite.aes_256_gcm_sha384;
 
-// Post-quantum (when enabled)
-const pq_suite = zquic.PQCipherSuite{
-    .kem = .ml_kem_768,
-    .sig = .slh_dsa_sha2_128f,
-};
+// Post-quantum key exchange (when enabled)
+const pq_suite = zquic.PQCipherSuite.ml_kem_768_x25519_sha256;
 ```
 
 ## Migration Notes

@@ -17,7 +17,7 @@ All data encryption uses authenticated encryption with associated data (AEAD):
 
 ### Post-Quantum Cryptography
 - **ML-KEM-768**: Post-quantum key encapsulation (NIST FIPS 203)
-- **SLH-DSA-128s**: Post-quantum digital signatures (NIST FIPS 205)
+- **ML-DSA-65**: Post-quantum digital signatures (NIST FIPS 204)
 - **Hybrid Mode**: X25519 + ML-KEM for forward-secure key exchange
 
 ## TLS 1.3 Implementation

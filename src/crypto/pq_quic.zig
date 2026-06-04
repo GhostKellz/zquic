@@ -1,6 +1,6 @@
 //! Post-Quantum QUIC Implementation
 //!
-//! Provides post-quantum key exchange for QUIC handshakes using zcrypto v1.0.0
+//! Provides post-quantum key exchange for QUIC handshakes using zcrypto
 //! Implements hybrid classical + post-quantum cryptography with hardware acceleration
 //!
 //! IMPORTANT: This module requires -Dpost-quantum=true -Dexperimental-crypto=true
@@ -210,53 +210,6 @@ const KeyExchange = struct {
             return result;
         }
     };
-
-    /// X448 key exchange shim - NOT A REAL X448 IMPLEMENTATION
-    ///
-    /// WARNING: This is a COMPATIBILITY STUB that uses X25519 internally.
-    /// It does NOT provide X448's 224-bit security level.
-    /// DO NOT use for production cryptographic security.
-    ///
-    /// This exists only to satisfy type signatures in experimental PQ hybrid code.
-    /// For real X448 support, zcrypto would need to expose X448 primitives.
-    const X448KeyExchange = struct {
-        /// Returns X25519 keys padded to X448 size - NOT cryptographically valid X448
-        pub fn generateKeyPair(allocator: std.mem.Allocator) !KeyPair {
-            // STUB: Using X25519 internally - this is NOT real X448
-            const keypair = zcrypto.kex.X25519.generateKeypair() catch {
-                return Error.ZquicError.CryptoError;
-            };
-            // Zero-pad to 56 bytes (X448 key size) - purely for type compatibility
-            var public_key: [56]u8 = std.mem.zeroes([56]u8);
-            var secret_key: [56]u8 = std.mem.zeroes([56]u8);
-            @memcpy(public_key[0..32], &keypair.public_key);
-            @memcpy(secret_key[0..32], &keypair.private_key);
-            return .{
-                .public_key = try allocator.dupe(u8, &public_key),
-                .secret_key = try allocator.dupe(u8, &secret_key),
-            };
-        }
-
-        /// Derives shared secret using X25519 on first 32 bytes - NOT real X448 ECDH
-        pub fn deriveSharedSecret(allocator: std.mem.Allocator, secret_key: []const u8, public_key: []const u8) ![]u8 {
-            // STUB: Use first 32 bytes for X25519 - this is NOT real X448
-            if (secret_key.len < 32 or public_key.len < 32) {
-                return Error.ZquicError.CryptoError;
-            }
-            var sk: [32]u8 = undefined;
-            var pk: [32]u8 = undefined;
-            @memcpy(&sk, secret_key[0..32]);
-            @memcpy(&pk, public_key[0..32]);
-
-            const shared = zcrypto.kex.X25519.computeSharedSecret(sk, pk) catch {
-                return Error.ZquicError.CryptoError;
-            };
-            // Allocate heap memory - caller owns and must free
-            const result = try allocator.alloc(u8, 32);
-            @memcpy(result, &shared);
-            return result;
-        }
-    };
 };
 
 const HardwareCrypto = struct {
@@ -298,24 +251,19 @@ pub const PQCipherSuite = enum {
     /// ML-KEM-768 + X25519 hybrid (recommended)
     ml_kem_768_x25519_sha256,
     /// ML-KEM-1024 + X25519 hybrid with SHA-384 (higher PQ security, same classical)
-    /// Note: Uses X25519 for classical component (not X448)
     ml_kem_1024_x25519_sha384,
     /// Pure ML-KEM-768 (post-quantum only)
     ml_kem_768_sha256,
-    /// SLH-DSA-128f for signatures
-    slh_dsa_128f,
-
     pub fn getKemAlgorithm(self: @This()) []const u8 {
         return switch (self) {
             .ml_kem_768_x25519_sha256, .ml_kem_768_sha256 => "ml_kem_768",
             .ml_kem_1024_x25519_sha384 => "ml_kem_1024",
-            .slh_dsa_128f => "ml_kem_768", // Fallback
         };
     }
 
     pub fn getKemVariant(self: @This()) PostQuantum.MLKEMKeyExchange.Variant {
         return switch (self) {
-            .ml_kem_768_x25519_sha256, .ml_kem_768_sha256, .slh_dsa_128f => .ml_kem_768,
+            .ml_kem_768_x25519_sha256, .ml_kem_768_sha256 => .ml_kem_768,
             .ml_kem_1024_x25519_sha384 => .ml_kem_1024,
         };
     }
@@ -323,14 +271,14 @@ pub const PQCipherSuite = enum {
     pub fn isHybrid(self: @This()) bool {
         return switch (self) {
             .ml_kem_768_x25519_sha256, .ml_kem_1024_x25519_sha384 => true,
-            .ml_kem_768_sha256, .slh_dsa_128f => false,
+            .ml_kem_768_sha256 => false,
         };
     }
 
     pub fn getClassicalAlgorithm(self: @This()) ?[]const u8 {
         return switch (self) {
             .ml_kem_768_x25519_sha256, .ml_kem_1024_x25519_sha384 => "x25519",
-            .ml_kem_768_sha256, .slh_dsa_128f => null,
+            .ml_kem_768_sha256 => null,
         };
     }
 };
@@ -499,14 +447,12 @@ pub const PQKeyExchange = struct {
                     @memcpy(self.shared_secret.?, &digest);
                 },
                 .ml_kem_1024_x25519_sha384 => {
-                    // zcrypto v1.0.1 now exports Sha384
                     self.shared_secret = try self.allocator.alloc(u8, 48);
                     var hasher = zcrypto.hash.Sha384.init();
                     hasher.update(combined);
                     const digest = hasher.final();
                     @memcpy(self.shared_secret.?, &digest);
                 },
-                .slh_dsa_128f => unreachable,
             }
         } else {
             // PQ-only mode: use ML-KEM shared secret directly
@@ -610,16 +556,20 @@ pub const PQQuicContext = struct {
     }
 };
 
-/// Post-Quantum authentication for QUIC using zcrypto SLH-DSA
+/// Post-Quantum authentication for QUIC using zcrypto ML-DSA-65 (FIPS 204).
+///
+/// Backed by Zig stdlib `std.crypto.sign.mldsa.MLDSA65` via zcrypto. This is a
+/// NIST-standardized, FIPS 204 lattice signature scheme — not a hand-rolled
+/// placeholder.
 pub const PQAuthentication = struct {
-    /// SLH-DSA-128s constants from zcrypto
-    pub const SLH_DSA_128s = zcrypto.post_quantum.pq.slh_dsa.SLH_DSA_128s;
-    pub const SIGNATURE_SIZE = SLH_DSA_128s.SIGNATURE_SIZE;
-    pub const PUBLIC_KEY_SIZE = SLH_DSA_128s.PUBLIC_KEY_SIZE;
-    pub const PRIVATE_KEY_SIZE = SLH_DSA_128s.PRIVATE_KEY_SIZE;
+    /// ML-DSA-65 (FIPS 204) parameters from zcrypto.
+    pub const ML_DSA_65 = zcrypto.post_quantum.pq.ml_dsa.ML_DSA_65;
+    pub const SIGNATURE_SIZE = ML_DSA_65.SIGNATURE_SIZE;
+    pub const PUBLIC_KEY_SIZE = ML_DSA_65.PUBLIC_KEY_SIZE;
+    pub const PRIVATE_KEY_SIZE = ML_DSA_65.PRIVATE_KEY_SIZE;
 
-    /// Sign data using SLH-DSA (post-quantum signature)
-    pub fn signWithSlhDsa(
+    /// Sign data using ML-DSA-65 (FIPS 204 post-quantum signature).
+    pub fn signWithMlDsa(
         data: []const u8,
         secret_key: []const u8,
         allocator: std.mem.Allocator,
@@ -629,12 +579,12 @@ pub const PQAuthentication = struct {
             return Error.ZquicError.CryptoError;
         }
 
-        // Create keypair struct for signing
-        var keypair: SLH_DSA_128s.KeyPair = undefined;
+        // Create keypair struct for signing (sign derives from private_key).
+        var keypair: ML_DSA_65.KeyPair = undefined;
         @memcpy(&keypair.private_key, secret_key[0..PRIVATE_KEY_SIZE]);
 
-        // Generate signing randomness using zcrypto's secure RNG
-        var randomness: [SLH_DSA_128s.SEED_SIZE]u8 = undefined;
+        // Generate signing randomness using zcrypto's secure RNG.
+        var randomness: [ML_DSA_65.NOISE_SIZE]u8 = undefined;
         zcrypto.rand.fill(&randomness);
 
         // Sign the data
@@ -648,8 +598,8 @@ pub const PQAuthentication = struct {
         return result;
     }
 
-    /// Verify SLH-DSA signature
-    pub fn verifySlhDsaSignature(
+    /// Verify an ML-DSA-65 (FIPS 204) signature.
+    pub fn verifyMlDsaSignature(
         data: []const u8,
         signature: []const u8,
         public_key: []const u8,
@@ -668,8 +618,8 @@ pub const PQAuthentication = struct {
         @memcpy(&sig_array, signature[0..SIGNATURE_SIZE]);
         @memcpy(&pk_array, public_key[0..PUBLIC_KEY_SIZE]);
 
-        // Verify using zcrypto SLH-DSA
-        return SLH_DSA_128s.KeyPair.verify(pk_array, data, sig_array) catch false;
+        // Verify using zcrypto ML-DSA-65 (FIPS 204).
+        return ML_DSA_65.KeyPair.verify(pk_array, data, sig_array) catch false;
     }
 };
 
@@ -688,4 +638,21 @@ test "post-quantum key exchange" {
     try std.testing.expect(key_exchange.kem_secret_key != null);
     try std.testing.expect(key_exchange.classical_public_key != null);
     try std.testing.expect(key_exchange.classical_secret_key != null);
+}
+
+test "post-quantum authentication uses ML-DSA-65" {
+    const allocator = std.testing.allocator;
+    const message = "zquic ML-DSA authentication test";
+
+    const keypair = PQAuthentication.ML_DSA_65.KeyPair.generateRandom() catch {
+        return Error.ZquicError.CryptoError;
+    };
+
+    const signature = try PQAuthentication.signWithMlDsa(message, &keypair.private_key, allocator);
+    defer allocator.free(signature);
+
+    try std.testing.expect(try PQAuthentication.verifyMlDsaSignature(message, signature, &keypair.public_key));
+
+    signature[0] ^= 1;
+    try std.testing.expect(!try PQAuthentication.verifyMlDsaSignature(message, signature, &keypair.public_key));
 }

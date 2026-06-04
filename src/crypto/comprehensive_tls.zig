@@ -311,13 +311,13 @@ pub const CryptoKeys = struct {
         try self.hkdfExpandLabel(traffic_secret, "quic ku", &[_]u8{}, self.update_secret);
     }
 
-    /// HKDF-Expand-Label implementation using ZCrypto v1.0.0
+    /// HKDF-Expand-Label implementation using ZCrypto
     /// Supports SHA-256 and SHA-384 for TLS 1.3 key derivation.
-    /// Blake3 is not supported for TLS key derivation in v0.9.9.
+    /// Blake3 is not supported for TLS key derivation.
     fn hkdfExpandLabel(self: *Self, secret: []const u8, label: []const u8, context: []const u8, out: []u8) !void {
         switch (self.hash_algorithm) {
             .sha256 => {
-                // Use zcrypto v1.0.0 hkdfExpandLabel which handles TLS 1.3 format internally
+                // zcrypto handles TLS 1.3 HKDF-Label formatting internally.
                 const derived = try zcrypto.kdf.hkdfExpandLabel(self.allocator, secret, label, context, out.len);
                 defer self.allocator.free(derived);
                 @memcpy(out, derived);

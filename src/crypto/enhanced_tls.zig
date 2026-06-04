@@ -45,7 +45,6 @@ pub const EnhancedCipherSuite = enum {
     pub fn getHashFunction(self: @This()) type {
         return switch (self) {
             .aes_128_gcm_sha256, .chacha20_poly1305_sha256 => hash.Sha256,
-            // zcrypto v1.0.1 now exports Sha384
             .aes_256_gcm_sha384 => hash.Sha384,
         };
     }
@@ -80,8 +79,7 @@ pub const Hkdf = struct {
 
     /// Map zcrypto/hash types to std.crypto HKDF types
     fn getHkdfType(comptime HashType: type) type {
-        // Handle both zcrypto.hash and std.crypto.hash types
-        // zcrypto v1.0.1 now exports Sha384
+        // Handle both zcrypto.hash and std.crypto.hash types.
         if (HashType == hash.Sha256 or HashType == std.crypto.hash.sha2.Sha256) {
             return std.crypto.kdf.hkdf.HkdfSha256;
         } else if (HashType == hash.Sha384 or HashType == std.crypto.hash.sha2.Sha384) {
@@ -202,7 +200,6 @@ pub const EnhancedAead = struct {
     /// Encrypt data using AES-GCM
     pub fn encryptAesGcm(key: []const u8, iv: []const u8, plaintext: []const u8, aad: []const u8, allocator: std.mem.Allocator) ![]u8 {
         if (key.len == 16) {
-            // AES-128-GCM using zcrypto v1.0.0 API
             const result = symmetric.encryptAes128Gcm(
                 allocator,
                 key[0..16].*,
@@ -220,7 +217,6 @@ pub const EnhancedAead = struct {
             @memcpy(combined[result.data.len..][0..16], &result.tag);
             return combined;
         } else if (key.len == 32) {
-            // AES-256-GCM using zcrypto v1.0.0 API
             const result = symmetric.encryptAes256Gcm(
                 allocator,
                 key[0..32].*,
@@ -253,7 +249,6 @@ pub const EnhancedAead = struct {
         @memcpy(&tag, ciphertext[plaintext_len..][0..16]);
 
         if (key.len == 16) {
-            // AES-128-GCM using zcrypto v1.0.0 API
             const result = symmetric.decryptAes128Gcm(
                 allocator,
                 key[0..16].*,
@@ -271,7 +266,6 @@ pub const EnhancedAead = struct {
                 return Error.ZquicError.CryptoError;
             }
         } else if (key.len == 32) {
-            // AES-256-GCM using zcrypto v1.0.0 API
             const result = symmetric.decryptAes256Gcm(
                 allocator,
                 key[0..32].*,
@@ -297,7 +291,6 @@ pub const EnhancedAead = struct {
     pub fn encryptChaCha20Poly1305(key: []const u8, iv: []const u8, plaintext: []const u8, aad: []const u8, allocator: std.mem.Allocator) ![]u8 {
         if (key.len != 32 or iv.len != 12) return Error.ZquicError.CryptoError;
 
-        // ChaCha20-Poly1305 using zcrypto v1.0.0 API
         const result = symmetric.encryptChaCha20Poly1305(
             allocator,
             key[0..32].*,
@@ -327,7 +320,6 @@ pub const EnhancedAead = struct {
         var tag: [16]u8 = undefined;
         @memcpy(&tag, ciphertext[plaintext_len..][0..16]);
 
-        // ChaCha20-Poly1305 using zcrypto v1.0.0 API
         const result = symmetric.decryptChaCha20Poly1305(
             allocator,
             key[0..32].*,
@@ -515,7 +507,6 @@ pub const EnhancedTlsContext = struct {
                 break :blk 32;
             },
             .aes_256_gcm_sha384 => blk: {
-                // zcrypto v1.0.1 now exports Sha384
                 Hkdf.extract(hash.Sha384, &salt_bytes, connection_id, initial_secret[0..48]);
                 break :blk 48;
             },

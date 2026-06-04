@@ -173,12 +173,12 @@ When enabled, ML-KEM-768 + X25519 hybrid key exchange is available. See [zcrypto
 - **[Build Configuration](build-config.md)** - Customize your build
 - **[API Reference](../api/core.md)** - Explore the full API
 - **[Feature Overview](../features/README.md)** - Current module and feature map
-- **[Future Features](../future-features.md)** - Scoped work deferred past v0.9.11
+- **[Future Features](../future-features.md)** - Scoped work deferred from the current release line
 
 ## Troubleshooting
 
 ### Build Issues
-- Ensure you have Zig 0.17.0-dev.27+ or later
+- Ensure you have Zig 0.17.0-dev.657+2faf8debf or later
 - Check that zcrypto dependencies are available
 - Try `rm -rf zig-cache .zig-cache` and rebuild
 

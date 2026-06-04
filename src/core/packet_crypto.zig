@@ -1,4 +1,4 @@
-//! QUIC Packet Cryptography using ZCrypto v0.6.0
+//! QUIC Packet Cryptography using ZCrypto
 //!
 //! Hardware-accelerated packet encryption/decryption with post-quantum support
 
@@ -17,7 +17,7 @@ pub const EncryptionLevel = enum {
     application,
 };
 
-/// QUIC packet protection using zcrypto v0.6.0 with hardware acceleration
+/// QUIC packet protection using zcrypto with hardware acceleration
 pub const PacketCrypto = struct {
     tls_context: *EnhancedTlsContext,
     allocator: std.mem.Allocator,
@@ -48,7 +48,7 @@ pub const PacketCrypto = struct {
             QuicCrypto.CipherSuite.chacha20_poly1305;
 
         // Initialize QUIC crypto context
-        const connection_id = "zquic_v0.6.0_connection";
+        const connection_id = "zquic_connection";
         const quic_crypto = try QuicCrypto.QuicConnection.initFromConnectionId(allocator, connection_id, cipher_suite);
 
         // Initialize hardware accelerator

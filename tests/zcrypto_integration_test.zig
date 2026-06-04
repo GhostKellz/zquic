@@ -1,11 +1,11 @@
 //! ZCrypto Integration Tests
 //!
-//! Tests for zcrypto v1.0.1 integration with ZQUIC.
+//! Tests for zcrypto integration with ZQUIC.
 //!
 //! NOTE: This test file is only compiled when both flags are set:
 //!   -Dpost-quantum=true -Dexperimental-crypto=true
 //!
-//! ## Testing Strategy (v0.9.9)
+//! ## Testing Strategy
 //!
 //! 1. **Stable Core Primitives (std.crypto)**:
 //!    AES-GCM and ChaCha20-Poly1305 tests use std.crypto directly.
@@ -15,7 +15,7 @@
 //!    - `zcrypto.hash` (Sha256, Blake3) - streaming hash wrappers
 //!    - `zcrypto.kex` (X25519) - key exchange primitives
 //!    - `zcrypto.kdf` (hkdfSha256) - key derivation
-//!    - `zcrypto.rand` (fillBytes) - random number generation
+//!    - `zcrypto.rand` (fill) - random number generation
 //!    - `zcrypto.util` - secure memory operations
 //!
 //! 3. **Post-Quantum**: All PQ tests run since this file is only compiled
@@ -171,7 +171,7 @@ test "zcrypto.kdf: HKDF-SHA256" {
 // RANDOM NUMBER GENERATION TESTS
 // ============================================================================
 
-test "zcrypto.rand: fillBytes produces unique output" {
+test "zcrypto.rand: fill produces unique output" {
     var buffer1: [32]u8 = undefined;
     var buffer2: [32]u8 = undefined;
 
@@ -365,10 +365,10 @@ test "regression: X25519 shared secret via zcrypto is valid" {
 }
 
 // ============================================================================
-// ZCRYPTO v1.0.1 NEW FEATURES
+// ZCRYPTO HASH COVERAGE
 // ============================================================================
 
-test "zcrypto hash: SHA-384 streaming (v1.0.1)" {
+test "zcrypto hash: SHA-384 streaming" {
     const data = "Hello, Post-Quantum QUIC with SHA-384!";
 
     var hasher = zcrypto.hash.Sha384.init();

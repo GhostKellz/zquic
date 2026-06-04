@@ -1,4 +1,4 @@
-# Build Configuration (v0.9.11)
+# Build Configuration
 
 ZQUIC ships with a small set of build flags that mirror the switches inside `build.zig`. Keeping this list tight makes migrating to Zig 0.17.0-dev straightforward.
 
@@ -10,7 +10,7 @@ ZQUIC ships with a small set of build flags that mirror the switches inside `bui
 | `-Ddoq[=bool]` | `true` | Build DNS-over-QUIC client/server support |
 | `-Dservices[=bool]` | `false` | Include GhostBridge, Wraith, CNS resolver, and service glue |
 | `-Dvpn[=bool]` | `false` | Build VPN helpers that depend on the services layer |
-| `-Dpost-quantum[=bool]` | `false` | Enable PQ handshakes via `zcrypto` (ML-KEM-768 + SLH-DSA) |
+| `-Dpost-quantum[=bool]` | `false` | Enable PQ handshakes via `zcrypto` (ML-KEM + ML-DSA-65 auth helpers) |
 | `-Dexperimental-crypto[=bool]` | `false` | Required for PQ features; enables experimental zcrypto APIs |
 | `-Dmonitoring[=bool]` | `false` | Compile monitoring/telemetry surfaces |
 | `-Dexamples[=bool]` | `true` | Produce runnable samples in `zig-out/bin/` |
@@ -66,7 +66,8 @@ pub fn build(b: *std.Build) !void {
         .doq = false,
         .services = false,
         .vpn = false,
-        .post_quantum = true,
+        .@"post-quantum" = true,
+        .@"experimental-crypto" = true,
         .monitoring = false,
     });
 

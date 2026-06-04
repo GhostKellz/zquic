@@ -1,6 +1,6 @@
 # Future Features
 
-This document tracks larger features that are intentionally **not** part of the current `v0.9.11` release bar but are being scoped toward a more complete future release.
+This document tracks larger features that are intentionally **not** part of the current release bar but are being scoped toward a more complete future release.
 
 ## PQ Multiplexer Support
 
@@ -31,10 +31,10 @@ That spec is the source of truth for any future implementation.
 
 ## Release Boundary
 
-For `v0.9.11`, the correct behavior is:
+For the current release line, the correct behavior is:
 
 - do not advertise PQ-aware pooled connections
 - keep the current warning/no-op behavior honest
-- finish documentation and stable-surface cleanup first
+- keep the experimental PQ surface explicit and separately verified
 
 For a future `v1.0.0`-grade release, PQ multiplexer support should only be added when the handshake and pooling semantics are explicitly implemented and tested.

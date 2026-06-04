@@ -84,7 +84,7 @@ pub const ConnectionConfig = struct {
     idle_timeout_ms: u32 = 30000,
     
     /// Enable post-quantum cryptography
-    enable_post_quantum: bool = true,
+    enable_post_quantum: bool = false,
     
     /// Initial flow control window size
     initial_window_size: u32 = 65536,

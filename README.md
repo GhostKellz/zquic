@@ -12,16 +12,16 @@
   <img src="https://img.shields.io/badge/License-Apache%202.0-blue?style=for-the-badge" alt="License">
 </p>
 
-ZQUIC is a **modular, high-performance QUIC transport stack** built entirely in Zig 0.17.0-dev. It ships with a native async runtime (no external deps), hybrid post-quantum TLS via `zcrypto`, SSH/QUIC secret injection support, and a suite of HTTP/3, DoQ, VPN, and service layers tuned for Ghost production workloads.
+ZQUIC is a **modular, high-performance QUIC transport stack** built entirely in Zig 0.17.0-dev. It ships with a native async runtime (no external deps), stable QUIC/HTTP3 cryptography, explicit experimental post-quantum hooks via `zcrypto`, SSH/QUIC secret injection support, and HTTP/3, DoQ, VPN, and service layers tuned for Ghost workloads.
 
 > ✅ Builds cleanly with Zig 0.17.0-dev on Linux/macOS/Windows and passes the `dev/test.sh` suite.
 
 ## 🎯 Purpose & Vision
 
-**ZQUIC provides a quantum-safe networking foundation for Zig applications:**
+**ZQUIC provides a modular networking foundation for Zig applications:**
 
 - 🧩 **Pick-your-build**: Core QUIC only for embedded targets or full HTTP/3 + services for servers
-- 🛡️ **Post-quantum security**: Hybrid ML-KEM-768 + X25519 and SLH-DSA signatures via `zcrypto`
+- 🛡️ **Explicit crypto posture**: Stable X25519/AEAD defaults with opt-in experimental ML-KEM and ML-DSA-65 via `zcrypto`
 - ⚡ **Native async runtime**: Poll-based event loop, timer wheel, and connection pool in-tree
 - 🌐 **Complete stack**: QUIC core, HTTP/3 server, DNS-over-QUIC, Ghost services, and VPN layers
 - 📊 **Operational insight**: Built-in monitoring hooks and Prometheus-friendly metrics emitters
@@ -34,7 +34,7 @@ ZQUIC is a **modular, high-performance QUIC transport stack** built entirely in 
 | **Minimal Core** | `-Dhttp3=false -Ddoq=false -Dservices=false -Dvpn=false` | ~1.3 MB | Event loop + core QUIC only |
 | **Web Stack** | `-Dhttp3=true -Ddoq=true` | ~3.5 MB | HTTP/3 server, DoQ resolver |
 | **Enterprise** | `-Dservices=true -Dvpn=true -Dmonitoring=true` | ~5.5 MB | Adds services, VPN, monitoring |
-| **With PQ Crypto** | `-Dpost-quantum=true -Dexperimental-crypto=true` | +~0.5 MB | Experimental ML-KEM support |
+| **With PQ Crypto** | `-Dpost-quantum=true -Dexperimental-crypto=true` | +~0.5 MB | Experimental ML-KEM and ML-DSA-65 support |
 
 ```bash
 # Minimal embedded target
@@ -61,7 +61,7 @@ zig build -Dpost-quantum=true -Dexperimental-crypto=true
 
 ### 🧪 **Post-Quantum Cryptography** *(Experimental)*
 - **Hybrid TLS 1.3**: ML-KEM-768 + X25519 key exchange
-- **SLH-DSA-128f** post-quantum digital signatures
+- **ML-DSA-65** post-quantum digital signatures (FIPS 204)
 - Requires `-Dpost-quantum=true -Dexperimental-crypto=true`
 
 ### 🔑 **SSH/QUIC Integration**
@@ -276,4 +276,3 @@ Please read `CONTRIBUTING.md` for coding standards, testing expectations, and PR
 ## 📄 License
 
 Apache 2.0 — built to power the post-quantum future with modern Zig applications.
-

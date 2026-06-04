@@ -161,7 +161,7 @@ pub const HybridKeyExchange = struct {
         @memcpy(kdf_input[offset .. offset + 32], domain_sep);
         offset += 32;
 
-        // Use HKDF to derive final hybrid secret (zcrypto v1.0.0 API)
+        // Use HKDF to derive final hybrid secret.
         const salt = "zquic-hybrid-kdf-salt";
         const derived = try zcrypto.kdf.hkdfSha256(self.allocator, kdf_input[0..offset], salt, "hybrid-shared-secret", 64);
         @memcpy(&self.hybrid_secret, derived);
@@ -286,7 +286,7 @@ pub const HybridPQTlsContext = struct {
     pub fn deriveQuicKeys(self: *const Self, allocator: std.mem.Allocator) ![]u8 {
         const shared_secret = self.hybrid_kx.getSharedSecret();
 
-        // Derive QUIC traffic keys from hybrid secret (zcrypto v1.0.0 API)
+        // Derive QUIC traffic keys from hybrid secret.
         var quic_keys = try allocator.alloc(u8, 128); // 64 bytes client + 64 bytes server keys
         errdefer allocator.free(quic_keys);
 
