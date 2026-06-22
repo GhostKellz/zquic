@@ -78,6 +78,10 @@ pub const PacketHeader = struct {
         offset += 1;
 
         const header_form = (first_byte & 0x80) != 0;
+        const fixed_bit = (first_byte & 0x40) != 0;
+        if (!fixed_bit and header_form) {
+            return Error.ZquicError.InvalidPacket;
+        }
 
         if (header_form) {
             // Long header packet
@@ -101,6 +105,9 @@ pub const PacketHeader = struct {
         const version_bytes: *const [4]u8 = @ptrCast(version_slice.ptr);
         const version = std.mem.readInt(u32, version_bytes, .big);
         pos += 4;
+        if (version != 1) {
+            return Error.ZquicError.InvalidPacket;
+        }
 
         // Parse destination connection ID length
         if (pos >= data.len) {
@@ -145,7 +152,7 @@ pub const PacketHeader = struct {
             .dest_conn_id = dest_conn_id,
             .src_conn_id = src_conn_id,
             .packet_number = 0, // Would be parsed from protected header
-            .packet_number_len = 1,
+            .packet_number_len = (first_byte & 0x03) + 1,
             .token = null,
             .header_length = pos, // Track how many bytes were consumed
         };
@@ -153,8 +160,11 @@ pub const PacketHeader = struct {
 
     fn parseShortHeader(data: []const u8, offset: usize, first_byte: u8, allocator: std.mem.Allocator) Error.ZquicError!Self {
         _ = allocator;
-        _ = first_byte;
         var pos = offset;
+
+        if ((first_byte & 0x40) == 0) {
+            return Error.ZquicError.InvalidPacket;
+        }
 
         // Parse destination connection ID (length is negotiated during handshake)
         // For simplicity, assume 8 bytes
@@ -172,7 +182,7 @@ pub const PacketHeader = struct {
             .dest_conn_id = dest_conn_id,
             .src_conn_id = null,
             .packet_number = 0, // Would be parsed from protected header
-            .packet_number_len = 1,
+            .packet_number_len = (first_byte & 0x03) + 1,
             .token = null,
             .header_length = pos, // Track how many bytes were consumed
         };

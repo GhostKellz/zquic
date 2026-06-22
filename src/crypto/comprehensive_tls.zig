@@ -723,7 +723,7 @@ pub const ComprehensiveTlsContext = struct {
         // Add to handshake transcript
         // Update handshake transcript
         try self.handshake_transcript.append(self.allocator, message_type);
-        try self.handshake_transcript.writer(self.allocator).writeIntBig(u24, @intCast(message.len));
+        try self.handshake_transcript.writer(self.allocator).writeInt(u24, @intCast(message.len), .big);
         try self.handshake_transcript.appendSlice(self.allocator, message);
 
         switch (message_type) {

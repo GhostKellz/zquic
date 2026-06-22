@@ -14,6 +14,7 @@ const UdpMultiplexer = @import("../net/multiplexer.zig").UdpMultiplexer;
 const MultiplexerConfig = @import("../net/multiplexer.zig").MultiplexerConfig;
 const Connection = @import("../core/connection.zig");
 const Error = @import("../utils/error.zig");
+const SpinMutex = @import("../utils/sync.zig").SpinMutex;
 
 /// Runtime configuration
 pub const QuicRuntimeConfig = struct {
@@ -53,14 +54,14 @@ pub const ConnectionPool = struct {
     available: std.ArrayListUnmanaged(usize),
     config: PoolConfig,
     allocator: std.mem.Allocator,
-    mutex: std.Thread.Mutex,
+    mutex: SpinMutex,
 
     const Self = @This();
 
     pub fn init(allocator: std.mem.Allocator, config: PoolConfig) Self {
         return Self{
-            .connections = .{},
-            .available = .{},
+            .connections = .empty,
+            .available = .empty,
             .config = config,
             .allocator = allocator,
             .mutex = .{},
@@ -84,7 +85,8 @@ pub const ConnectionPool = struct {
         self.mutex.lock();
         defer self.mutex.unlock();
 
-        if (self.available.popOrNull()) |idx| {
+        if (self.available.items.len > 0) {
+            const idx = self.available.orderedRemove(self.available.items.len - 1);
             return self.connections.items[idx];
         }
         return null;
@@ -125,8 +127,7 @@ pub const QuicRuntime = struct {
             .send_queue_size = config.send_queue_size,
         };
 
-        const multiplexer = UdpMultiplexer.init(allocator, local_address, multiplexer_config) catch |err| {
-            _ = err;
+        const multiplexer = UdpMultiplexer.init(allocator, local_address, multiplexer_config) catch {
             return Error.ZquicError.NetworkError;
         };
 

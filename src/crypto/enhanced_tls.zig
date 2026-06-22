@@ -1,6 +1,7 @@
 //! Enhanced TLS 1.3 implementation for QUIC
 //!
-//! Provides production-ready TLS 1.3 integration with proper cryptographic operations
+//! Provides QUIC TLS key derivation, packet AEAD, and header-protection helpers.
+//! This is a utility surface, not a standalone production TLS implementation.
 
 const std = @import("std");
 const zcrypto = @import("zcrypto");
@@ -606,7 +607,7 @@ pub const EncryptionLevel = enum {
 };
 
 test "enhanced crypto keys derivation" {
-    const keys = try EnhancedCryptoKeys.init(std.testing.allocator, .aes_128_gcm_sha256);
+    var keys = try EnhancedCryptoKeys.init(std.testing.allocator, .aes_128_gcm_sha256);
     defer keys.deinit();
 
     const master_secret = "test_master_secret_32_bytes_long";

@@ -15,6 +15,7 @@
 //! Security notes:
 //! - Secrets should be passed by pointer to minimize stack copies
 //! - Call `zeroize()` on SshQuicSecrets after use to clear sensitive data
+//! - Client and server secrets must be distinct, non-zero, direction-specific values
 
 const std = @import("std");
 const Error = @import("../utils/error.zig");
@@ -47,12 +48,27 @@ pub const SshQuicSecrets = struct {
         };
     }
 
+    /// Validate caller-supplied SSH/QUIC secrets before deriving traffic keys.
+    pub fn validate(self: *const Self) Error.ZquicError!void {
+        if (std.mem.eql(u8, &self.client_secret, &std.mem.zeroes([32]u8))) {
+            return Error.ZquicError.CryptoError;
+        }
+        if (std.mem.eql(u8, &self.server_secret, &std.mem.zeroes([32]u8))) {
+            return Error.ZquicError.CryptoError;
+        }
+        if (std.mem.eql(u8, &self.client_secret, &self.server_secret)) {
+            return Error.ZquicError.CryptoError;
+        }
+    }
+
     /// Derive QUIC crypto keys from SSH secrets
     /// Returns client keys and server keys
     pub fn deriveKeys(self: *const Self) Error.ZquicError!struct {
         client: Tls.CryptoKeys,
         server: Tls.CryptoKeys,
     } {
+        try self.validate();
+
         const client_keys = try Tls.CryptoKeys.deriveFromSecret(&self.client_secret);
         const server_keys = try Tls.CryptoKeys.deriveFromSecret(&self.server_secret);
 
@@ -136,16 +152,12 @@ pub const SshQuicContext = struct {
     pub fn deinit(self: *Self) void {
         // Securely zero keys before deallocation
         if (self.local_keys) |*keys| {
-            std.crypto.secureZero(u8, &keys.secret);
-            std.crypto.secureZero(u8, &keys.key);
-            std.crypto.secureZero(u8, &keys.iv);
-            std.crypto.secureZero(u8, &keys.header_protection_key);
+            keys.zeroize();
+            self.local_keys = null;
         }
         if (self.remote_keys) |*keys| {
-            std.crypto.secureZero(u8, &keys.secret);
-            std.crypto.secureZero(u8, &keys.key);
-            std.crypto.secureZero(u8, &keys.iv);
-            std.crypto.secureZero(u8, &keys.header_protection_key);
+            keys.zeroize();
+            self.remote_keys = null;
         }
         self.tls_ctx.deinit();
     }
@@ -191,11 +203,7 @@ pub const SshQuicContext = struct {
         const keys = self.local_keys orelse return Error.ZquicError.CryptoError;
 
         // Construct nonce from IV XOR packet number (QUIC nonce construction)
-        var nonce: [12]u8 = keys.iv;
-        const pn_bytes = std.mem.toBytes(packet_number);
-        for (nonce[4..12], pn_bytes[0..8]) |*n, p| {
-            n.* ^= p;
-        }
+        const nonce = makePacketNonce(keys.iv, packet_number);
 
         // Allocate output: ciphertext + 16-byte auth tag
         var ciphertext = try allocator.alloc(u8, plaintext.len + 16);
@@ -240,11 +248,7 @@ pub const SshQuicContext = struct {
         const plaintext_len = ciphertext.len - 16;
 
         // Construct nonce from IV XOR packet number (QUIC nonce construction)
-        var nonce: [12]u8 = keys.iv;
-        const pn_bytes = std.mem.toBytes(packet_number);
-        for (nonce[4..12], pn_bytes[0..8]) |*n, p| {
-            n.* ^= p;
-        }
+        const nonce = makePacketNonce(keys.iv, packet_number);
 
         // Allocate output buffer for plaintext
         const plaintext = try allocator.alloc(u8, plaintext_len);
@@ -270,6 +274,16 @@ pub const SshQuicContext = struct {
     }
 };
 
+fn makePacketNonce(iv: [12]u8, packet_number: u64) [12]u8 {
+    var nonce = iv;
+    var pn_bytes: [8]u8 = undefined;
+    std.mem.writeInt(u64, &pn_bytes, packet_number, .big);
+    for (nonce[4..12], pn_bytes[0..8]) |*n, p| {
+        n.* ^= p;
+    }
+    return nonce;
+}
+
 test "SSH secret derivation" {
     const client_secret = blk: {
         var bytes = std.mem.zeroes([32]u8);
@@ -292,6 +306,25 @@ test "SSH secret derivation" {
     secrets.zeroize();
     try std.testing.expect(std.mem.eql(u8, &secrets.client_secret, &std.mem.zeroes([32]u8)));
     try std.testing.expect(std.mem.eql(u8, &secrets.server_secret, &std.mem.zeroes([32]u8)));
+}
+
+test "SSH secret validation rejects zero and reused directional secrets" {
+    const zero_secret = std.mem.zeroes([32]u8);
+    const nonzero_secret = blk: {
+        var bytes = std.mem.zeroes([32]u8);
+        @memset(bytes[0..], 0xAA);
+        break :blk bytes;
+    };
+
+    var zero_client = SshQuicSecrets.init(zero_secret, nonzero_secret);
+    try std.testing.expectError(Error.ZquicError.CryptoError, zero_client.validate());
+
+    var zero_server = SshQuicSecrets.init(nonzero_secret, zero_secret);
+    try std.testing.expectError(Error.ZquicError.CryptoError, zero_server.validate());
+
+    var reused = SshQuicSecrets.init(nonzero_secret, nonzero_secret);
+    try std.testing.expectError(Error.ZquicError.CryptoError, reused.validate());
+    try std.testing.expectError(Error.ZquicError.CryptoError, reused.deriveKeys());
 }
 
 test "SSH QUIC context initialization" {
@@ -392,6 +425,74 @@ test "Client-server interop: encrypt/decrypt roundtrip" {
     defer std.testing.allocator.free(client_decrypted);
 
     try std.testing.expectEqualStrings(server_plaintext, client_decrypted);
+}
+
+test "SSH QUIC rejects wrong direction packet number and tampered data" {
+    const client_secret = blk: {
+        var bytes = std.mem.zeroes([32]u8);
+        @memset(bytes[0..], 0xA1);
+        break :blk bytes;
+    };
+    const server_secret = blk: {
+        var bytes = std.mem.zeroes([32]u8);
+        @memset(bytes[0..], 0xB2);
+        break :blk bytes;
+    };
+
+    var client_secrets = SshQuicSecrets.init(client_secret, server_secret);
+    defer client_secrets.zeroize();
+    var server_secrets = SshQuicSecrets.init(client_secret, server_secret);
+    defer server_secrets.zeroize();
+
+    var client_ctx = try SshQuicContext.initWithSshSecrets(std.testing.allocator, false, &client_secrets);
+    defer client_ctx.deinit();
+    var server_ctx = try SshQuicContext.initWithSshSecrets(std.testing.allocator, true, &server_secrets);
+    defer server_ctx.deinit();
+
+    const plaintext = "directional ssh quic packet";
+    const packet_number: u64 = 42;
+    const ciphertext = try client_ctx.encrypt(plaintext, packet_number, std.testing.allocator);
+    defer std.testing.allocator.free(ciphertext);
+
+    try std.testing.expectError(
+        Error.ZquicError.CryptoError,
+        client_ctx.decrypt(ciphertext, packet_number, std.testing.allocator),
+    );
+    try std.testing.expectError(
+        Error.ZquicError.CryptoError,
+        server_ctx.decrypt(ciphertext, packet_number + 1, std.testing.allocator),
+    );
+
+    const tampered = try std.testing.allocator.dupe(u8, ciphertext);
+    defer std.testing.allocator.free(tampered);
+    tampered[tampered.len - 1] ^= 0x01;
+    try std.testing.expectError(
+        Error.ZquicError.CryptoError,
+        server_ctx.decrypt(tampered, packet_number, std.testing.allocator),
+    );
+}
+
+test "SSH QUIC deinit clears wrapper key access" {
+    const client_secret = blk: {
+        var bytes = std.mem.zeroes([32]u8);
+        @memset(bytes[0..], 0xCC);
+        break :blk bytes;
+    };
+    const server_secret = blk: {
+        var bytes = std.mem.zeroes([32]u8);
+        @memset(bytes[0..], 0xDD);
+        break :blk bytes;
+    };
+    var secrets = SshQuicSecrets.init(client_secret, server_secret);
+    defer secrets.zeroize();
+
+    var ctx = try SshQuicContext.initWithSshSecrets(std.testing.allocator, false, &secrets);
+    try std.testing.expect(ctx.getLocalKeys() != null);
+    try std.testing.expect(ctx.getRemoteKeys() != null);
+
+    ctx.deinit();
+    try std.testing.expect(ctx.getLocalKeys() == null);
+    try std.testing.expect(ctx.getRemoteKeys() == null);
 }
 
 test "initFromPtrs avoids extra copies" {

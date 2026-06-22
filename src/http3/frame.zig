@@ -433,12 +433,14 @@ test "frame parser incremental data frame" {
     const frames_chunk1 = try parser.processData(first, std.testing.allocator);
     defer {
         for (frames_chunk1) |f| f.deinit(std.testing.allocator);
+        std.testing.allocator.free(frames_chunk1);
     }
     try std.testing.expect(frames_chunk1.len == 0);
 
     const frames_chunk2 = try parser.processData(second, std.testing.allocator);
     defer {
         for (frames_chunk2) |f| f.deinit(std.testing.allocator);
+        std.testing.allocator.free(frames_chunk2);
     }
     try std.testing.expect(frames_chunk2.len == 1);
     try std.testing.expect(frames_chunk2[0].frame_type == .data);

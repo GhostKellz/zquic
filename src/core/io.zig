@@ -12,6 +12,7 @@
 //! - Error propagation aligned with Zig stdlib
 
 const std = @import("std");
+const net_sys = @import("../net/sys.zig");
 const NetAddress = @import("../net/address.zig");
 const Address = NetAddress.Address;
 const PosixAddress = NetAddress.PosixAddress;
@@ -114,13 +115,13 @@ pub fn Writer(comptime _: type, comptime Context: type) type {
 
 /// UDP packet reader for receiving QUIC packets from network
 pub const PacketReader = struct {
-    socket: std.posix.socket_t,
+    socket: net_sys.Socket,
     allocator: std.mem.Allocator,
 
     const Self = @This();
 
     /// Initialize packet reader with UDP socket
-    pub fn init(allocator: std.mem.Allocator, socket: std.posix.socket_t) Self {
+    pub fn init(allocator: std.mem.Allocator, socket: net_sys.Socket) Self {
         return Self{
             .socket = socket,
             .allocator = allocator,
@@ -143,7 +144,7 @@ pub const PacketReader = struct {
 
     /// Internal read function for packet reader
     fn readPacket(context: ReadContext, buffer: []u8) IoError!usize {
-        const bytes_read = std.posix.recv(context.socket, buffer, 0) catch |err| switch (err) {
+        const bytes_read = net_sys.receive(context.socket, buffer) catch |err| switch (err) {
             error.WouldBlock => return IoError.WouldBlock,
             error.ConnectionResetByPeer => return IoError.ConnectionClosed,
             error.NetworkUnreachable => return IoError.NetworkError,
@@ -156,13 +157,7 @@ pub const PacketReader = struct {
     pub fn readFrom(self: *Self, buffer: []u8, address: *Address) IoError!usize {
         var addr_storage: PosixAddress = undefined;
         var addr_len: std.posix.socklen_t = @sizeOf(PosixAddress);
-        const bytes_read = std.posix.recvfrom(
-            self.socket,
-            buffer,
-            0,
-            @ptrCast(&addr_storage),
-            &addr_len,
-        ) catch |err| switch (err) {
+        const bytes_read = net_sys.receiveFrom(self.socket, buffer, &addr_storage, &addr_len) catch |err| switch (err) {
             error.WouldBlock => return IoError.WouldBlock,
             error.ConnectionResetByPeer => return IoError.ConnectionClosed,
             error.NetworkUnreachable => return IoError.NetworkError,
@@ -175,13 +170,13 @@ pub const PacketReader = struct {
 
 /// UDP packet writer for sending QUIC packets to network
 pub const PacketWriter = struct {
-    socket: std.posix.socket_t,
+    socket: net_sys.Socket,
     allocator: std.mem.Allocator,
 
     const Self = @This();
 
     /// Initialize packet writer with UDP socket
-    pub fn init(allocator: std.mem.Allocator, socket: std.posix.socket_t) Self {
+    pub fn init(allocator: std.mem.Allocator, socket: net_sys.Socket) Self {
         return Self{
             .socket = socket,
             .allocator = allocator,
@@ -204,7 +199,7 @@ pub const PacketWriter = struct {
 
     /// Internal write function for packet writer
     fn writePacket(context: WriteContext, bytes: []const u8) IoError!usize {
-        const bytes_written = std.posix.send(context.socket, bytes, 0) catch |err| switch (err) {
+        const bytes_written = net_sys.send(context.socket, bytes) catch |err| switch (err) {
             error.WouldBlock => return IoError.WouldBlock,
             error.ConnectionResetByPeer => return IoError.ConnectionClosed,
             error.NetworkUnreachable => return IoError.NetworkError,
@@ -217,13 +212,7 @@ pub const PacketWriter = struct {
     pub fn writeTo(self: *Self, bytes: []const u8, address: Address) IoError!usize {
         var addr_storage: PosixAddress = undefined;
         const addr_len = NetAddress.toPosix(&address, &addr_storage);
-        const bytes_written = std.posix.sendto(
-            self.socket,
-            bytes,
-            0,
-            @ptrCast(&addr_storage),
-            addr_len,
-        ) catch |err| switch (err) {
+        const bytes_written = net_sys.sendTo(self.socket, bytes, &addr_storage, addr_len) catch |err| switch (err) {
             error.WouldBlock => return IoError.WouldBlock,
             error.ConnectionResetByPeer => return IoError.ConnectionClosed,
             error.NetworkUnreachable => return IoError.NetworkError,
@@ -477,7 +466,7 @@ test "packet reader/writer initialization" {
     const allocator = std.testing.allocator;
 
     // Mock socket for testing
-    const mock_socket: std.posix.socket_t = 0;
+    const mock_socket: net_sys.Socket = 0;
 
     var packet_reader = PacketReader.init(allocator, mock_socket);
     var packet_writer = PacketWriter.init(allocator, mock_socket);

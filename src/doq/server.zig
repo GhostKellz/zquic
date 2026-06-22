@@ -115,7 +115,7 @@ const DoQConnection = struct {
             self.server.stats.queries_failed += 1;
             return;
         };
-        defer query.deinit(self.allocator);
+        defer query.deinit();
 
         // Process query through handler
         var response = if (self.server.config.handler) |handler|
@@ -128,7 +128,7 @@ const DoQConnection = struct {
         else
             try self.createEchoResponse(&query);
 
-        defer response.deinit(self.allocator);
+        defer response.deinit();
 
         // Serialize response
         const response_data = try response.serializeToStream(self.allocator);
@@ -150,34 +150,11 @@ const DoQConnection = struct {
     }
 
     fn createErrorResponse(self: *DoQConnection, query: *const DnsMessage, rcode: message.DnsResponseCode) !DnsMessage {
-        var response = DnsMessage{};
-
-        response.header = message.DnsHeader{
-            .id = query.header.id,
-            .flags = 0x8000 | (@as(u16, @intFromEnum(rcode)) & 0x000F), // QR=1, RCODE=rcode
-            .qdcount = query.header.qdcount,
-            .ancount = 0,
-            .nscount = 0,
-            .arcount = 0,
-        };
-
-        // Copy questions
-        if (query.questions.len > 0) {
-            response.questions = try self.allocator.alloc(message.DnsQuestion, query.questions.len);
-            for (query.questions, 0..) |question, i| {
-                response.questions[i] = message.DnsQuestion{
-                    .name = try self.allocator.dupe(u8, question.name),
-                    .qtype = question.qtype,
-                    .qclass = question.qclass,
-                };
-            }
-        }
-
-        return response;
+        return try message.createResponseForQuery(self.allocator, query, rcode);
     }
 
     fn createEchoResponse(self: *DoQConnection, query: *const DnsMessage) !DnsMessage {
-        var response = DnsMessage{};
+        var response = DnsMessage.init(self.allocator);
 
         response.header = message.DnsHeader{
             .id = query.header.id,
@@ -398,7 +375,7 @@ fn ghostDnsHandler(query: *DnsMessage, allocator: std.mem.Allocator) !DnsMessage
 
     std.log.info("DoQ: Resolving {s} (type: {})", .{ domain, qtype });
 
-    var response = DnsMessage{};
+    var response = DnsMessage.init(allocator);
 
     response.header = message.DnsHeader{
         .id = query.header.id,
@@ -432,8 +409,8 @@ fn ghostDnsHandler(query: *DnsMessage, allocator: std.mem.Allocator) !DnsMessage
     return response;
 }
 
-fn createEmptyResponse(query: *const DnsMessage, _: std.mem.Allocator) !DnsMessage {
-    var response = DnsMessage{};
+fn createEmptyResponse(query: *const DnsMessage, allocator: std.mem.Allocator) !DnsMessage {
+    var response = DnsMessage.init(allocator);
     response.header = message.DnsHeader{
         .id = query.header.id,
         .flags = 0x8180, // QR=1, RD=1, RA=1
@@ -454,10 +431,7 @@ test "DoQ server initialization" {
     };
 
     // This will succeed with initialization
-    var server = DoQServer.init(allocator, config) catch |err| {
-        try std.testing.expect(err == Error.ZquicError.InvalidConfiguration);
-        return;
-    };
+    var server = try DoQServer.init(allocator, config);
     defer server.deinit();
 
     try std.testing.expect(!server.is_running);

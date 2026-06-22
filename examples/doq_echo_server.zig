@@ -226,7 +226,7 @@ fn handleTXTRecord(query: *const zquic.DoQ.Message.DnsMessage, domain: []const u
 
     // Create demo TXT record
     const txt_content = if (std.mem.startsWith(u8, domain, "ghost"))
-        "ghostchain-verified=true quantum-safe=enabled"
+        "ghostchain-verified=true pq=experimental"
     else
         "zquic-doq-echo-server powered-by=zig";
 

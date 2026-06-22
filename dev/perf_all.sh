@@ -4,12 +4,14 @@
 # Run from project root: ./dev/perf_all.sh
 
 set -e
+ZIG="${ZIG:-/opt/zig-dev/zig}"
+export ZIG
 
 echo "╔══════════════════════════════════════════════════════════════╗"
 echo "║       ZQUIC Comprehensive Performance Suite                  ║"
 echo "╚══════════════════════════════════════════════════════════════╝"
 echo ""
-echo "Zig version: $(zig version)"
+echo "Zig version: $("$ZIG" version)"
 echo "Date: $(date -Iseconds)"
 echo "Platform: $(uname -s) $(uname -m)"
 echo ""

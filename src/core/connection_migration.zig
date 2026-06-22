@@ -4,7 +4,9 @@
 //! that match and exceed Quinn's functionality
 
 const std = @import("std");
+const zcrypto = @import("zcrypto");
 const Error = @import("../utils/error.zig");
+const Time = @import("../utils/time.zig");
 const Frame = @import("quic_frames.zig").Frame;
 const PathChallengeFrame = @import("quic_frames.zig").PathChallengeFrame;
 const PathResponseFrame = @import("quic_frames.zig").PathResponseFrame;
@@ -58,21 +60,16 @@ pub const PathInfo = struct {
             .congestion_window = 10 * 1200, // Initial congestion window
             .bytes_sent = 0,
             .bytes_received = 0,
-            .last_activity = blk: {
-                const ts = std.posix.clock_gettime(.realtime) catch break :blk 0;
-                break :blk ts.sec;
-            },
+            .last_activity = Time.nowSeconds(),
         };
     }
 
     pub fn updateActivity(self: *PathInfo) void {
-        const ts = std.posix.clock_gettime(.realtime) catch return;
-        self.last_activity = ts.sec;
+        self.last_activity = Time.nowSeconds();
     }
 
     pub fn isExpired(self: *const PathInfo, timeout_ms: u64) bool {
-        const ts = std.posix.clock_gettime(.realtime) catch return true;
-        const now = ts.sec;
+        const now = Time.nowSeconds();
         return now - self.last_activity > @as(i64, @intCast(timeout_ms / 1000));
     }
 
@@ -104,6 +101,7 @@ pub const ConnectionIdManager = struct {
     active_connection_ids: std.ArrayListUnmanaged(ConnectionIdEntry),
     next_sequence_number: u64,
     retire_prior_to: u64,
+    active_connection_id_limit: u64,
     allocator: std.mem.Allocator,
 
     const ConnectionIdEntry = struct {
@@ -128,9 +126,10 @@ pub const ConnectionIdManager = struct {
 
     pub fn init(alloc: std.mem.Allocator) ConnectionIdManager {
         return ConnectionIdManager{
-            .active_connection_ids = .{},
+            .active_connection_ids = .empty,
             .next_sequence_number = 1,
             .retire_prior_to = 0,
+            .active_connection_id_limit = 2,
             .allocator = alloc,
         };
     }
@@ -144,18 +143,23 @@ pub const ConnectionIdManager = struct {
 
     pub fn generateConnectionId(self: *ConnectionIdManager) ![]u8 {
         const connection_id = try self.allocator.alloc(u8, 16);
-        std.crypto.random.bytes(connection_id);
+        zcrypto.rand.fill(connection_id);
         return connection_id;
     }
 
     pub fn generateStatelessResetToken(self: *ConnectionIdManager) ![16]u8 {
         _ = self;
         var token: [16]u8 = undefined;
-        std.crypto.random.bytes(&token);
+        zcrypto.rand.fill(&token);
         return token;
     }
 
     pub fn addConnectionId(self: *ConnectionIdManager, connection_id: []const u8, stateless_reset_token: [16]u8) !NewConnectionIdFrame {
+        self.cleanupRetiredConnectionIds();
+        if (self.activeConnectionIdCount() >= self.active_connection_id_limit) {
+            return Error.ZquicError.ConnectionLimitReached;
+        }
+
         const entry = try ConnectionIdEntry.init(self.allocator, connection_id, self.next_sequence_number, stateless_reset_token);
         try self.active_connection_ids.append(self.allocator, entry);
 
@@ -168,6 +172,21 @@ pub const ConnectionIdManager = struct {
 
         self.next_sequence_number += 1;
         return frame;
+    }
+
+    pub fn rotateConnectionId(self: *ConnectionIdManager) !NewConnectionIdFrame {
+        const connection_id = try self.generateConnectionId();
+        defer self.allocator.free(connection_id);
+        const reset_token = try self.generateStatelessResetToken();
+        return self.addConnectionId(connection_id, reset_token);
+    }
+
+    pub fn activeConnectionIdCount(self: *const ConnectionIdManager) usize {
+        var count: usize = 0;
+        for (self.active_connection_ids.items) |entry| {
+            if (entry.active) count += 1;
+        }
+        return count;
     }
 
     pub fn retireConnectionId(self: *ConnectionIdManager, sequence_number: u64) ?RetireConnectionIdFrame {
@@ -218,17 +237,7 @@ pub const PathValidator = struct {
             return PathValidation{
                 .path_id = path_id,
                 .challenge_data = challenge_data,
-                .start_time = blk: {
-                    const ts = std.posix.clock_gettime(.realtime) catch return PathValidation{
-                        .path_id = path_id,
-                        .challenge_data = challenge_data,
-                        .start_time = 0,
-                        .attempts = 1,
-                        .max_attempts = 3,
-                        .timeout_ms = 3000,
-                    };
-                    break :blk ts.sec;
-                },
+                .start_time = Time.nowSeconds(),
                 .attempts = 1,
                 .max_attempts = 3,
                 .timeout_ms = 3000,
@@ -236,8 +245,7 @@ pub const PathValidator = struct {
         }
 
         pub fn isExpired(self: *const PathValidation) bool {
-            const ts = std.posix.clock_gettime(.realtime) catch return true;
-            const now = ts.sec;
+            const now = Time.nowSeconds();
             return now - self.start_time > @as(i64, @intCast(self.timeout_ms / 1000));
         }
 
@@ -247,8 +255,7 @@ pub const PathValidator = struct {
 
         pub fn retry(self: *PathValidation) void {
             self.attempts += 1;
-            const ts = std.posix.clock_gettime(.realtime) catch return;
-            self.start_time = ts.sec;
+            self.start_time = Time.nowSeconds();
         }
     };
 
@@ -266,7 +273,7 @@ pub const PathValidator = struct {
 
     pub fn startValidation(self: *PathValidator, path_id: u64) ![8]u8 {
         var challenge_data: [8]u8 = undefined;
-        std.crypto.random.bytes(&challenge_data);
+        zcrypto.rand.fill(&challenge_data);
 
         const validation = PathValidation.init(path_id, challenge_data);
         try self.active_validations.put(self.allocator, self.next_validation_id, validation);
@@ -288,7 +295,7 @@ pub const PathValidator = struct {
     }
 
     pub fn cleanupExpiredValidations(self: *PathValidator) void {
-        var expired_keys: std.ArrayListUnmanaged(u64) = .{};
+        var expired_keys: std.ArrayListUnmanaged(u64) = .empty;
         defer expired_keys.deinit(self.allocator);
 
         var iterator = self.active_validations.iterator();
@@ -304,7 +311,7 @@ pub const PathValidator = struct {
     }
 
     pub fn retryValidations(self: *PathValidator) ![]PathChallengeFrame {
-        var challenges: std.ArrayListUnmanaged(PathChallengeFrame) = .{};
+        var challenges: std.ArrayListUnmanaged(PathChallengeFrame) = .empty;
         errdefer challenges.deinit(self.allocator);
 
         var iterator = self.active_validations.iterator();
@@ -334,7 +341,7 @@ pub const ConnectionMigrator = struct {
     pub fn init(alloc: std.mem.Allocator, local_address: Address, remote_address: Address) ConnectionMigrator {
         return ConnectionMigrator{
             .current_path = PathInfo.init(local_address, remote_address, 0),
-            .candidate_paths = .{},
+            .candidate_paths = .empty,
             .migration_state = .stable,
             .path_validator = PathValidator.init(alloc),
             .connection_id_manager = ConnectionIdManager.init(alloc),
@@ -359,10 +366,10 @@ pub const ConnectionMigrator = struct {
 
     pub fn startPathProbing(self: *ConnectionMigrator) ![]PathChallengeFrame {
         if (!self.enable_migration) {
-            return &[_]PathChallengeFrame{};
+            return Error.ZquicError.ConnectionMigrationDisabled;
         }
 
-        var challenges: std.ArrayListUnmanaged(PathChallengeFrame) = .{};
+        var challenges: std.ArrayListUnmanaged(PathChallengeFrame) = .empty;
         errdefer challenges.deinit(self.allocator);
 
         for (self.candidate_paths.items) |*path| {
@@ -380,6 +387,27 @@ pub const ConnectionMigrator = struct {
         }
 
         return challenges.toOwnedSlice(self.allocator);
+    }
+
+    pub fn setMigrationEnabled(self: *ConnectionMigrator, enabled: bool) void {
+        self.enable_migration = enabled;
+        if (!enabled and self.migration_state != .stable) {
+            self.migration_state = .stable;
+            self.path_validator.cleanupExpiredValidations();
+        }
+    }
+
+    pub fn handleNatRebinding(self: *ConnectionMigrator, local_address: Address, remote_address: Address) !PathChallengeFrame {
+        if (!self.enable_migration) {
+            return Error.ZquicError.ConnectionMigrationDisabled;
+        }
+        try self.addCandidatePath(local_address, remote_address);
+        const path = &self.candidate_paths.items[self.candidate_paths.items.len - 1];
+        const challenge_data = try self.path_validator.startValidation(path.path_id);
+        path.challenge_data = challenge_data;
+        path.validation_state = .validating;
+        self.migration_state = .probing;
+        return PathChallengeFrame.init(challenge_data);
     }
 
     pub fn handlePathResponse(self: *ConnectionMigrator, response_frame: PathResponseFrame) !void {
@@ -422,8 +450,7 @@ pub const ConnectionMigrator = struct {
 
     fn startMigration(self: *ConnectionMigrator, target_path: *const PathInfo) !void {
         self.migration_state = .migrating;
-        const ts = std.posix.clock_gettime(.realtime) catch return error.TimerUnavailable;
-        self.migration_start_time = ts.sec;
+        self.migration_start_time = Time.nowSeconds();
 
         // Generate new connection ID for migration
         const new_connection_id = try self.connection_id_manager.generateConnectionId();
@@ -457,8 +484,7 @@ pub const ConnectionMigrator = struct {
 
     pub fn handleMigrationTimeout(self: *ConnectionMigrator) !void {
         if (self.migration_state == .migrating) {
-            const ts = std.posix.clock_gettime(.realtime) catch return;
-            const now = ts.sec;
+            const now = Time.nowSeconds();
             if (now - self.migration_start_time > @as(i64, @intCast(self.migration_timeout_ms / 1000))) {
                 self.migration_state = .failed;
 
@@ -550,6 +576,24 @@ test "connection id manager lifecycle" {
     try std.testing.expectEqual(@as(usize, 0), manager.getActiveConnectionIds().len);
 }
 
+test "connection id rotation respects active id limit" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+
+    var manager = ConnectionIdManager.init(allocator);
+    defer manager.deinit();
+    manager.active_connection_id_limit = 1;
+
+    const first = try manager.rotateConnectionId();
+    try std.testing.expectEqual(@as(u64, 1), first.sequence_number);
+    try std.testing.expectError(Error.ZquicError.ConnectionLimitReached, manager.rotateConnectionId());
+
+    _ = manager.retireConnectionId(first.sequence_number);
+    const second = try manager.rotateConnectionId();
+    try std.testing.expectEqual(@as(u64, 2), second.sequence_number);
+}
+
 test "path validator start validate retry" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
@@ -569,6 +613,29 @@ test "path validator start validate retry" {
     const retries = try validator.retryValidations();
     defer allocator.free(retries);
     try std.testing.expect(retries.len >= 1);
+}
+
+test "migration rejects disabled probing and handles nat rebinding challenge" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+
+    const local = NetAddress.initIp4(.{ 127, 0, 0, 1 }, 4433);
+    const remote = NetAddress.initIp4(.{ 127, 0, 0, 1 }, 9443);
+    var migrator = ConnectionMigrator.init(allocator, local, remote);
+    defer migrator.deinit();
+
+    migrator.setMigrationEnabled(false);
+    try std.testing.expectError(Error.ZquicError.ConnectionMigrationDisabled, migrator.startPathProbing());
+
+    migrator.setMigrationEnabled(true);
+    const rebound = NetAddress.initIp4(.{ 127, 0, 0, 2 }, 9444);
+    const challenge = try migrator.handleNatRebinding(local, rebound);
+    try std.testing.expectEqual(MigrationState.probing, migrator.getMigrationState());
+    try std.testing.expectEqual(@as(usize, 1), migrator.candidate_paths.items.len);
+
+    try migrator.handlePathResponse(PathResponseFrame.init(challenge.data));
+    try std.testing.expect(migrator.candidate_paths.items[0].validation_state == .validated or migrator.getMigrationState() == .migrating);
 }
 
 /// 0-RTT (Zero Round Trip Time) manager
@@ -747,11 +814,11 @@ pub const MigrationAndZeroRTTManager = struct {
                 try self.migrator.handlePathResponse(response_frame);
                 return null;
             },
-            .new_connection_id => |_| {
+            .new_connection_id => {
                 // Handle new connection ID for migration
                 return null;
             },
-            .retire_connection_id => |_| {
+            .retire_connection_id => {
                 // Handle connection ID retirement
                 return null;
             },
@@ -760,7 +827,7 @@ pub const MigrationAndZeroRTTManager = struct {
     }
 
     pub fn generateMigrationFrames(self: *MigrationAndZeroRTTManager) ![]Frame {
-        var frames: std.ArrayListUnmanaged(Frame) = .{};
+        var frames: std.ArrayListUnmanaged(Frame) = .empty;
         errdefer frames.deinit(self.allocator);
 
         // Generate path challenge frames

@@ -266,7 +266,7 @@ pub const PacketCrypto = struct {
 
 ### SSH/QUIC Integration
 
-SSH secret injection for QUIC connections, implementing [draft-denis-ssh-quic](https://datatracker.ietf.org/doc/draft-denis-ssh-quic/).
+Draft SSH secret injection for QUIC connections, based on [draft-denis-ssh-quic](https://datatracker.ietf.org/doc/draft-denis-ssh-quic/). This accepts pre-derived secrets; it does not perform SSH key exchange or draft-version negotiation.
 
 #### SshQuicSecrets
 

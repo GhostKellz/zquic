@@ -21,9 +21,12 @@ const zcrypto = @import("zcrypto");
 // Core QUIC protocol components
 pub const Connection = @import("core/connection.zig");
 pub const Packet = @import("core/packet.zig");
+pub const PacketSpace = @import("core/packet_space.zig");
 pub const Stream = @import("core/stream.zig");
 pub const FlowControl = @import("core/flow_control.zig");
 pub const Congestion = @import("core/congestion.zig");
+pub const Recovery = @import("core/recovery.zig");
+pub const ConnectionMigration = @import("core/connection_migration.zig");
 
 // Utilities
 pub const Time = @import("utils/time.zig");

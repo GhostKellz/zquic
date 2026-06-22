@@ -6,6 +6,9 @@ const std = @import("std");
 const Io = std.Io;
 const Error = @import("../utils/error.zig");
 
+pub const max_dns_message_size: usize = 65535;
+pub const max_dns_record_count: u16 = 4096;
+
 /// DNS message header structure (RFC 1035)
 pub const DnsHeader = struct {
     id: u16,
@@ -147,44 +150,89 @@ pub const DnsMessage = struct {
     /// Parse DoQ message from QUIC stream 0 (RFC 9250)
     /// Supports DNS compression pointers per RFC 1035 Section 4.1.4
     pub fn parseFromStream(allocator: std.mem.Allocator, data: []const u8) !DnsMessage {
+        if (data.len < 12 or data.len > max_dns_message_size) {
+            return Error.ZquicError.InvalidArgument;
+        }
+
         var reader = Io.Reader.fixed(data);
 
         // Parse DNS header
         const header = try DnsHeader.decode(&reader);
+        try validateRecordCounts(header);
 
         var message = DnsMessage.init(allocator);
         message.header = header;
+        errdefer message.deinit();
 
         // Parse questions (passing data for compression pointer resolution)
         if (header.qdcount > 0) {
-            message.questions = try allocator.alloc(DnsQuestion, header.qdcount);
-            for (0..header.qdcount) |i| {
-                message.questions[i] = try DnsQuestion.decode(allocator, &reader, data);
+            const questions = try allocator.alloc(DnsQuestion, header.qdcount);
+            var decoded: usize = 0;
+            errdefer {
+                for (questions[0..decoded]) |question| {
+                    allocator.free(question.name);
+                }
+                allocator.free(questions);
             }
+            for (0..header.qdcount) |i| {
+                questions[i] = try DnsQuestion.decode(allocator, &reader, data);
+                decoded += 1;
+            }
+            message.questions = questions;
         }
 
         // Parse answers
         if (header.ancount > 0) {
-            message.answers = try allocator.alloc(DnsResourceRecord, header.ancount);
-            for (0..header.ancount) |i| {
-                message.answers[i] = try DnsResourceRecord.decode(allocator, &reader, data);
+            const answers = try allocator.alloc(DnsResourceRecord, header.ancount);
+            var decoded: usize = 0;
+            errdefer {
+                for (answers[0..decoded]) |answer| {
+                    allocator.free(answer.name);
+                    allocator.free(answer.rdata);
+                }
+                allocator.free(answers);
             }
+            for (0..header.ancount) |i| {
+                answers[i] = try DnsResourceRecord.decode(allocator, &reader, data);
+                decoded += 1;
+            }
+            message.answers = answers;
         }
 
         // Parse authority records
         if (header.nscount > 0) {
-            message.authority = try allocator.alloc(DnsResourceRecord, header.nscount);
-            for (0..header.nscount) |i| {
-                message.authority[i] = try DnsResourceRecord.decode(allocator, &reader, data);
+            const authority = try allocator.alloc(DnsResourceRecord, header.nscount);
+            var decoded: usize = 0;
+            errdefer {
+                for (authority[0..decoded]) |auth| {
+                    allocator.free(auth.name);
+                    allocator.free(auth.rdata);
+                }
+                allocator.free(authority);
             }
+            for (0..header.nscount) |i| {
+                authority[i] = try DnsResourceRecord.decode(allocator, &reader, data);
+                decoded += 1;
+            }
+            message.authority = authority;
         }
 
         // Parse additional records
         if (header.arcount > 0) {
-            message.additional = try allocator.alloc(DnsResourceRecord, header.arcount);
-            for (0..header.arcount) |i| {
-                message.additional[i] = try DnsResourceRecord.decode(allocator, &reader, data);
+            const additional = try allocator.alloc(DnsResourceRecord, header.arcount);
+            var decoded: usize = 0;
+            errdefer {
+                for (additional[0..decoded]) |add| {
+                    allocator.free(add.name);
+                    allocator.free(add.rdata);
+                }
+                allocator.free(additional);
             }
+            for (0..header.arcount) |i| {
+                additional[i] = try DnsResourceRecord.decode(allocator, &reader, data);
+                decoded += 1;
+            }
+            message.additional = additional;
         }
 
         return message;
@@ -192,8 +240,10 @@ pub const DnsMessage = struct {
 
     /// Serialize DoQ message for QUIC stream 0 (RFC 9250)
     pub fn serializeToStream(self: *const DnsMessage, allocator: std.mem.Allocator) ![]u8 {
+        try validateRecordCounts(self.header);
+
         // DNS messages are typically small, use a reasonable fixed buffer
-        var buffer: [4096]u8 = undefined;
+        var buffer: [max_dns_message_size]u8 = undefined;
         var writer = Io.Writer.fixed(&buffer);
 
         // Write header
@@ -221,9 +271,51 @@ pub const DnsMessage = struct {
 
         // Return a copy of the serialized data
         const written = Io.Writer.buffered(&writer);
+        if (written.len > max_dns_message_size) {
+            return Error.ZquicError.InvalidArgument;
+        }
         return try allocator.dupe(u8, written);
     }
+
+    pub fn responseCode(self: *const DnsMessage) DnsResponseCode {
+        return @enumFromInt(@as(u4, @intCast(self.header.flags & 0x000F)));
+    }
 };
+
+pub fn createResponseForQuery(allocator: std.mem.Allocator, query: *const DnsMessage, rcode: DnsResponseCode) !DnsMessage {
+    var response = DnsMessage.init(allocator);
+    response.header = DnsHeader{
+        .id = query.header.id,
+        .flags = 0x8000 | (@as(u16, @intFromEnum(rcode)) & 0x000F),
+        .qdcount = query.header.qdcount,
+        .ancount = 0,
+        .nscount = 0,
+        .arcount = 0,
+    };
+
+    if (query.questions.len > 0) {
+        response.questions = try allocator.alloc(DnsQuestion, query.questions.len);
+        for (query.questions, 0..) |question, i| {
+            response.questions[i] = DnsQuestion{
+                .name = try allocator.dupe(u8, question.name),
+                .qtype = question.qtype,
+                .qclass = question.qclass,
+            };
+        }
+    }
+
+    return response;
+}
+
+fn validateRecordCounts(header: DnsHeader) !void {
+    if (header.qdcount > max_dns_record_count or
+        header.ancount > max_dns_record_count or
+        header.nscount > max_dns_record_count or
+        header.arcount > max_dns_record_count)
+    {
+        return Error.ZquicError.InvalidArgument;
+    }
+}
 
 /// Encode domain name in DNS wire format
 fn encodeDomainName(name: []const u8, _: std.mem.Allocator, writer: anytype) !void {
@@ -399,7 +491,7 @@ test "DNS message parsing" {
 
     // Create a simple DNS query
     var message = DnsMessage.init(allocator);
-    defer message.deinit(allocator);
+    defer message.deinit();
 
     message.header = DnsHeader{
         .id = 0x1234,
@@ -423,7 +515,7 @@ test "DNS message parsing" {
     defer allocator.free(serialized);
 
     var parsed = try DnsMessage.parseFromStream(allocator, serialized);
-    defer parsed.deinit(allocator);
+    defer parsed.deinit();
 
     try std.testing.expect(parsed.header.id == 0x1234);
     try std.testing.expect(parsed.questions.len == 1);

@@ -9,6 +9,8 @@ const zcrypto = @import("zcrypto");
 
 // Re-export HTTP/3 functionality from core modules
 pub const Http3Server = @import("http3/server.zig").Http3Server;
+pub const AdvancedHttp3Server = @import("http3/advanced_server.zig").AdvancedHttp3Server;
+pub const AdvancedServerConfig = @import("http3/advanced_server.zig").AdvancedServerConfig;
 // pub const Http3Client = @import("http3/client.zig").Http3Client; // TODO: Implement HTTP/3 client
 pub const Request = @import("http3/request.zig").Request;
 pub const Response = @import("http3/response.zig").Response;
@@ -44,4 +46,13 @@ pub fn init(allocator: std.mem.Allocator, config: Http3Config) !void {
 // Feature-specific cleanup
 pub fn deinit() void {
     // Clean up HTTP/3 specific state
+}
+
+test {
+    _ = @import("http3/frame.zig");
+    _ = @import("http3/qpack.zig");
+    _ = @import("http3/request.zig");
+    _ = @import("http3/response.zig");
+    _ = @import("http3/router.zig");
+    _ = @import("http3/advanced_server.zig");
 }

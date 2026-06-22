@@ -3,6 +3,7 @@
 # Run from project root: ./dev/test.sh
 
 set -euo pipefail
+ZIG="${ZIG:-/opt/zig-dev/zig}"
 
 echo "=== ZQUIC Test Suite ==="
 echo ""
@@ -20,13 +21,13 @@ run_step() {
     echo ""
 }
 
-run_step "[1/3] Running unit tests (zig build test)..." zig build test
-run_step "[2/3] Running integration tests..." zig build integration-tests
+run_step "[1/3] Running unit tests (zig build test)..." "$ZIG" build test
+run_step "[2/3] Running integration tests..." "$ZIG" build integration-tests
 
 if [ -n "${CI:-}" ]; then
     echo "CI detected; skipping fuzz harness to avoid long runtimes." && echo ""
 else
-    run_step "[3/3] Running fuzz harness..." zig build fuzz-tests
+    run_step "[3/3] Running fuzz harness..." "$ZIG" build fuzz-tests
 fi
 
 echo "=== Test Complete ==="

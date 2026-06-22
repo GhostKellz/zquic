@@ -8,13 +8,10 @@ const DnsQuestion = zquic.services.DnsQuestion;
 const DnsRecordType = zquic.services.DnsRecordType;
 const DnsClass = zquic.services.DnsClass;
 const CacheEntry = zquic.services.DnsCacheEntry;
+const Time = zquic.Time;
 
 fn nowSeconds() i64 {
-    if (std.time.Instant.now()) |instant| {
-        return instant.timestamp.sec;
-    } else |_| {
-        return 0;
-    }
+    return Time.nowSeconds();
 }
 
 test "integration: ghostbridge manages services and connections" {
@@ -99,7 +96,10 @@ test "wraith response cache expires entries with helper time" {
 }
 
 test "dns cache entry helper expiry" {
-    var entry = CacheEntry.init(std.testing.allocator, try DnsQuestion.init(std.testing.allocator, "example.ghost", DnsRecordType.A, DnsClass.IN));
+    var question = try DnsQuestion.init(std.testing.allocator, "example.ghost", DnsRecordType.A, DnsClass.IN);
+    defer question.deinit(std.testing.allocator);
+
+    var entry = try CacheEntry.init(std.testing.allocator, &question);
     defer entry.deinit(std.testing.allocator);
 
     entry.expiry_time = nowSeconds() + 5;

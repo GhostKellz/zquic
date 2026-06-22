@@ -1,6 +1,6 @@
 //! Post-Quantum QUIC Demo
 //!
-//! Demonstrates using ZQUIC with zcrypto for quantum-safe networking
+//! Demonstrates experimental ZQUIC post-quantum hooks through zcrypto.
 
 const std = @import("std");
 const zquic = @import("zquic");
@@ -96,24 +96,21 @@ pub fn main() !void {
     //     std.debug.print("...\n", .{});
     // }
 
-    // Performance comparison
-    std.debug.print("\nPerformance Characteristics:\n", .{});
-    std.debug.print("  - ML-KEM-768 keygen: >50,000 ops/sec\n", .{});
-    std.debug.print("  - X25519 operations: >100,000 ops/sec\n", .{});
-    std.debug.print("  - AES-256-GCM: >1.5 GB/sec\n", .{});
-    std.debug.print("  - Blake3: >3 GB/sec\n", .{});
-    std.debug.print("  - Post-quantum handshake: <2ms\n", .{});
+    std.debug.print("\nRelease posture:\n", .{});
+    std.debug.print("  - Experimental PQ path; disabled in default builds\n", .{});
+    std.debug.print("  - Requires -Dpost-quantum=true -Dexperimental-crypto=true\n", .{});
+    std.debug.print("  - See docs/features/crypto-maturity.md before deployment\n", .{});
 
     std.debug.print("\n✓ Experimental Post-Quantum QUIC initialized successfully.\n", .{});
     std.debug.print("  Use only with explicit post-quantum and experimental crypto flags.\n", .{});
 
     // Demonstrate server creation
-    std.debug.print("\nDemonstrating quantum-safe server creation...\n", .{});
-    try createQuantumSafeServer(allocator);
+    std.debug.print("\nDemonstrating experimental PQ HTTP/3 server configuration...\n", .{});
+    try createExperimentalPqServer(allocator);
 }
 
-// Example: Creating a quantum-safe QUIC server
-pub fn createQuantumSafeServer(allocator: std.mem.Allocator) !void {
+// Example: Creating an HTTP/3 server while the experimental PQ feature is enabled.
+pub fn createExperimentalPqServer(allocator: std.mem.Allocator) !void {
     // Server configuration
     const config = zquic.Http3.ServerConfig{
         .max_connections = 1000,
@@ -137,11 +134,9 @@ pub fn createQuantumSafeServer(allocator: std.mem.Allocator) !void {
     try router.get("/", indexHandler);
     try router.get("/api/quantum-status", quantumStatusHandler);
 
-    // The server would internally use post-quantum crypto
-    // for all QUIC handshakes when zcrypto is linked
-    std.debug.print("✓ Quantum-safe HTTP/3 server configured successfully\n", .{});
+    std.debug.print("✓ Experimental PQ HTTP/3 server configured successfully\n", .{});
 
-    std.debug.print("\nQuantum-safe QUIC server configured with {} max connections\n", .{
+    std.debug.print("\nExperimental PQ QUIC server configured with {} max connections\n", .{
         config.max_connections,
     });
 }
@@ -152,10 +147,10 @@ fn indexHandler(_: *zquic.Http3.Request, res: *zquic.Http3.Response) !void {
     try res.write(
         \\<!DOCTYPE html>
         \\<html>
-        \\<head><title>Quantum-Safe QUIC</title></head>
+        \\<head><title>Experimental PQ QUIC</title></head>
         \\<body>
         \\<h1>Welcome to Post-Quantum QUIC!</h1>
-        \\<p>This connection is protected against quantum computer attacks.</p>
+        \\<p>This demo uses explicit experimental PQ feature flags.</p>
         \\<p>Cipher Suite: ML-KEM-768 + X25519 + AES-256-GCM</p>
         \\</body>
         \\</html>
@@ -164,7 +159,7 @@ fn indexHandler(_: *zquic.Http3.Request, res: *zquic.Http3.Response) !void {
 
 fn quantumStatusHandler(_: *zquic.Http3.Request, res: *zquic.Http3.Response) !void {
     try res.json(.{
-        .quantum_safe = true,
+        .experimental_pq = true,
         .algorithms = .{
             .kem = "ML-KEM-768",
             .classical = "X25519",
@@ -173,10 +168,6 @@ fn quantumStatusHandler(_: *zquic.Http3.Request, res: *zquic.Http3.Response) !vo
             .hash = "SHA-256",
             .aead = "AES-256-GCM",
         },
-        .security_level = "Level 3 (192-bit quantum security)",
-        .performance = .{
-            .handshake_overhead = "~1.5ms",
-            .bandwidth_overhead = "~1KB",
-        },
+        .release_posture = "experimental",
     });
 }

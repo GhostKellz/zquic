@@ -1,16 +1,40 @@
-#!/bin/bash
-# Full validation: clean build, check API, run tests
+#!/usr/bin/env bash
+# Full release validation matrix
 # Run from project root: ./dev/validate.sh
 
-set -e
+set -euo pipefail
+
+if [ -z "${ZIG:-}" ]; then
+    if [ -x /opt/zig-dev/zig ]; then
+        ZIG=/opt/zig-dev/zig
+    else
+        ZIG=zig
+    fi
+fi
+export ZIG_GLOBAL_CACHE_DIR="${ZIG_GLOBAL_CACHE_DIR:-/tmp/zig-global-cache}"
 
 echo "========================================"
 echo "  ZQUIC Full Validation"
 echo "========================================"
 echo ""
+echo "Zig: $("$ZIG" version)"
+echo ""
+
+run_step() {
+    local label="$1"
+    local cache_name="$2"
+    shift 2
+
+    export ZIG_LOCAL_CACHE_DIR="${ZIG_LOCAL_CACHE_DIR_BASE:-/tmp}/${cache_name}"
+    echo "$label"
+    echo "  cache: $ZIG_LOCAL_CACHE_DIR"
+    "$@"
+    echo "  Done."
+    echo ""
+}
 
 # Clean - use find + xargs for robustness on busy filesystems
-echo "[1/4] Cleaning..."
+echo "[1/9] Cleaning local outputs..."
 if [ -d "zig-out" ]; then
     find zig-out -type f -delete 2>/dev/null || true
     find zig-out -type d -empty -delete 2>/dev/null || true
@@ -24,28 +48,16 @@ fi
 echo "  Done."
 echo ""
 
-# Build
-echo "[2/4] Building..."
-zig build
-echo "  Done."
-echo ""
+run_step "[2/9] Default build..." zquic-validate-default-build "$ZIG" build --summary all
+run_step "[3/9] Default tests..." zquic-validate-default-test "$ZIG" build test --summary all
+run_step "[4/9] Integration tests..." zquic-validate-integration "$ZIG" build integration-tests --summary all
+run_step "[5/9] Fuzz tests..." zquic-validate-fuzz "$ZIG" build fuzz-tests --summary all
+run_step "[6/9] Minimal build..." zquic-validate-minimal "$ZIG" build -Dhttp3=false -Ddoq=false -Dservices=false -Dvpn=false -Dexamples=false --summary all
+run_step "[7/9] Full feature build..." zquic-validate-full "$ZIG" build -Dservices=true -Dvpn=true -Dmonitoring=true --summary all
+run_step "[8/9] Experimental PQ tests..." zquic-validate-pq-test "$ZIG" build test -Dpost-quantum=true -Dexperimental-crypto=true --summary all
+run_step "[9/9] Experimental PQ build..." zquic-validate-pq-build "$ZIG" build -Dpost-quantum=true -Dexperimental-crypto=true --summary all
 
-# Check binaries
-echo "[3/4] Checking binaries..."
-FOUND_BINARIES=0
-for bin in zig-out/bin/zquic*; do
-    if [ -x "$bin" ]; then
-        echo "  $(basename $bin): OK"
-        FOUND_BINARIES=$((FOUND_BINARIES + 1))
-    fi
-done
-if [ $FOUND_BINARIES -eq 0 ]; then
-    echo "  WARNING: No zquic binaries found (may be expected for minimal builds)"
-fi
-echo ""
-
-# Summary
-echo "[4/4] Build summary..."
+echo "Build summary:"
 echo "  Binaries:"
 if [ -d "zig-out/bin" ]; then
     ls -lh zig-out/bin/ 2>/dev/null | tail -n +2 || echo "  (none)"

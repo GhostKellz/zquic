@@ -4,14 +4,15 @@
 # Run from project root: ./dev/smoke_test.sh
 
 set -e
+ZIG="${ZIG:-/opt/zig-dev/zig}"
 
 echo "=== ZQUIC Smoke Test ==="
-echo "Zig version: $(zig version)"
+echo "Zig version: $("$ZIG" version)"
 echo ""
 
 # Build
 echo "[1/3] Building all targets..."
-zig build
+"$ZIG" build
 echo "Build complete!"
 echo ""
 

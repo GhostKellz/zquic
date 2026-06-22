@@ -4,20 +4,21 @@
 # Run from project root: ./dev/perf_memory.sh
 
 set -e
+ZIG="${ZIG:-/opt/zig-dev/zig}"
 
 echo "=== ZQUIC Memory Performance Test ==="
-echo "Zig version: $(zig version)"
+echo "Zig version: $("$ZIG" version)"
 echo ""
 
 # Build with debug info for better leak detection
 echo "[1/4] Building with debug info..."
-zig build -Doptimize=Debug
+"$ZIG" build -Doptimize=Debug
 echo "Build complete!"
 echo ""
 
 # Run unit tests with GPA leak detection
 echo "[2/4] Running tests with memory leak detection..."
-zig build test 2>&1 | tee /tmp/zquic_memory_test.log
+"$ZIG" build test 2>&1 | tee /tmp/zquic_memory_test.log
 echo ""
 
 # Check for leak reports in test output

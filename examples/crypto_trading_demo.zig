@@ -86,14 +86,14 @@ const CryptoTradingClient = struct {
     telemetry_system: CryptoTelemetrySystem,
 
     // Trading state
-    next_order_id: std.atomic.Atomic(u64),
-    orders_sent: std.atomic.Atomic(u64),
-    orders_executed: std.atomic.Atomic(u64),
-    total_volume: std.atomic.Atomic(u64), // in cents to avoid floating point atomics
+    next_order_id: std.atomic.Value(u64),
+    orders_sent: std.atomic.Value(u64),
+    orders_executed: std.atomic.Value(u64),
+    total_volume: std.atomic.Value(u64), // in cents to avoid floating point atomics
 
     // Performance tracking
-    last_order_latency: std.atomic.Atomic(u64), // microseconds
-    avg_execution_time: std.atomic.Atomic(u64), // microseconds
+    last_order_latency: std.atomic.Value(u64), // microseconds
+    avg_execution_time: std.atomic.Value(u64), // microseconds
 
     allocator: std.mem.Allocator,
 
@@ -154,12 +154,12 @@ const CryptoTradingClient = struct {
             .congestion_controller = CryptoOptimizedCongestionController.init(allocator, .bbr, .high_frequency_trading),
             .connection_multiplexer = CryptoConnectionMultiplexer.init(allocator, pool_config),
             .telemetry_system = CryptoTelemetrySystem.init(allocator, telemetry_config),
-            .next_order_id = std.atomic.Atomic(u64).init(1),
-            .orders_sent = std.atomic.Atomic(u64).init(0),
-            .orders_executed = std.atomic.Atomic(u64).init(0),
-            .total_volume = std.atomic.Atomic(u64).init(0),
-            .last_order_latency = std.atomic.Atomic(u64).init(0),
-            .avg_execution_time = std.atomic.Atomic(u64).init(0),
+            .next_order_id = std.atomic.Value(u64).init(1),
+            .orders_sent = std.atomic.Value(u64).init(0),
+            .orders_executed = std.atomic.Value(u64).init(0),
+            .total_volume = std.atomic.Value(u64).init(0),
+            .last_order_latency = std.atomic.Value(u64).init(0),
+            .avg_execution_time = std.atomic.Value(u64).init(0),
             .allocator = allocator,
         };
     }
@@ -206,8 +206,8 @@ const CryptoTradingClient = struct {
         const end_time = Time.nowMicros();
         const latency = end_time - start_time;
 
-        _ = self.orders_sent.fetchAdd(1, .Monotonic);
-        _ = self.last_order_latency.store(latency, .Monotonic);
+        _ = self.orders_sent.fetchAdd(1, .monotonic);
+        _ = self.last_order_latency.store(latency, .monotonic);
 
         // Update telemetry
         const protocol = .custom;
@@ -241,17 +241,17 @@ const CryptoTradingClient = struct {
 
         const execution_time = send_latency + execution_delay;
 
-        _ = self.orders_executed.fetchAdd(1, .Monotonic);
+        _ = self.orders_executed.fetchAdd(1, .monotonic);
 
         // Update average execution time
-        const current_avg = self.avg_execution_time.load(.Monotonic);
+        const current_avg = self.avg_execution_time.load(.monotonic);
         const new_avg = (current_avg + execution_time) / 2;
-        _ = self.avg_execution_time.store(new_avg, .Monotonic);
+        _ = self.avg_execution_time.store(new_avg, .monotonic);
 
         // Update volume (convert to cents to avoid floating point atomics)
         if (order.price) |price| {
             const volume_cents = @as(u64, @intFromFloat(order.quantity * price * 100));
-            _ = self.total_volume.fetchAdd(volume_cents, .Monotonic);
+            _ = self.total_volume.fetchAdd(volume_cents, .monotonic);
         }
 
         std.log.info("Order {} executed: {} μs total time", .{ order.id, execution_time });
@@ -304,21 +304,21 @@ const CryptoTradingClient = struct {
         congestion_stats: @TypeOf(self.congestion_controller.getCryptoStats()),
         connection_stats: @TypeOf(self.connection_multiplexer.getStats()),
     } {
-        const orders_sent = self.orders_sent.load(.Monotonic);
-        const orders_executed = self.orders_executed.load(.Monotonic);
+        const orders_sent = self.orders_sent.load(.monotonic);
+        const orders_executed = self.orders_executed.load(.monotonic);
         const execution_rate = if (orders_sent > 0)
             @as(f32, @floatFromInt(orders_executed)) / @as(f32, @floatFromInt(orders_sent)) * 100.0
         else
             0.0;
 
-        const total_volume_usd = @as(f64, @floatFromInt(self.total_volume.load(.Monotonic))) / 100.0;
+        const total_volume_usd = @as(f64, @floatFromInt(self.total_volume.load(.monotonic))) / 100.0;
 
         return .{
             .orders_sent = orders_sent,
             .orders_executed = orders_executed,
             .execution_rate = execution_rate,
-            .avg_latency_us = self.last_order_latency.load(.Monotonic),
-            .avg_execution_time_us = self.avg_execution_time.load(.Monotonic),
+            .avg_latency_us = self.last_order_latency.load(.monotonic),
+            .avg_execution_time_us = self.avg_execution_time.load(.monotonic),
             .total_volume_usd = total_volume_usd,
             .telemetry_summary = self.telemetry_system.getPerformanceSummary(),
             .congestion_stats = self.congestion_controller.getCryptoStats(),

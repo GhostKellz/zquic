@@ -223,6 +223,19 @@ pub const TimerWheel = struct {
         try self.timers.append(self.allocator, timer);
     }
 
+    pub fn cancelTimer(self: *Self, callback: *const fn (?*anyopaque) void, user_data: ?*anyopaque) bool {
+        var i: usize = 0;
+        while (i < self.timers.items.len) {
+            const timer = self.timers.items[i];
+            if (timer.callback == callback and timer.user_data == user_data) {
+                _ = self.timers.swapRemove(i);
+                return true;
+            }
+            i += 1;
+        }
+        return false;
+    }
+
     /// Process expired timers, returns time until next timer (ms)
     pub fn tick(self: *Self) i64 {
         var min_wait: i64 = 1000; // Default 1 second
@@ -286,4 +299,24 @@ test "timer wheel" {
     try wheel.addTimer(Timer.init(0, callback, @ptrCast(&count)));
     _ = wheel.tick();
     try std.testing.expect(count == 1);
+}
+
+test "timer wheel cancellation prevents callback" {
+    var wheel = TimerWheel.init(std.testing.allocator);
+    defer wheel.deinit();
+
+    var count: u32 = 0;
+    const callback = struct {
+        fn cb(data: ?*anyopaque) void {
+            const ptr: *u32 = @ptrCast(@alignCast(data));
+            ptr.* += 1;
+        }
+    }.cb;
+
+    try wheel.addTimer(Timer.init(0, callback, @ptrCast(&count)));
+    try std.testing.expect(wheel.cancelTimer(callback, @ptrCast(&count)));
+    try std.testing.expect(!wheel.cancelTimer(callback, @ptrCast(&count)));
+
+    _ = wheel.tick();
+    try std.testing.expectEqual(@as(u32, 0), count);
 }

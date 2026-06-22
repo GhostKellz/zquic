@@ -9,6 +9,8 @@ const Error = @import("../utils/error.zig");
 pub const QpackDecoder = struct {
     dynamic_table: std.ArrayListUnmanaged(HeaderField),
     max_table_capacity: u32,
+    max_header_count: usize = 256,
+    max_header_block_size: usize = 64 * 1024,
 
     const Self = @This();
 
@@ -28,9 +30,14 @@ pub const QpackDecoder = struct {
 
     /// Decode QPACK-encoded headers (literal-only implementation)
     pub fn decode(self: *Self, encoded_data: []const u8, allocator: std.mem.Allocator) Error.ZquicError![]HeaderField {
-        _ = self;
+        if (encoded_data.len > self.max_header_block_size) {
+            return Error.ZquicError.HeaderError;
+        }
         var cursor: usize = 0;
         const header_count = try readVarint(encoded_data, &cursor);
+        if (header_count > self.max_header_count) {
+            return Error.ZquicError.HeaderError;
+        }
 
         var headers = try allocator.alloc(HeaderField, header_count);
         var i: usize = 0;
@@ -53,12 +60,23 @@ pub const QpackDecoder = struct {
             const value_slice = encoded_data[cursor .. cursor + value_len];
             cursor += value_len;
 
+            try validateHeaderName(name_slice);
+
             headers[i] = try HeaderField.init(allocator, name_slice, value_slice);
         }
 
         return headers;
     }
 };
+
+fn validateHeaderName(name: []const u8) Error.ZquicError!void {
+    if (name.len == 0) return Error.ZquicError.HeaderError;
+    for (name) |c| {
+        if (std.ascii.isUpper(c) or c == 0 or c == '\r' or c == '\n') {
+            return Error.ZquicError.HeaderError;
+        }
+    }
+}
 
 pub const QpackEncoder = struct {
     pub fn init() QpackEncoder {
@@ -143,6 +161,50 @@ test "qpack encode decode roundtrip" {
     try std.testing.expect(decoded.len == headers.len);
     try std.testing.expect(std.mem.eql(u8, decoded[0].name, ":status"));
     try std.testing.expect(std.mem.eql(u8, decoded[1].value, "text/plain"));
+}
+
+test "qpack rejects malformed header names and oversized counts" {
+    const allocator = std.testing.allocator;
+    var decoder = QpackDecoder.init(allocator, 4096);
+    defer decoder.deinit(allocator);
+
+    var bad_upper = [_]u8{
+        1, // header count
+        4,
+        'H',
+        'o',
+        's',
+        't',
+        3,
+        'x',
+        'y',
+        'z',
+    };
+    try std.testing.expectError(Error.ZquicError.HeaderError, decoder.decode(&bad_upper, allocator));
+
+    var bad_empty = [_]u8{
+        1, // header count
+        0, // empty name
+        3,
+        'x',
+        'y',
+        'z',
+    };
+    try std.testing.expectError(Error.ZquicError.HeaderError, decoder.decode(&bad_empty, allocator));
+
+    decoder.max_header_count = 1;
+    var too_many = [_]u8{
+        2,
+        1,
+        'a',
+        1,
+        'b',
+        1,
+        'c',
+        1,
+        'd',
+    };
+    try std.testing.expectError(Error.ZquicError.HeaderError, decoder.decode(&too_many, allocator));
 }
 
 fn writeVarint(buffer: *std.ArrayListUnmanaged(u8), allocator: std.mem.Allocator, value: usize) !void {

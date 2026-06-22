@@ -36,14 +36,13 @@ pub fn main() !void {
     const tunnel_interface = try NetAddress.resolveIp("10.9.0.1", 0);
     try router.addInterface("ghostmesh0", tunnel_interface, 1400);
 
-    const protected_subnet = try NetAddress.resolveIp("10.42.0.0", 0);
-    const peer_gateway = try NetAddress.resolveIp("10.9.0.2", 4433);
-    const route_conn = try zquic.Packet.ConnectionId.init("ghostmesh-demo");
-    try router.addRoute(protected_subnet, peer_gateway, "ghostmesh0", route_conn);
-
     const packet = "hello-from-quic";
     const source = try NetAddress.resolveIp("10.42.0.10", 5555);
     const destination = try NetAddress.resolveIp("10.99.0.5", 8080);
+
+    const peer_gateway = try NetAddress.resolveIp("10.9.0.2", 4433);
+    const route_conn = try zquic.Packet.ConnectionId.init("ghostmesh-demo");
+    try router.addRoute(destination, peer_gateway, "ghostmesh0", route_conn);
 
     const forwarded = try router.forwardPacket(packet, source, destination);
     std.debug.print(

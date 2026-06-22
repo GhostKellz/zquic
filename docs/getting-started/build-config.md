@@ -22,7 +22,7 @@ ZQUIC ships with a small set of build flags that mirror the switches inside `bui
 ## Common Build Profiles
 
 ```bash
-# Minimal core stack (embedded)
+# Minimal core stack
 zig build -Dhttp3=false -Ddoq=false -Dservices=false -Dvpn=false -Dexamples=false -Doptimize=ReleaseSmall
 
 # Web edge tier (stable crypto only)
@@ -34,8 +34,8 @@ zig build  # enables HTTP/3, DoQ; PQ disabled by default
 # With post-quantum crypto (experimental)
 zig build -Dpost-quantum=true -Dexperimental-crypto=true
 
-# Observability build
-zig build -Dmonitoring=true -Dservices=true -Doptimize=ReleaseSafe
+# Full optional feature build
+zig build -Dservices=true -Dvpn=true -Dmonitoring=true -Doptimize=ReleaseSafe
 
 # Cross-compile to Windows
 zig build -Dhttp3=false -Dservices=false -Dtarget=x86_64-windows -Doptimize=ReleaseSafe
@@ -73,9 +73,11 @@ pub fn build(b: *std.Build) !void {
 
     const exe = b.addExecutable(.{
         .name = "my-quic-app",
-        .root_source_file = b.path("src/main.zig"),
-        .target = target,
-        .optimize = optimize,
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/main.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
     });
 
     exe.root_module.addImport("zquic", zquic_dep.module("zquic"));
@@ -83,12 +85,15 @@ pub fn build(b: *std.Build) !void {
 }
 ```
 
-The dependency inherits the same Zig toolchain, so ensure you are on `zig 0.17.0-dev.27+` or later.
+The dependency inherits the same Zig toolchain. This release is validated with
+`/opt/zig-dev/zig` and package metadata requires
+`0.17.0-dev.657+2faf8debf` or newer.
 
 ## 🔬 Development Tips
 
-- **Format & lint** – `zig fmt src/ docs/ examples/`
-- **Full suite** – `./dev/test.sh` (runs `zig build`, `zig build test`, `zig build integration-tests`, `zig build fuzz-tests`)
+- **Format** – `./dev/fmt.sh`
+- **Release validation** – `./dev/validate.sh`
+- **Full test suite** – `./dev/test.sh` (unit, integration, and fuzz tests outside CI)
 - **Targeted runs** – `zig build integration-tests` or `zig build fuzz-tests` for faster iteration
 - **Smoke tests** – `./dev/smoke_test.sh` launches HTTP/3 and DoQ demos
 - **Clean builds** – `./dev/clean.sh && zig build -Doptimize=ReleaseFast`

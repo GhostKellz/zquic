@@ -295,7 +295,7 @@ pub const GrpcStream = struct {
         };
 
         // Remove processed data from buffer
-        std.mem.copy(u8, self.recv_buffer.items, self.recv_buffer.items[total_length..]);
+        std.mem.copyForwards(u8, self.recv_buffer.items, self.recv_buffer.items[total_length..]);
         self.recv_buffer.shrinkRetainingCapacity(self.recv_buffer.items.len - total_length);
 
         return message;

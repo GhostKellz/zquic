@@ -4,21 +4,22 @@
 # Run from project root: ./dev/perf_bench.sh
 
 set -e
+ZIG="${ZIG:-/opt/zig-dev/zig}"
 
 echo "=== ZQUIC Performance Benchmark ==="
-echo "Zig version: $(zig version)"
+echo "Zig version: $("$ZIG" version)"
 echo "Date: $(date -Iseconds)"
 echo ""
 
 # Build optimized
 echo "[1/5] Building release optimized..."
-zig build -Doptimize=ReleaseFast
+"$ZIG" build -Doptimize=ReleaseFast
 echo "Build complete!"
 echo ""
 
 # Run benchmark tests
 echo "[2/5] Running benchmark tests..."
-zig build test -Doptimize=ReleaseFast 2>&1 | tee /tmp/zquic_bench.log
+"$ZIG" build test -Doptimize=ReleaseFast 2>&1 | tee /tmp/zquic_bench.log
 echo ""
 
 # Binary size analysis

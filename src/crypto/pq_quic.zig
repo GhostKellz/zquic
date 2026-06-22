@@ -281,6 +281,124 @@ pub const PQCipherSuite = enum {
             .ml_kem_768_sha256 => null,
         };
     }
+
+    pub fn id(self: @This()) u16 {
+        return switch (self) {
+            .ml_kem_768_x25519_sha256 => 0x0001,
+            .ml_kem_1024_x25519_sha384 => 0x0002,
+            .ml_kem_768_sha256 => 0x0003,
+        };
+    }
+};
+
+pub const PQTranscriptRole = enum(u8) {
+    client = 0,
+    server = 1,
+};
+
+/// Versioned transcript binder for experimental PQ handshakes.
+///
+/// This is not a wire format. It is the deterministic input contract zquic uses
+/// to bind role, suite, public keys, ciphertext, and negotiated feature posture
+/// into derived secrets and tests.
+pub const PQHandshakeTranscript = struct {
+    pub const version: u16 = 1;
+    pub const domain = "zquic pq transcript v1";
+
+    cipher_suite: PQCipherSuite,
+    role: PQTranscriptRole,
+    kem_public_key: []const u8,
+    classical_public_key: ?[]const u8 = null,
+    kem_ciphertext: []const u8,
+    experimental_crypto: bool,
+
+    const Self = @This();
+
+    pub fn validate(self: Self) Error.ZquicError!void {
+        if (!self.experimental_crypto) return Error.ZquicError.CryptoError;
+        if (self.kem_public_key.len == 0) return Error.ZquicError.CryptoError;
+        if (self.kem_ciphertext.len == 0) return Error.ZquicError.CryptoError;
+
+        const expected_kem_public_len: usize = switch (self.cipher_suite.getKemVariant()) {
+            .ml_kem_768 => PostQuantum.MLKEMKeyExchange.ML_KEM_768.PUBLIC_KEY_SIZE,
+            .ml_kem_1024 => PostQuantum.MLKEMKeyExchange.ML_KEM_1024.PUBLIC_KEY_SIZE,
+        };
+        const expected_ciphertext_len: usize = switch (self.cipher_suite.getKemVariant()) {
+            .ml_kem_768 => PostQuantum.MLKEMKeyExchange.ML_KEM_768.CIPHERTEXT_SIZE,
+            .ml_kem_1024 => PostQuantum.MLKEMKeyExchange.ML_KEM_1024.CIPHERTEXT_SIZE,
+        };
+        if (self.kem_public_key.len != expected_kem_public_len) return Error.ZquicError.CryptoError;
+        if (self.kem_ciphertext.len != expected_ciphertext_len) return Error.ZquicError.CryptoError;
+
+        if (self.cipher_suite.isHybrid()) {
+            const classical_key = self.classical_public_key orelse return Error.ZquicError.CryptoError;
+            if (classical_key.len != 32) return Error.ZquicError.CryptoError;
+        } else if (self.classical_public_key) |classical_key| {
+            if (classical_key.len != 0) return Error.ZquicError.CryptoError;
+        }
+    }
+
+    pub fn hash(self: Self) Error.ZquicError![32]u8 {
+        try self.validate();
+
+        var hasher = zcrypto.hash.Sha256.init();
+        hasher.update(domain);
+        updateU16(&hasher, version);
+        updateU16(&hasher, self.cipher_suite.id());
+        hasher.update(&[_]u8{@intFromEnum(self.role)});
+        hasher.update(&[_]u8{if (self.experimental_crypto) 1 else 0});
+        updateSlice(&hasher, self.kem_public_key);
+        updateSlice(&hasher, self.classical_public_key orelse &[_]u8{});
+        updateSlice(&hasher, self.kem_ciphertext);
+        return hasher.final();
+    }
+
+    pub fn secretsMatch(
+        client_transcript: Self,
+        server_transcript: Self,
+        client_secret: []const u8,
+        server_secret: []const u8,
+    ) Error.ZquicError!bool {
+        if (client_transcript.role != .client) return Error.ZquicError.CryptoError;
+        if (server_transcript.role != .server) return Error.ZquicError.CryptoError;
+        if (client_transcript.cipher_suite != server_transcript.cipher_suite) return Error.ZquicError.CryptoError;
+
+        if (!sameBinderMaterial(client_transcript, server_transcript)) return false;
+
+        // Compute both hashes to enforce validation and role-bound transcript
+        // construction. The two hashes intentionally differ by role.
+        _ = try client_transcript.hash();
+        _ = try server_transcript.hash();
+
+        return std.mem.eql(u8, client_secret, server_secret);
+    }
+
+    fn sameBinderMaterial(a: Self, b: Self) bool {
+        if (a.experimental_crypto != b.experimental_crypto) return false;
+        if (!std.mem.eql(u8, a.kem_public_key, b.kem_public_key)) return false;
+        if (!std.mem.eql(u8, a.kem_ciphertext, b.kem_ciphertext)) return false;
+
+        if (a.classical_public_key == null and b.classical_public_key == null) return true;
+        if (a.classical_public_key == null or b.classical_public_key == null) return false;
+        return std.mem.eql(u8, a.classical_public_key.?, b.classical_public_key.?);
+    }
+
+    fn updateU16(hasher: anytype, value: u16) void {
+        var bytes: [2]u8 = undefined;
+        std.mem.writeInt(u16, &bytes, value, .big);
+        hasher.update(&bytes);
+    }
+
+    fn updateU32(hasher: anytype, value: u32) void {
+        var bytes: [4]u8 = undefined;
+        std.mem.writeInt(u32, &bytes, value, .big);
+        hasher.update(&bytes);
+    }
+
+    fn updateSlice(hasher: anytype, value: []const u8) void {
+        updateU32(hasher, @intCast(value.len));
+        hasher.update(value);
+    }
 };
 
 /// Post-Quantum key exchange context
@@ -655,4 +773,125 @@ test "post-quantum authentication uses ML-DSA-65" {
 
     signature[0] ^= 1;
     try std.testing.expect(!try PQAuthentication.verifyMlDsaSignature(message, signature, &keypair.public_key));
+}
+
+fn filledTestBytes(comptime len: usize, value: u8) [len]u8 {
+    var bytes = std.mem.zeroes([len]u8);
+    @memset(bytes[0..], value);
+    return bytes;
+}
+
+test "PQ transcript hash is deterministic and binds role suite and ciphertext" {
+    const kem_pk = filledTestBytes(PostQuantum.MLKEMKeyExchange.ML_KEM_768.PUBLIC_KEY_SIZE, 0xA1);
+    const x25519_pk = filledTestBytes(32, 0xB2);
+    const ciphertext = filledTestBytes(PostQuantum.MLKEMKeyExchange.ML_KEM_768.CIPHERTEXT_SIZE, 0xC3);
+
+    const base = PQHandshakeTranscript{
+        .cipher_suite = .ml_kem_768_x25519_sha256,
+        .role = .client,
+        .kem_public_key = &kem_pk,
+        .classical_public_key = &x25519_pk,
+        .kem_ciphertext = &ciphertext,
+        .experimental_crypto = true,
+    };
+
+    const hash1 = try base.hash();
+    const hash2 = try base.hash();
+    try std.testing.expectEqualSlices(u8, &hash1, &hash2);
+
+    var server_role = base;
+    server_role.role = .server;
+    const server_hash = try server_role.hash();
+    try std.testing.expect(!std.mem.eql(u8, &hash1, &server_hash));
+
+    var different_suite = base;
+    different_suite.cipher_suite = .ml_kem_768_sha256;
+    different_suite.classical_public_key = null;
+    const suite_hash = try different_suite.hash();
+    try std.testing.expect(!std.mem.eql(u8, &hash1, &suite_hash));
+
+    var tampered_ciphertext = ciphertext;
+    tampered_ciphertext[0] ^= 0x01;
+    var tampered = base;
+    tampered.kem_ciphertext = &tampered_ciphertext;
+    const tampered_hash = try tampered.hash();
+    try std.testing.expect(!std.mem.eql(u8, &hash1, &tampered_hash));
+}
+
+test "PQ transcript rejects downgraded flags and malformed keys" {
+    const kem_pk = filledTestBytes(PostQuantum.MLKEMKeyExchange.ML_KEM_768.PUBLIC_KEY_SIZE, 0x11);
+    const short_kem_pk = filledTestBytes(PostQuantum.MLKEMKeyExchange.ML_KEM_768.PUBLIC_KEY_SIZE - 1, 0x11);
+    const x25519_pk = filledTestBytes(32, 0x22);
+    const short_x25519_pk = filledTestBytes(31, 0x22);
+    const ciphertext = filledTestBytes(PostQuantum.MLKEMKeyExchange.ML_KEM_768.CIPHERTEXT_SIZE, 0x33);
+    const short_ciphertext = filledTestBytes(PostQuantum.MLKEMKeyExchange.ML_KEM_768.CIPHERTEXT_SIZE - 1, 0x33);
+
+    const valid = PQHandshakeTranscript{
+        .cipher_suite = .ml_kem_768_x25519_sha256,
+        .role = .client,
+        .kem_public_key = &kem_pk,
+        .classical_public_key = &x25519_pk,
+        .kem_ciphertext = &ciphertext,
+        .experimental_crypto = true,
+    };
+    try valid.validate();
+
+    var disabled = valid;
+    disabled.experimental_crypto = false;
+    try std.testing.expectError(Error.ZquicError.CryptoError, disabled.validate());
+
+    var bad_kem = valid;
+    bad_kem.kem_public_key = &short_kem_pk;
+    try std.testing.expectError(Error.ZquicError.CryptoError, bad_kem.validate());
+
+    var bad_classical = valid;
+    bad_classical.classical_public_key = &short_x25519_pk;
+    try std.testing.expectError(Error.ZquicError.CryptoError, bad_classical.validate());
+
+    var bad_ciphertext = valid;
+    bad_ciphertext.kem_ciphertext = &short_ciphertext;
+    try std.testing.expectError(Error.ZquicError.CryptoError, bad_ciphertext.validate());
+}
+
+test "PQ transcript secret match requires expected roles and identical binders" {
+    const kem_pk = filledTestBytes(PostQuantum.MLKEMKeyExchange.ML_KEM_768.PUBLIC_KEY_SIZE, 0x44);
+    const x25519_pk = filledTestBytes(32, 0x55);
+    const ciphertext = filledTestBytes(PostQuantum.MLKEMKeyExchange.ML_KEM_768.CIPHERTEXT_SIZE, 0x66);
+    const tampered_ciphertext = filledTestBytes(PostQuantum.MLKEMKeyExchange.ML_KEM_768.CIPHERTEXT_SIZE, 0x67);
+    const secret = filledTestBytes(32, 0x77);
+
+    const client = PQHandshakeTranscript{
+        .cipher_suite = .ml_kem_768_x25519_sha256,
+        .role = .client,
+        .kem_public_key = &kem_pk,
+        .classical_public_key = &x25519_pk,
+        .kem_ciphertext = &ciphertext,
+        .experimental_crypto = true,
+    };
+    var server = client;
+    server.role = .server;
+
+    try std.testing.expect(try PQHandshakeTranscript.secretsMatch(client, server, &secret, &secret));
+
+    var wrong_role = client;
+    wrong_role.role = .client;
+    try std.testing.expectError(
+        Error.ZquicError.CryptoError,
+        PQHandshakeTranscript.secretsMatch(client, wrong_role, &secret, &secret),
+    );
+
+    const different_secret = filledTestBytes(32, 0x88);
+    try std.testing.expect(!try PQHandshakeTranscript.secretsMatch(client, server, &secret, &different_secret));
+
+    var tampered_server = server;
+    tampered_server.kem_ciphertext = &tampered_ciphertext;
+    try std.testing.expect(!try PQHandshakeTranscript.secretsMatch(client, tampered_server, &secret, &secret));
+
+    var downgraded_suite = server;
+    downgraded_suite.cipher_suite = .ml_kem_768_sha256;
+    downgraded_suite.classical_public_key = null;
+    try std.testing.expectError(
+        Error.ZquicError.CryptoError,
+        PQHandshakeTranscript.secretsMatch(client, downgraded_suite, &secret, &secret),
+    );
 }

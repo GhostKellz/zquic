@@ -74,3 +74,8 @@ pub const PerformanceSnapshot = struct {
     average_rtt_us: u32,
     timestamp: i64,
 };
+
+test {
+    _ = @import("monitoring/prometheus_exporter.zig");
+    _ = @import("monitoring/crypto_telemetry.zig");
+}

@@ -36,12 +36,68 @@ pub const WasmExecutionResult = zvm_mod.WasmExecutionResult;
 pub const ServiceType = enum {
     ghostbridge,
     wraith,
+    cns_resolver,
+    zvm_integration,
     custom,
 };
+
+pub const ServiceMaturity = enum {
+    supported,
+    experimental,
+    ghost_specific,
+};
+
+pub const ServiceDescriptor = struct {
+    service_type: ServiceType,
+    name: []const u8,
+    maturity: ServiceMaturity,
+    docs_path: []const u8,
+    default_enabled: bool,
+};
+
+pub const service_descriptors = [_]ServiceDescriptor{
+    .{
+        .service_type = .ghostbridge,
+        .name = "GhostBridge",
+        .maturity = .ghost_specific,
+        .docs_path = "docs/features/services.md#ghostbridge",
+        .default_enabled = true,
+    },
+    .{
+        .service_type = .wraith,
+        .name = "Wraith",
+        .maturity = .experimental,
+        .docs_path = "docs/features/services.md#wraith",
+        .default_enabled = false,
+    },
+    .{
+        .service_type = .cns_resolver,
+        .name = "CNS Resolver",
+        .maturity = .ghost_specific,
+        .docs_path = "docs/features/services.md#cns-resolver",
+        .default_enabled = false,
+    },
+    .{
+        .service_type = .zvm_integration,
+        .name = "ZVM Integration",
+        .maturity = .ghost_specific,
+        .docs_path = "docs/features/services.md#zvm-integration",
+        .default_enabled = false,
+    },
+};
+
+pub fn descriptorFor(service_type: ServiceType) ?ServiceDescriptor {
+    for (service_descriptors) |descriptor| {
+        if (descriptor.service_type == service_type) return descriptor;
+    }
+    return null;
+}
 
 pub const ServiceConfig = union(ServiceType) {
     ghostbridge: GhostBridgeConfig,
     wraith: WraithConfig,
+    cns_resolver: CnsResolverConfig,
+    zvm_integration: void,
     custom: struct {
         name: []const u8,
         config: []const u8, // JSON or custom format
@@ -101,3 +157,15 @@ pub const ServiceStatus = enum {
     stopped,
     errored,
 };
+
+test "service descriptors classify supported and experimental surfaces" {
+    const ghostbridge = descriptorFor(.ghostbridge).?;
+    try std.testing.expectEqual(ServiceMaturity.ghost_specific, ghostbridge.maturity);
+    try std.testing.expect(ghostbridge.default_enabled);
+
+    const wraith = descriptorFor(.wraith).?;
+    try std.testing.expectEqual(ServiceMaturity.experimental, wraith.maturity);
+    try std.testing.expect(!wraith.default_enabled);
+
+    try std.testing.expect(descriptorFor(.custom) == null);
+}

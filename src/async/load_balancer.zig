@@ -5,6 +5,8 @@
 const std = @import("std");
 const Connection = @import("../core/connection.zig");
 const NetAddress = @import("../net/address.zig");
+const Time = @import("../utils/time.zig");
+const SpinMutex = @import("../utils/sync.zig").SpinMutex;
 
 /// Load balancing strategy
 pub const LoadBalanceStrategy = enum {
@@ -70,7 +72,7 @@ pub const LoadBalancer = struct {
     round_robin_index: std.atomic.Value(u32),
     stats: LoadBalancerStats,
     allocator: std.mem.Allocator,
-    mutex: std.Thread.Mutex,
+    mutex: SpinMutex,
 
     const Self = @This();
 
@@ -171,7 +173,7 @@ pub const LoadBalancer = struct {
 
         if (total_weight == 0) return null;
 
-        var prng = std.Random.DefaultPrng.init(@intCast(std.time.timestamp()));
+        var prng = std.Random.DefaultPrng.init(@intCast(Time.nowNanos()));
         var random_weight = prng.random().intRangeAtMost(u32, 1, total_weight);
 
         for (self.backends.items) |*backend| {
@@ -193,7 +195,7 @@ pub const LoadBalancer = struct {
 
         if (healthy_count == 0) return null;
 
-        var prng = std.Random.DefaultPrng.init(@intCast(std.time.timestamp()));
+        var prng = std.Random.DefaultPrng.init(@intCast(Time.nowNanos()));
         var target = prng.random().intRangeAtMost(usize, 0, healthy_count - 1);
 
         for (self.backends.items) |*backend| {

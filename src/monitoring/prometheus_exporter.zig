@@ -4,6 +4,7 @@
 //! and renders them using the Prometheus text-based exposition format.
 
 const std = @import("std");
+const build_options = @import("build_options");
 const Time = @import("../utils/time.zig");
 
 pub const PrometheusMetrics = struct {
@@ -117,8 +118,11 @@ pub const PrometheusMetrics = struct {
         try self.writeMetric(&buffer, "zquic_http3_bytes_sent_total", "counter", "HTTP/3 response payload bytes", self.http3_bytes_out_total.load(.acquire));
 
         const samples = self.http3_latency_samples.load(.acquire);
-        const latency_avg = if (samples == 0) 0 else self.http3_latency_total_us.load(.acquire) / samples;
+        const latency_sum = self.http3_latency_total_us.load(.acquire);
+        const latency_avg = if (samples == 0) 0 else latency_sum / samples;
         try self.writeMetric(&buffer, "zquic_http3_latency_average_us", "gauge", "Average HTTP/3 latency (μs)", latency_avg);
+        try self.writeMetric(&buffer, "zquic_http3_request_duration_us_sum", "counter", "Total HTTP/3 request latency in microseconds", latency_sum);
+        try self.writeMetric(&buffer, "zquic_http3_request_duration_us_count", "counter", "HTTP/3 latency samples", samples);
         try self.writeMetric(&buffer, "zquic_http3_connections_active", "gauge", "Active HTTP/3 QUIC connections", @as(u64, @intCast(self.http3_connections_active.load(.acquire))));
 
         try self.writeMetric(&buffer, "zquic_doq_queries_total", "counter", "Total DNS-over-QUIC queries", self.doq_queries_total.load(.acquire));
@@ -134,6 +138,7 @@ pub const PrometheusMetrics = struct {
         try self.writeMetric(&buffer, "zquic_vpn_nat_entries_active", "gauge", "Active VPN NAT entries", self.vpn_nat_entries_active.load(.acquire));
 
         try self.writeMetric(&buffer, "zquic_metrics_uptime_seconds", "gauge", "Exporter uptime in seconds", self.uptimeSeconds());
+        try self.writeInfoMetric(&buffer, "zquic_build_info", "Build metadata for this zquic exporter");
 
         return buffer.toOwnedSlice();
     }
@@ -143,6 +148,21 @@ pub const PrometheusMetrics = struct {
         try buffer.print("# HELP {s} {s}\n", .{ name, help });
         try buffer.print("# TYPE {s} {s}\n", .{ name, metric_type });
         try buffer.print("{s} {any}\n", .{ name, value });
+    }
+
+    fn writeInfoMetric(self: *const Self, buffer: *std.array_list.Managed(u8), name: []const u8, help: []const u8) !void {
+        _ = self;
+        try buffer.print("# HELP {s} {s}\n", .{ name, help });
+        try buffer.print("# TYPE {s} gauge\n", .{name});
+        try buffer.print("{s}{{version=\"{s}\",http3=\"{}\",doq=\"{}\",vpn=\"{}\",services=\"{}\",monitoring=\"{}\"}} 1\n", .{
+            name,
+            build_options.version,
+            build_options.enable_http3,
+            build_options.enable_doq,
+            build_options.enable_vpn,
+            build_options.enable_services,
+            build_options.enable_monitoring,
+        });
     }
 };
 
@@ -162,6 +182,9 @@ test "prometheus exporter records metrics" {
     defer allocator.free(output);
 
     try std.testing.expect(std.mem.indexOf(u8, output, "zquic_http3_requests_total 1") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "zquic_http3_request_duration_us_sum 42") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "zquic_http3_request_duration_us_count 1") != null);
     try std.testing.expect(std.mem.indexOf(u8, output, "zquic_doq_failures_total 1") != null);
     try std.testing.expect(std.mem.indexOf(u8, output, "zquic_vpn_routes_active 4") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "zquic_build_info{version=\"0.9.14\"") != null);
 }

@@ -54,6 +54,8 @@ pub const ZquicError = error{
     InvalidPacket,
     InvalidFrame,
     FlowControlError,
+    FlowControlBlocked,
+    FlowControlViolation,
     StreamLimitError,
     StreamStateError,
     StreamNotFound,

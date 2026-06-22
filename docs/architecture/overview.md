@@ -2,7 +2,29 @@
 
 ZQUIC architecture and design principles for high-performance networking.
 
-## 🏗️ Architecture Layers
+## Architecture Layers
+
+```mermaid
+flowchart TB
+    app[Zig application]
+    h3[HTTP/3 server, router, middleware]
+    doq[DNS-over-QUIC]
+    services[Optional services: GhostBridge, Wraith, CNS]
+    quic[QUIC core transport]
+    crypto[Crypto layer: zcrypto v1.0.5]
+    runtime[Native async runtime and UDP networking]
+    ffi[Optional FFI boundary]
+
+    app --> h3
+    app --> doq
+    app --> services
+    h3 --> quic
+    doq --> quic
+    services --> quic
+    quic --> crypto
+    quic --> runtime
+    ffi --> quic
+```
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
@@ -17,18 +39,40 @@ ZQUIC architecture and design principles for high-performance networking.
 │                   QUIC Core Transport                      │
 │     (connection.zig, packet.zig, stream.zig)              │
 ├─────────────────────────────────────────────────────────────┤
-│              Crypto Layer (zcrypto v1.0.4)                │
-│   ML-KEM-768, ML-DSA-65, Ed25519, Secp256k1, Blake3, SHA256│
+│              Crypto Layer (zcrypto v1.0.5)                │
+│ X25519, Ed25519, AEAD, HKDF, Blake3, SHA256, experimental PQ│
 ├─────────────────────────────────────────────────────────────┤
 │                 Networking Foundation                      │
-│        (udp.zig, socket.zig, ipv6.zig, async.zig)         │
+│     (udp.zig, sys.zig, multiplexer.zig, async runtime)    │
 ├─────────────────────────────────────────────────────────────┤
 │                    FFI Integration Layer                   │
 │           (Cross-language bindings)                       │
 └─────────────────────────────────────────────────────────────┘
 ```
 
-## 🎯 Design Principles
+## Packet Flow
+
+```mermaid
+sequenceDiagram
+    participant App as Application
+    participant H3 as HTTP/3 or DoQ
+    participant Conn as QUIC Connection
+    participant Crypto as zcrypto
+    participant Net as UDP Socket
+
+    App->>H3: request/response bytes
+    H3->>Conn: stream frames
+    Conn->>Crypto: protect packet
+    Crypto-->>Conn: ciphertext + tag
+    Conn->>Net: UDP datagram
+    Net-->>Conn: UDP datagram
+    Conn->>Crypto: remove protection
+    Crypto-->>Conn: plaintext packet
+    Conn-->>H3: stream data
+    H3-->>App: parsed message
+```
+
+## Design Principles
 
 ### **Zero-Copy Operations**
 - Minimize memory allocations and copies throughout the stack
@@ -59,6 +103,13 @@ ZQUIC architecture and design principles for high-performance networking.
 - Lock-free data structures where possible
 - SIMD-friendly algorithms
 
+## Congestion Control
+
+NewReno is the stable default congestion controller for this release line. CUBIC
+and BBR remain selectable through the core congestion API, but NewReno is the
+documented baseline because its behavior is the simplest to reason about and is
+covered by the default regression suite.
+
 ## 🧩 Core Modules
 
 ### **src/core/** - QUIC Transport Core
@@ -77,17 +128,21 @@ src/core/
 └── errors.zig        # Error definitions
 ```
 
-### **src/crypto/** - Post-Quantum Cryptography
+### **src/crypto/** - Crypto Utilities And Experimental Integrations
 ```zig
 src/crypto/
-├── comprehensive_tls.zig    # Full TLS 1.3 implementation
-├── hybrid_pq_tls.zig       # Post-quantum hybrid TLS
+├── comprehensive_tls.zig    # Experimental TLS 1.3 scaffold
+├── hybrid_pq_tls.zig       # Experimental post-quantum hybrid TLS
 ├── zero_rtt_resumption.zig # 0-RTT session resumption
 ├── async_crypto.zig        # Asynchronous crypto processing
-├── tls.zig                 # TLS integration
+├── tls.zig                 # Compatibility TLS/key utility
+├── enhanced_tls.zig        # QUIC TLS key/AEAD utility
+├── ssh_quic.zig            # Draft SSH/QUIC secret injection
 ├── handshake.zig           # Handshake management
 └── keys.zig                # Key derivation & rotation
 ```
+
+Module maturity is tracked in `docs/features/crypto-maturity.md`.
 
 ### **src/http3/** - HTTP/3 Implementation
 ```zig
@@ -112,12 +167,16 @@ src/services/
 ### **src/net/** - Networking Foundation
 ```zig
 src/net/
-├── udp.zig           # UDP socket abstraction
-├── socket.zig        # Socket management
-├── ipv6.zig          # IPv6 support
+├── udp.zig           # UDP socket abstraction used by QUIC transport
+├── sys.zig           # Low-level socket syscall boundary
+├── multiplexer.zig   # Connection ID routing over UDP
 ├── address.zig       # Address handling
-└── async.zig         # Async networking with native runtime
+└── socket.zig        # Higher-level socket helpers
 ```
+
+`src/net/sys.zig` is the only module that should touch platform socket
+syscalls directly. Keeping that boundary small makes QUIC packet I/O easier to
+audit for portability, error mapping, and security review.
 
 ## 🔄 Data Flow
 

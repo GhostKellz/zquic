@@ -141,8 +141,8 @@ pub const Crypto = core.Crypto;
 
 /// Enhanced cryptographic layer with post-quantum support.
 ///
-/// Extends base crypto with hybrid key exchange (X25519 + ML-KEM-768)
-/// and quantum-safe signatures (ML-DSA-65).
+/// Extends base crypto with experimental hybrid key exchange
+/// (X25519 + ML-KEM-768) and ML-DSA-65 signatures.
 pub const EnhancedCrypto = core.EnhancedCrypto;
 
 /// TLS 1.3 handshake state machine for QUIC.
@@ -162,8 +162,8 @@ pub const Keys = core.Keys;
 
 /// SSH/QUIC integration for SSH-derived secret injection.
 ///
-/// Allows SSH key exchange to replace TLS handshake, enabling
-/// QUIC connections to use SSH-derived secrets per draft-denis-ssh-quic.
+/// Allows SSH-derived secrets to replace the TLS handshake in explicit
+/// draft SSH/QUIC integration paths.
 pub const SshQuic = core.SshQuic;
 
 /// Low-level UDP socket operations.
@@ -288,6 +288,15 @@ pub const post_quantum = if (build_options.enable_post_quantum) @import("post_qu
 /// - Latency histograms
 /// - Prometheus export endpoint
 pub const monitoring = if (build_options.enable_monitoring) @import("monitoring.zig") else struct {};
+
+/// Performance helpers for connection pooling and zero-copy packet processing.
+pub const performance = @import("performance.zig");
+
+/// Zero-RTT and PQ resumption ticket helpers.
+pub const zero_rtt_resumption = @import("crypto/zero_rtt_resumption.zig");
+
+/// Transport helpers for UDP multiplexing and connection routing.
+pub const transport = @import("transport.zig");
 
 // ============================================================================
 // Convenience Aliases
@@ -493,10 +502,23 @@ test "zquic modular library initialization" {
 
 test {
     // Import all conditionally available modules for testing
+    _ = @import("core/packet_space.zig");
+    _ = @import("core/recovery.zig");
+    _ = @import("core/stream.zig");
+    _ = @import("core/flow_control.zig");
+    _ = @import("core/stream_flow_control.zig");
+    _ = @import("core/congestion.zig");
+    _ = @import("core/connection_migration.zig");
+    _ = @import("utils/sync.zig");
+    _ = @import("net/sys.zig");
+    _ = @import("async/event_loop.zig");
+    _ = @import("async/runtime.zig");
+    _ = @import("async/load_balancer.zig");
     if (build_options.enable_http3) _ = http3;
     if (build_options.enable_doq) _ = doq;
     if (build_options.enable_vpn) _ = vpn;
     if (build_options.enable_services) _ = services;
     if (build_options.enable_post_quantum) _ = post_quantum;
     if (build_options.enable_monitoring) _ = monitoring;
+    _ = transport;
 }

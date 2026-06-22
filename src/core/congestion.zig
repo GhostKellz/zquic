@@ -11,7 +11,28 @@ pub const CongestionAlgorithm = enum {
     new_reno,
     cubic,
     bbr,
+
+    pub fn stableDefault() CongestionAlgorithm {
+        return .new_reno;
+    }
+
+    pub fn toString(self: CongestionAlgorithm) []const u8 {
+        return switch (self) {
+            .new_reno => "new_reno",
+            .cubic => "cubic",
+            .bbr => "bbr",
+        };
+    }
+
+    pub fn parse(value: []const u8) ?CongestionAlgorithm {
+        if (std.mem.eql(u8, value, "new_reno") or std.mem.eql(u8, value, "newreno")) return .new_reno;
+        if (std.mem.eql(u8, value, "cubic")) return .cubic;
+        if (std.mem.eql(u8, value, "bbr")) return .bbr;
+        return null;
+    }
 };
+
+pub const DEFAULT_CONGESTION_ALGORITHM = CongestionAlgorithm.stableDefault();
 
 /// Congestion control state
 pub const CongestionState = enum {
@@ -481,6 +502,14 @@ pub const CongestionController = union(CongestionAlgorithm) {
         };
     }
 
+    pub fn initDefault(max_datagram_size: u64) Self {
+        return init(DEFAULT_CONGESTION_ALGORITHM, max_datagram_size);
+    }
+
+    pub fn getAlgorithm(self: *const Self) CongestionAlgorithm {
+        return @as(CongestionAlgorithm, self.*);
+    }
+
     pub fn canSend(self: *const Self, packet_size: u64) bool {
         return switch (self.*) {
             .new_reno => |*cc| cc.canSend(packet_size),
@@ -596,4 +625,28 @@ test "congestion controller factory" {
 
     const available = cc.availableWindow();
     try std.testing.expect(available > 0);
+}
+
+test "congestion algorithm default and parser" {
+    try std.testing.expectEqual(CongestionAlgorithm.new_reno, DEFAULT_CONGESTION_ALGORITHM);
+    try std.testing.expectEqual(CongestionAlgorithm.new_reno, CongestionAlgorithm.parse("new_reno").?);
+    try std.testing.expectEqual(CongestionAlgorithm.new_reno, CongestionAlgorithm.parse("newreno").?);
+    try std.testing.expectEqual(CongestionAlgorithm.cubic, CongestionAlgorithm.parse("cubic").?);
+    try std.testing.expectEqual(CongestionAlgorithm.bbr, CongestionAlgorithm.parse("bbr").?);
+    try std.testing.expect(CongestionAlgorithm.parse("reno") == null);
+
+    var default_cc = CongestionController.initDefault(1200);
+    try std.testing.expectEqual(CongestionAlgorithm.new_reno, default_cc.getAlgorithm());
+}
+
+test "all congestion algorithms are selectable" {
+    const algorithms = [_]CongestionAlgorithm{ .new_reno, .cubic, .bbr };
+    for (algorithms) |algorithm| {
+        var cc = CongestionController.init(algorithm, 1200);
+        try std.testing.expectEqual(algorithm, cc.getAlgorithm());
+        try std.testing.expect(cc.canSend(1200));
+        cc.onPacketSent(1200);
+        cc.onPacketsAcked(1200, 1);
+        try std.testing.expect(cc.availableWindow() > 0);
+    }
 }

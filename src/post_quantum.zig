@@ -9,12 +9,20 @@ const zcrypto = @import("zcrypto");
 
 // Post-Quantum crypto support (zcrypto integration)
 pub const PostQuantum = @import("crypto/pq_quic.zig");
+pub const HybridPQTls = @import("crypto/hybrid_pq_tls.zig");
 
 // Re-export main PQ types
 pub const PQCipherSuite = PostQuantum.PQCipherSuite;
 pub const PQKeyExchange = PostQuantum.PQKeyExchange;
 pub const PQQuicContext = PostQuantum.PQQuicContext;
 pub const PQAuthentication = PostQuantum.PQAuthentication;
+pub const HybridConfig = HybridPQTls.HybridConfig;
+pub const HybridKeyExchange = HybridPQTls.HybridKeyExchange;
+pub const HybridPQTlsContext = HybridPQTls.HybridPQTlsContext;
+
+test {
+    _ = @import("performance/crypto_connection_multiplexer.zig");
+}
 
 // Assembly optimizations for high-performance crypto
 pub const Optimizations = @import("crypto/asm_optimizations.zig");

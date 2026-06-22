@@ -188,10 +188,25 @@ pub const SuperStream = struct {
 
     /// Write data to stream
     pub fn write(self: *Self, data: []const u8, fin: bool) !usize {
-        _ = fin;
+        const current_state = self.state.load(.acquire);
+        if (current_state == .closed or current_state == .half_closed_local) {
+            return Error.ZquicError.StreamStateError;
+        }
+
+        const bytes_sent = self.bytes_sent.load(.acquire);
+        const send_limit = self.send_window.load(.acquire);
+        if (bytes_sent + data.len > send_limit) {
+            return Error.ZquicError.FlowControlError;
+        }
 
         try self.write_buffer.appendSlice(self.allocator, data);
         _ = self.bytes_sent.fetchAdd(data.len, .acq_rel);
+        if (current_state == .idle) {
+            self.state.store(.open, .release);
+        }
+        if (fin) {
+            self.markLocalFin();
+        }
         try self.updateActivityTimestamp();
 
         return data.len;
@@ -214,7 +229,29 @@ pub const SuperStream = struct {
 
     /// Handle incoming data
     pub fn handleIncomingData(self: *Self, data: []const u8) !void {
+        try self.handleIncomingDataWithFin(data, false);
+    }
+
+    /// Handle incoming data and optional FIN from the peer.
+    pub fn handleIncomingDataWithFin(self: *Self, data: []const u8, fin: bool) !void {
+        const current_state = self.state.load(.acquire);
+        if (current_state == .closed or current_state == .half_closed_remote) {
+            return Error.ZquicError.StreamStateError;
+        }
+
+        const unread = self.read_buffer.items.len - self.read_start;
+        const recv_limit = self.recv_window.load(.acquire);
+        if (unread + data.len > recv_limit) {
+            return Error.ZquicError.FlowControlError;
+        }
+
         try self.read_buffer.appendSlice(self.allocator, data);
+        if (current_state == .idle) {
+            self.state.store(.open, .release);
+        }
+        if (fin) {
+            self.markRemoteFin();
+        }
         try self.updateActivityTimestamp();
     }
 
@@ -242,6 +279,26 @@ pub const SuperStream = struct {
     /// Close the stream
     pub fn close(self: *Self) !void {
         self.state.store(.closed, .release);
+    }
+
+    fn markLocalFin(self: *Self) void {
+        const current_state = self.state.load(.acquire);
+        const next_state: StreamState = switch (current_state) {
+            .half_closed_remote => .closed,
+            .closed => .closed,
+            else => .half_closed_local,
+        };
+        self.state.store(next_state, .release);
+    }
+
+    fn markRemoteFin(self: *Self) void {
+        const current_state = self.state.load(.acquire);
+        const next_state: StreamState = switch (current_state) {
+            .half_closed_local => .closed,
+            .closed => .closed,
+            else => .half_closed_remote,
+        };
+        self.state.store(next_state, .release);
     }
 
     /// Get stream statistics
@@ -292,4 +349,25 @@ test "stream read write" {
     var buffer: [32]u8 = undefined;
     const read_len = try stream.read(&buffer);
     try std.testing.expect(read_len == 9);
+}
+
+test "stream fin transitions reject writes after local fin" {
+    var stream = try SuperStream.init(std.testing.allocator, 0, .client_bidirectional);
+    defer stream.deinit();
+
+    _ = try stream.write("done", true);
+    try std.testing.expectEqual(StreamState.half_closed_local, stream.state.load(.acquire));
+    try std.testing.expectError(Error.ZquicError.StreamStateError, stream.write("more", false));
+
+    try stream.handleIncomingDataWithFin("", true);
+    try std.testing.expectEqual(StreamState.closed, stream.state.load(.acquire));
+}
+
+test "stream receive flow control rejects oversized data" {
+    var stream = try SuperStream.init(std.testing.allocator, 0, .client_bidirectional);
+    defer stream.deinit();
+
+    stream.recv_window.store(4, .release);
+    try stream.handleIncomingData("abcd");
+    try std.testing.expectError(Error.ZquicError.FlowControlError, stream.handleIncomingData("e"));
 }

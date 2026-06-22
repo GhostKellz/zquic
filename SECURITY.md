@@ -4,9 +4,9 @@
 
 | Version | Status |
 |---------|--------|
-| `0.9.13` | Supported |
+| `0.9.14` | Supported |
 | `main` | Best effort |
-| `< 0.9.13` | Not supported |
+| `< 0.9.14` | Not supported |
 
 Security fixes are targeted at the current release line first.
 
@@ -43,13 +43,15 @@ It also includes integration risks where `zquic` misuses dependencies in a way t
 
 ## Crypto Status
 
-`zquic` uses `zcrypto v1.0.4` for parts of its cryptographic implementation.
+`zquic` uses `zcrypto v1.0.5` for parts of its cryptographic implementation.
 
 Current support posture:
 
 - stable/default builds are the primary supported security target
+- stable cryptographic paths include QUIC packet helpers, X25519, Ed25519, SHA-256/SHA-384, HKDF, AES-GCM, ChaCha20-Poly1305, Blake3, and secure random bytes through `zcrypto`
 - post-quantum support is **experimental** and requires both `-Dpost-quantum=true` and `-Dexperimental-crypto=true`
 - experimental PQ code should not be treated as production-grade cryptographic assurance unless explicitly documented otherwise
+- unsupported algorithm claims, including RSA or SLH-DSA support, should be treated as docs/claim bugs unless a future release implements and tests those paths
 
 Known boundary conditions matter for responsible reporting:
 
@@ -87,8 +89,48 @@ For production deployments:
 - use the latest supported Zig toolchain for this release line
 - prefer the default stable crypto path unless you are intentionally evaluating PQ features
 - do not enable experimental PQ features in production without your own review and validation
+- when evaluating PQ resumption, configure persistent ticket issuer material;
+  the random in-memory issuer intentionally invalidates tickets on process
+  restart
+- rotate PQ ticket issuers by deploying a new active issuer and keeping the
+  previous issuer only for the maximum ticket lifetime
 - keep certificates, keys, and private material out of the repository and test fixtures
 - run the full local validation/test workflow before shipping changes
+
+## Security Review Model
+
+`zquic` uses NIST Cybersecurity Framework-style review categories for release
+work, without claiming external certification:
+
+- **Identify:** track supported versions, feature flags, dependency hashes, and
+  experimental modules in release docs.
+- **Protect:** keep stable defaults conservative, isolate platform socket
+  syscalls in `src/net/sys.zig`, and gate PQ behind explicit experimental flags.
+- **Detect:** keep parser fuzzing, integration tests, Prometheus metrics, and
+  advisory docs active in the release workflow.
+- **Respond:** handle private vulnerability reports first, triage by reachable
+  impact, and separate implementation bugs from docs/claim mismatches.
+- **Recover:** release fixed tags only after default, integration, fuzz, and
+  crypto-gated test paths pass.
+
+## Dependency And Release Auditing
+
+Dependencies are pinned in `build.zig.zon` with archive URLs and Zig package
+hashes. Release validation should include:
+
+```bash
+/opt/zig-dev/zig build --summary all
+/opt/zig-dev/zig build test --summary all
+/opt/zig-dev/zig build integration-tests --summary all
+/opt/zig-dev/zig build fuzz-tests --summary all
+/opt/zig-dev/zig build -Dpost-quantum=true -Dexperimental-crypto=true --summary all
+```
+
+Known accepted and resolved advisories are tracked under
+[`docs/advisories/`](docs/advisories/):
+
+- [`docs/advisories/accepted.md`](docs/advisories/accepted.md) - knowingly accepted advisories
+- [`docs/advisories/resolved.md`](docs/advisories/resolved.md) - advisories cleared by dependency or code updates
 
 ## Non-Goals
 

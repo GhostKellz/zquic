@@ -8,14 +8,14 @@ Get up and running with ZQUIC in minutes.
 
 ```bash
 # Add ZQUIC to your project
-zig fetch --save https://github.com/ghostkellz/zquic/archive/refs/heads/main.tar.gz
+zig fetch --save https://github.com/ghostkellz/zquic/archive/refs/tags/v0.9.14.tar.gz
 ```
 
 Add to your `build.zig.zon`:
 ```zig
 .dependencies = .{
     .zquic = .{
-        .url = "https://github.com/ghostkellz/zquic/archive/refs/heads/main.tar.gz",
+        .url = "https://github.com/ghostkellz/zquic/archive/refs/tags/v0.9.14.tar.gz",
         .hash = "1234...", // Auto-filled by zig fetch
     },
 },

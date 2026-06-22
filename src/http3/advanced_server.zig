@@ -17,7 +17,9 @@ const Connection = @import("../core/connection.zig").Connection;
 const Stream = @import("../core/stream.zig");
 const Frame = @import("frame.zig");
 const QpackDecoder = @import("qpack.zig").QpackDecoder;
+const Method = @import("request.zig").Method;
 const Request = @import("request.zig").Request;
+const StatusCode = @import("response.zig").StatusCode;
 const Response = @import("response.zig").Response;
 const EnhancedUdpMultiplexer = @import("../transport/enhanced_multiplexer.zig").EnhancedUdpMultiplexer;
 const NetAddress = @import("../net/address.zig");
@@ -120,7 +122,7 @@ pub const BackendServer = struct {
     }
 
     pub fn deinit(self: *Self) void {
-        self.connection_pool.deinit(allocator);
+        self.connection_pool.deinit();
     }
 
     pub fn isHealthy(self: *const Self) bool {
@@ -309,7 +311,7 @@ pub const ConnectionPool = struct {
     pub fn deinit(self: *ConnectionPool) void {
         for (self.connections.items) |*conn| {
             if (conn.connection) |c| {
-                c.close();
+                c.deinit();
             }
         }
         self.connections.deinit(self.allocator);
@@ -367,7 +369,7 @@ pub const ConnectionPool = struct {
             const conn = &self.connections.items[i];
             if (!conn.in_use and conn.isExpired(max_age_ms)) {
                 if (conn.connection) |c| {
-                    c.close();
+                    c.deinit();
                 }
                 _ = self.connections.swapRemove(i);
 
@@ -465,7 +467,7 @@ pub const LoadBalancer = struct {
 
     pub fn deinit(self: *LoadBalancer) void {
         for (self.backends.items) |*backend| {
-            backend.deinit(self.allocator);
+            backend.deinit();
         }
         self.backends.deinit(self.allocator);
 
@@ -503,20 +505,20 @@ pub const LoadBalancer = struct {
     }
 
     pub fn selectBackend(self: *LoadBalancer, request: *const Request) ?*BackendServer {
-        const healthy_backends = self.getHealthyBackends();
-        if (healthy_backends.len == 0) return null;
+        if (self.backends.items.len == 0) return null;
 
         switch (self.algorithm) {
             .round_robin => {
-                const index = self.current_index % healthy_backends.len;
+                const index = self.current_index % self.backends.items.len;
                 self.current_index += 1;
-                return healthy_backends[index];
+                return &self.backends.items[index];
             },
             .least_connections => {
                 var best_backend: ?*BackendServer = null;
                 var min_load: f64 = std.math.inf(f64);
 
-                for (healthy_backends) |backend| {
+                for (self.backends.items) |*backend| {
+                    if (!backend.isAvailable()) continue;
                     const load = backend.getLoad();
                     if (load < min_load) {
                         min_load = load;
@@ -529,7 +531,8 @@ pub const LoadBalancer = struct {
             .weighted_round_robin => {
                 // Weighted round robin implementation
                 var total_weight: u32 = 0;
-                for (healthy_backends) |backend| {
+                for (self.backends.items) |*backend| {
+                    if (!backend.isAvailable()) continue;
                     total_weight += backend.config.weight;
                 }
 
@@ -539,20 +542,22 @@ pub const LoadBalancer = struct {
                 self.current_index += 1;
 
                 var current_weight: u32 = 0;
-                for (healthy_backends) |backend| {
+                for (self.backends.items) |*backend| {
+                    if (!backend.isAvailable()) continue;
                     current_weight += backend.config.weight;
                     if (current_weight > target) {
                         return backend;
                     }
                 }
 
-                return healthy_backends[0];
+                return null;
             },
             .least_response_time => {
                 var best_backend: ?*BackendServer = null;
                 var min_response_time: f64 = std.math.inf(f64);
 
-                for (healthy_backends) |backend| {
+                for (self.backends.items) |*backend| {
+                    if (!backend.isAvailable()) continue;
                     const response_time = backend.getAverageResponseTime();
                     if (response_time < min_response_time) {
                         min_response_time = response_time;
@@ -563,17 +568,18 @@ pub const LoadBalancer = struct {
                 return best_backend;
             },
             .ip_hash => {
-                const client_ip = request.getClientIP();
-                const hash = std.hash_map.hashString(client_ip);
-                const index = hash % healthy_backends.len;
-                return healthy_backends[index];
+                const client_key = requestClientKey(request);
+                const hash = std.hash_map.hashString(client_key);
+                const index = hash % self.backends.items.len;
+                return &self.backends.items[index];
             },
             .consistent_hash => {
                 if (self.hash_ring) |*ring| {
-                    const client_ip = request.getClientIP();
-                    const host = ring.getNode(client_ip);
+                    const client_key = requestClientKey(request);
+                    const host = ring.getNode(client_key);
 
-                    for (healthy_backends) |backend| {
+                    for (self.backends.items) |*backend| {
+                        if (!backend.isAvailable()) continue;
                         if (std.mem.eql(u8, backend.config.host, host)) {
                             return backend;
                         }
@@ -581,21 +587,19 @@ pub const LoadBalancer = struct {
                 }
 
                 // Fallback to round robin
-                const index = self.current_index % healthy_backends.len;
+                const index = self.current_index % self.backends.items.len;
                 self.current_index += 1;
-                return healthy_backends[index];
+                return &self.backends.items[index];
             },
             .random => {
-                const index = std.crypto.random.uintLessThan(u32, healthy_backends.len);
-                return healthy_backends[index];
+                const index = std.crypto.random.uintLessThan(usize, self.backends.items.len);
+                return &self.backends.items[index];
             },
         }
     }
 
-    fn getHealthyBackends(self: *LoadBalancer) []BackendServer {
-        // Return the full backends list - caller filters by isAvailable
-        // This avoids allocation in hot path
-        return self.backends.items;
+    fn requestClientKey(request: *const Request) []const u8 {
+        return request.getHeader("x-forwarded-for") orelse request.getHeader("host") orelse request.path;
     }
 
     pub fn getStats(self: *const LoadBalancer) LoadBalancerStats {
@@ -878,18 +882,11 @@ pub const AdvancedHttp3Server = struct {
 
     /// Process streams for a connection
     fn processConnectionStreams(self: *Self, context: *ConnectionContext) !void {
-        // This would be called in an async context
-        while (true) {
-            // Accept new streams
-            if (context.connection.acceptStream()) |stream| {
-                try self.handleStream(context, stream);
-            } else |err| {
-                if (err == Error.ZquicError.WouldBlock) {
-                    // No new streams available
-                    break;
-                }
-                return err;
-            }
+        const streams = try context.connection.collectOpenStreams(self.allocator);
+        defer self.allocator.free(streams);
+
+        for (streams) |stream| {
+            try self.handleStream(context, stream);
         }
     }
 
@@ -899,14 +896,14 @@ pub const AdvancedHttp3Server = struct {
 
         // Parse HTTP/3 request
         const request = try self.parseRequest(stream);
-        defer request.deinit(allocator);
+        defer request.deinit();
 
         // Update activity
         context.updateActivity();
 
         // Apply middleware
-        var response = Response.init(allocator);
-        defer response.deinit(allocator);
+        var response = Response.init(self.allocator, request.context.stream_id);
+        defer response.deinit();
 
         for (self.middleware_stack.items) |middleware| {
             try middleware.process(&request, &response);
@@ -925,11 +922,11 @@ pub const AdvancedHttp3Server = struct {
         // Update statistics
         const request_duration = Time.nowMicros() - request_start;
         self.stats.incrementRequest();
-        self.stats.addBytesReceived(request.getContentLength());
-        self.stats.addBytesSent(response.getContentLength());
+        self.stats.addBytesReceived(request.getContentLength() orelse request.getBody().len);
+        self.stats.addBytesSent(response.getBodySize());
 
         // Record metrics
-        self.metrics_collector.recordRequest(request_duration, response.status_code);
+        self.metrics_collector.recordRequest(request_duration, @intFromEnum(response.status));
     }
 
     /// Handle proxy request
@@ -938,15 +935,15 @@ pub const AdvancedHttp3Server = struct {
 
         if (self.load_balancer) |*lb| {
             const backend = lb.selectBackend(request) orelse {
-                response.setStatus(503);
-                try response.setBody("Service Unavailable");
+                response.setStatus(.service_unavailable);
+                try response.write("Service Unavailable");
                 return;
             };
 
             // Check circuit breaker
             if (!backend.circuit_breaker.canExecute()) {
-                response.setStatus(503);
-                try response.setBody("Service Unavailable - Circuit Breaker Open");
+                response.setStatus(.service_unavailable);
+                try response.write("Service Unavailable - Circuit Breaker Open");
                 return;
             }
 
@@ -955,27 +952,30 @@ pub const AdvancedHttp3Server = struct {
 
             // Get connection from pool
             const conn = backend.connection_pool.getConnection() orelse {
-                response.setStatus(503);
-                try response.setBody("Service Unavailable - No Connections");
+                response.setStatus(.service_unavailable);
+                try response.write("Service Unavailable - No Connections");
                 backend.circuit_breaker.recordFailure();
                 return;
             };
 
             // Forward request to backend
-            const backend_response = self.forwardRequest(conn, request) catch |err| {
+            var backend_response = self.forwardRequest(conn, request) catch {
                 backend.circuit_breaker.recordFailure();
-                response.setStatus(502);
-                try response.setBody("Bad Gateway");
+                response.setStatus(.bad_gateway);
+                try response.write("Bad Gateway");
                 return;
             };
+            defer backend_response.deinit();
 
             // Record success
             backend.circuit_breaker.recordSuccess();
 
             // Copy response from backend
-            response.status_code = backend_response.status_code;
-            response.headers = backend_response.headers;
-            response.body = backend_response.body;
+            response.status = backend_response.status;
+            for (backend_response.headers.fields.items) |field| {
+                try response.addHeader(field.name, field.value);
+            }
+            try response.write(backend_response.getBody());
 
             // Return connection to pool
             backend.connection_pool.returnConnection(conn);
@@ -986,15 +986,15 @@ pub const AdvancedHttp3Server = struct {
     fn handleDirectRequest(self: *Self, context: *ConnectionContext, request: *const Request, response: *Response) !void {
         _ = context;
 
-        if (self.router.findRoute(request.method, request.path)) |route| {
+        if (self.router.findRoute(request.method.toString(), request.path)) |route| {
             try route.handler(request, response);
         } else {
             // Check for static files
             if (self.config.static_files_root) |root| {
                 try self.handleStaticFile(root, request, response);
             } else {
-                response.setStatus(404);
-                try response.setBody("Not Found");
+                response.setStatus(.not_found);
+                try response.write("Not Found");
             }
         }
     }
@@ -1006,19 +1006,17 @@ pub const AdvancedHttp3Server = struct {
         _ = request;
 
         // Static file serving implementation
-        response.setStatus(404);
-        try response.setBody("Not Found");
+        response.setStatus(.not_found);
+        try response.write("Not Found");
     }
 
     /// Forward request to backend
     fn forwardRequest(self: *Self, connection: *Connection, request: *const Request) !Response {
-        _ = self;
         _ = connection;
-        _ = request;
 
         // Implementation would forward the request to the backend
         // and return the response
-        return Response.init(allocator);
+        return Response.init(self.allocator, request.context.stream_id);
     }
 
     /// Parse HTTP/3 request from stream
@@ -1026,7 +1024,7 @@ pub const AdvancedHttp3Server = struct {
         _ = stream;
 
         // Implementation would parse HTTP/3 frames to construct request
-        return Request.init(allocator);
+        return Request.init(self.allocator, 0, "");
     }
 
     /// Send HTTP/3 response

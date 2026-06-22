@@ -6,6 +6,25 @@ const zquic = @import("zquic");
 const DoQ = zquic.DoQ;
 const Error = zquic.Error;
 
+fn makeQuery(allocator: std.mem.Allocator, id: u16, name: []const u8, qtype: DoQ.DnsRecordType) !DoQ.DnsMessage {
+    var message = DoQ.DnsMessage.init(allocator);
+    message.header = DoQ.DnsHeader{
+        .id = id,
+        .flags = 0x0100,
+        .qdcount = 1,
+        .ancount = 0,
+        .nscount = 0,
+        .arcount = 0,
+    };
+    message.questions = try allocator.alloc(DoQ.DnsQuestion, 1);
+    message.questions[0] = DoQ.DnsQuestion{
+        .name = try allocator.dupe(u8, name),
+        .qtype = @intFromEnum(qtype),
+        .qclass = 1,
+    };
+    return message;
+}
+
 fn writeTempCertFiles(allocator: std.mem.Allocator) !struct { cert: [:0]const u8, key: [:0]const u8, tmp: std.testing.TmpDir } {
     const io = std.testing.io;
     var tmp_dir = std.testing.tmpDir(.{});
@@ -16,6 +35,94 @@ fn writeTempCertFiles(allocator: std.mem.Allocator) !struct { cert: [:0]const u8
     const key_path = try tmp_dir.dir.realPathFileAlloc(io, "key.pem", allocator);
 
     return .{ .cert = cert_path, .key = key_path, .tmp = tmp_dir };
+}
+
+test "doq parses compressed answer names" {
+    const allocator = std.testing.allocator;
+
+    const wire = [_]u8{
+        0x12, 0x34, 0x81, 0x80, 0x00, 0x01, 0x00, 0x01,
+        0x00, 0x00, 0x00, 0x00, 0x07, 'e',  'x',  'a',
+        'm',  'p',  'l',  'e',  0x03, 'c',  'o',  'm',
+        0x00, 0x00, 0x01, 0x00, 0x01, 0xC0, 0x0C, 0x00,
+        0x01, 0x00, 0x01, 0x00, 0x00, 0x00, 0x3C, 0x00,
+        0x04, 127,  0,    0,    1,
+    };
+
+    var parsed = try DoQ.DnsMessage.parseFromStream(allocator, &wire);
+    defer parsed.deinit();
+
+    try std.testing.expectEqual(@as(u16, 0x1234), parsed.header.id);
+    try std.testing.expectEqualStrings("example.com", parsed.questions[0].name);
+    try std.testing.expectEqualStrings("example.com", parsed.answers[0].name);
+    try std.testing.expectEqualSlices(u8, &[_]u8{ 127, 0, 0, 1 }, parsed.answers[0].rdata);
+}
+
+test "doq rejects malformed compression pointer" {
+    const allocator = std.testing.allocator;
+
+    const wire = [_]u8{
+        0x12, 0x34, 0x01, 0x00, 0x00, 0x01, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0xC0, 0xFF, 0x00, 0x01,
+        0x00, 0x01,
+    };
+
+    try std.testing.expectError(Error.ZquicError.InvalidArgument, DoQ.DnsMessage.parseFromStream(allocator, &wire));
+}
+
+test "doq parses multiple concurrent query messages independently" {
+    const allocator = std.testing.allocator;
+    const names = [_][]const u8{ "alpha.zquic.dev", "beta.zquic.dev", "gamma.zquic.dev" };
+    var serialized: [names.len][]u8 = undefined;
+
+    for (names, 0..) |name, i| {
+        var query = try makeQuery(allocator, @intCast(0x2000 + i), name, .A);
+        defer query.deinit();
+        serialized[i] = try query.serializeToStream(allocator);
+    }
+    defer {
+        for (serialized) |bytes| allocator.free(bytes);
+    }
+
+    for (serialized, 0..) |bytes, i| {
+        var parsed = try DoQ.DnsMessage.parseFromStream(allocator, bytes);
+        defer parsed.deinit();
+
+        try std.testing.expectEqual(@as(u16, @intCast(0x2000 + i)), parsed.header.id);
+        try std.testing.expectEqualStrings(names[i], parsed.questions[0].name);
+    }
+}
+
+test "doq maps NXDOMAIN and SERVFAIL responses" {
+    const allocator = std.testing.allocator;
+
+    var query = try makeQuery(allocator, 0xBEEF, "missing.zquic.dev", .AAAA);
+    defer query.deinit();
+
+    var nxdomain = try DoQ.createResponseForQuery(allocator, &query, .NXDomain);
+    defer nxdomain.deinit();
+    try std.testing.expectEqual(DoQ.DnsResponseCode.NXDomain, nxdomain.responseCode());
+    try std.testing.expectEqual(@as(u16, 0xBEEF), nxdomain.header.id);
+    try std.testing.expectEqualStrings("missing.zquic.dev", nxdomain.questions[0].name);
+
+    var servfail = try DoQ.createResponseForQuery(allocator, &query, .ServFail);
+    defer servfail.deinit();
+    try std.testing.expectEqual(DoQ.DnsResponseCode.ServFail, servfail.responseCode());
+}
+
+test "doq rejects oversized and over-counted messages" {
+    const allocator = std.testing.allocator;
+
+    const oversized = try allocator.alloc(u8, DoQ.Message.max_dns_message_size + 1);
+    defer allocator.free(oversized);
+    @memset(oversized, 0);
+    try std.testing.expectError(Error.ZquicError.InvalidArgument, DoQ.DnsMessage.parseFromStream(allocator, oversized));
+
+    const too_many_questions = [_]u8{
+        0x12, 0x34, 0x01, 0x00, 0x10, 0x01, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00,
+    };
+    try std.testing.expectError(Error.ZquicError.InvalidArgument, DoQ.DnsMessage.parseFromStream(allocator, &too_many_questions));
 }
 
 test "doq server initializes and exposes stats" {

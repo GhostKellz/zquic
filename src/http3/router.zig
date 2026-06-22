@@ -316,6 +316,15 @@ pub const Router = struct {
             }
         }
 
+        if (self.pathExistsForDifferentMethod(request.path)) {
+            response.setStatus(.method_not_allowed);
+            const allow = try self.allowedMethodsForPath(request.path);
+            defer self.allocator.free(allow);
+            try response.setHeader("allow", allow);
+            try response.text("405 - Method Not Allowed");
+            return;
+        }
+
         if (self.global_middleware.items.len > 0) {
             var fallback = try Route.init(self.allocator, request.method, request.path, notFoundThunk);
             defer fallback.deinit();
@@ -368,6 +377,54 @@ pub const Router = struct {
             }
         }
         return null;
+    }
+
+    fn pathExistsForDifferentMethod(self: *Self, path: []const u8) bool {
+        var params = RouteParams.init(self.allocator);
+        defer params.deinit();
+
+        for (self.routes.items) |*route| {
+            params.deinit();
+            params = RouteParams.init(self.allocator);
+            if (route.pattern.match(path, &params)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    fn allowedMethodsForPath(self: *Self, path: []const u8) ![]const u8 {
+        var methods: std.ArrayListUnmanaged([]const u8) = .empty;
+        defer methods.deinit(self.allocator);
+
+        var params = RouteParams.init(self.allocator);
+        defer params.deinit();
+
+        for (self.routes.items) |*route| {
+            params.deinit();
+            params = RouteParams.init(self.allocator);
+            if (!route.pattern.match(path, &params)) continue;
+
+            const method = route.method.toString();
+            var already_present = false;
+            for (methods.items) |existing| {
+                if (std.mem.eql(u8, existing, method)) {
+                    already_present = true;
+                    break;
+                }
+            }
+            if (!already_present) {
+                try methods.append(self.allocator, method);
+            }
+        }
+
+        var out: std.ArrayListUnmanaged(u8) = .empty;
+        errdefer out.deinit(self.allocator);
+        for (methods.items, 0..) |method, i| {
+            if (i > 0) try out.appendSlice(self.allocator, ", ");
+            try out.appendSlice(self.allocator, method);
+        }
+        return out.toOwnedSlice(self.allocator);
     }
 };
 
@@ -496,7 +553,8 @@ fn setTestRequestPath(request: *Request, path: []const u8) !void {
 
 const TestHelpers = struct {
     const MiddlewareState = struct {
-        log: *std.ArrayList(u8),
+        log: *std.ArrayListUnmanaged(u8),
+        allocator: std.mem.Allocator,
     };
 
     fn stateFromRequest(request: *Request) *MiddlewareState {
@@ -505,7 +563,8 @@ const TestHelpers = struct {
     }
 
     fn appendLog(request: *Request, value: u8) Error.ZquicError!void {
-        stateFromRequest(request).log.append(value) catch |err| {
+        const state = stateFromRequest(request);
+        state.log.append(state.allocator, value) catch |err| {
             return Error.ErrorHandling.mapStdError(err);
         };
     }
@@ -515,14 +574,18 @@ test "route pattern matching" {
     var pattern = try RoutePattern.init(std.testing.allocator, "/users/:id/posts/:post_id");
     defer pattern.deinit();
 
-    var params = std.StringHashMap([]const u8).init(std.testing.allocator);
+    var params = RouteParams.init(std.testing.allocator);
     defer params.deinit();
 
     try std.testing.expect(pattern.match("/users/123/posts/456", &params));
     try std.testing.expect(std.mem.eql(u8, params.get("id").?, "123"));
     try std.testing.expect(std.mem.eql(u8, params.get("post_id").?, "456"));
 
+    params.deinit();
+    params = RouteParams.init(std.testing.allocator);
     try std.testing.expect(!pattern.match("/users/123", &params));
+    params.deinit();
+    params = RouteParams.init(std.testing.allocator);
     try std.testing.expect(!pattern.match("/invalid/path", &params));
 }
 
@@ -564,6 +627,34 @@ test "router functionality" {
     try std.testing.expect(router.routes.items.len == 2);
 }
 
+test "router returns 405 when path exists for another method" {
+    const allocator = std.testing.allocator;
+
+    var router = Router.init(allocator);
+    defer router.deinit();
+
+    const testHandler = struct {
+        fn handler(_: *Request, res: *Response) Error.ZquicError!void {
+            try res.text("ok");
+        }
+    }.handler;
+
+    try router.get("/resource", testHandler);
+    try router.post("/resource", testHandler);
+
+    var request = Request.init(allocator, 1, "conn");
+    defer request.deinit();
+    request.method = .DELETE;
+    try setTestRequestPath(&request, "/resource");
+
+    var response = Response.init(allocator, 1);
+    defer response.deinit();
+
+    try router.handleRequest(&request, &response);
+    try std.testing.expectEqual(.method_not_allowed, response.status);
+    try std.testing.expectEqualStrings("GET, POST", response.headers.get("allow").?);
+}
+
 test "router middleware executes global then route" {
     const allocator = std.testing.allocator;
 
@@ -603,10 +694,10 @@ test "router middleware executes global then route" {
     var response = Response.init(allocator, 1);
     defer response.deinit();
 
-    var call_order = std.array_list.Managed(u8).init(allocator);
-    defer call_order.deinit();
+    var call_order = std.ArrayListUnmanaged(u8).empty;
+    defer call_order.deinit(allocator);
 
-    var state = TestHelpers.MiddlewareState{ .log = &call_order };
+    var state = TestHelpers.MiddlewareState{ .log = &call_order, .allocator = allocator };
     request.context.user_data = &state;
 
     try router.handleRequest(&request, &response);
@@ -649,10 +740,10 @@ test "router middleware can short circuit handler" {
     var response = Response.init(allocator, 2);
     defer response.deinit();
 
-    var call_order = std.array_list.Managed(u8).init(allocator);
-    defer call_order.deinit();
+    var call_order = std.ArrayListUnmanaged(u8).empty;
+    defer call_order.deinit(allocator);
 
-    var state = TestHelpers.MiddlewareState{ .log = &call_order };
+    var state = TestHelpers.MiddlewareState{ .log = &call_order, .allocator = allocator };
     request.context.user_data = &state;
 
     try router.handleRequest(&request, &response);

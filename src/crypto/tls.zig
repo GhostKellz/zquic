@@ -58,6 +58,13 @@ pub const CryptoKeys = struct {
         };
     }
 
+    pub fn zeroize(self: *Self) void {
+        std.crypto.secureZero(u8, &self.secret);
+        std.crypto.secureZero(u8, &self.key);
+        std.crypto.secureZero(u8, &self.iv);
+        std.crypto.secureZero(u8, &self.header_protection_key);
+    }
+
     /// Derive keys from a secret (simplified implementation)
     pub fn deriveFromSecret(secret: []const u8) Error.ZquicError!Self {
         if (secret.len == 0) {
@@ -139,6 +146,9 @@ pub const TlsContext = struct {
     }
 
     pub fn deinit(self: *Self) void {
+        if (self.initial_keys) |*keys| keys.zeroize();
+        if (self.handshake_keys) |*keys| keys.zeroize();
+        if (self.application_keys) |*keys| keys.zeroize();
         if (self.client_hello) |data| self.allocator.free(data);
         if (self.server_hello) |data| self.allocator.free(data);
         if (self.certificate) |data| self.allocator.free(data);

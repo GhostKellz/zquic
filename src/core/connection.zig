@@ -8,6 +8,7 @@ const Error = @import("../utils/error.zig");
 const Time = @import("../utils/time.zig");
 const Packet = @import("packet.zig");
 const Stream = @import("stream.zig");
+const SpinMutex = @import("../utils/sync.zig").SpinMutex;
 
 /// Connection states according to RFC 9000
 pub const ConnectionState = enum {
@@ -243,13 +244,8 @@ pub const SuperConnection = struct {
     fn handleStreamData(self: *Self, stream_id: u64, data: []const u8, fin: bool) !void {
         if (self.streams.get(stream_id)) |stream| {
             // Write incoming data to the stream's read buffer (not write buffer)
-            try stream.handleIncomingData(data);
+            try stream.handleIncomingDataWithFin(data, fin);
             self.stats.bytes_received += data.len;
-
-            // Handle FIN flag - mark stream as half-closed from remote
-            if (fin) {
-                try stream.close();
-            }
         } else {
             // Stream doesn't exist - per RFC 9000, this could be a new stream
             // initiated by the peer. Log for debugging.
@@ -289,6 +285,24 @@ pub const SuperConnection = struct {
     /// Receive packet
     pub fn receivePacketAsync(self: *Self, packet: Packet.Packet) !void {
         try self.incoming_packets.append(self.allocator, packet);
+    }
+
+    pub fn collectOpenStreams(self: *Self, allocator: std.mem.Allocator) ![]*Stream.Stream {
+        var streams = try allocator.alloc(*Stream.Stream, self.streams.count());
+        errdefer allocator.free(streams);
+
+        var count: usize = 0;
+        var iterator = self.streams.iterator();
+        while (iterator.next()) |entry| {
+            const stream = entry.value_ptr.*;
+            const state = stream.state.load(.acquire);
+            if (state != .closed) {
+                streams[count] = stream;
+                count += 1;
+            }
+        }
+
+        return allocator.realloc(streams, count);
     }
 
     /// Get connection statistics
@@ -604,6 +618,12 @@ pub const Connection = struct {
         return self.super_connection.streams.get(stream_id);
     }
 
+    /// Collect currently open streams for protocol integrations such as HTTP/3.
+    /// Caller owns the returned slice; streams remain owned by the connection.
+    pub fn collectOpenStreams(self: *Self, allocator: std.mem.Allocator) ![]*Stream.Stream {
+        return self.super_connection.collectOpenStreams(allocator);
+    }
+
     /// Get connection state
     pub fn getState(self: *const Self) ConnectionState {
         return self.super_connection.state;
@@ -651,7 +671,7 @@ pub const SuperConnectionPool = struct {
     active: std.ArrayListUnmanaged(*SuperConnection),
     allocator: std.mem.Allocator,
     stats: PoolStats,
-    mutex: std.Thread.Mutex,
+    mutex: SpinMutex,
 
     pub const PoolStats = struct {
         connections_created: u64 = 0,
@@ -696,7 +716,8 @@ pub const SuperConnectionPool = struct {
         defer self.mutex.unlock();
 
         // Try to get from available pool first
-        if (self.available.popOrNull()) |conn| {
+        if (self.available.items.len > 0) {
+            const conn = self.available.orderedRemove(self.available.items.len - 1);
             try self.active.append(self.allocator, conn);
             self.stats.connections_active += 1;
             return conn;

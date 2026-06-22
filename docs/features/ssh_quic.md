@@ -1,10 +1,10 @@
 # SSH/QUIC Secret Injection
 
-> **Status:** Production-ready. Implements [draft-denis-ssh-quic](https://datatracker.ietf.org/doc/draft-denis-ssh-quic/) for SSH-derived QUIC initialization.
+> **Status:** Draft integration. Implements pre-derived secret injection for [draft-denis-ssh-quic](https://datatracker.ietf.org/doc/draft-denis-ssh-quic/), but does not replace SSH key exchange, transcript validation, replay protection, or draft-version negotiation.
 
 ## Overview
 
-SSH/QUIC integration allows QUIC connections to bypass the TLS 1.3 handshake by injecting secrets derived from an SSH key exchange. This is useful for:
+SSH/QUIC integration allows QUIC connections to bypass the TLS 1.3 handshake by injecting secrets derived from an SSH key exchange. Treat this as an opt-in draft path. It is useful for:
 
 - **SSH-over-QUIC tunnels** — Establish QUIC transport after SSH authentication
 - **Reduced latency** — Skip TLS handshake when SSH has already authenticated the peers
@@ -20,6 +20,7 @@ server_secret = HMAC-SHA256("ssh/quic server", mpint(K) || string(H))
 ```
 
 These 32-byte secrets are then used to initialize QUIC crypto state directly, skipping the TLS handshake entirely.
+The two secrets must be distinct, non-zero, and direction-specific. zquic rejects all-zero secrets and reused client/server secrets.
 
 ```
 SSH Key Exchange ──▶ Derive Secrets ──▶ SshQuicContext ──▶ QUIC Ready
@@ -194,6 +195,7 @@ pub const SshQuicContext = struct {
 1. **Minimize lifetime** — Call `secrets.zeroize()` immediately after creating the context
 2. **Avoid copies** — Use `initFromPtrs()` and pass secrets by pointer
 3. **Automatic cleanup** — `SshQuicContext.deinit()` zeros all key material automatically
+4. **Preserve directionality** — Client traffic uses `client_secret`; server traffic uses `server_secret`
 
 ### What This Module Does NOT Do
 
@@ -208,14 +210,17 @@ pub const SshQuicContext = struct {
 | Secret leakage via stack | `zeroize()` and `secureZero()` clear memory |
 | Key material in core dumps | Automatic zeroing on `deinit()` |
 | Wrong key direction | Separate `local_keys`/`remote_keys` prevent misuse |
+| Zero or reused directional secrets | `SshQuicSecrets.validate()` rejects invalid inputs |
+| Packet tamper or packet-number mismatch | AEAD authentication fails and returns `CryptoError` |
 
-## Production Checklist
+## Maturity Checklist
 
 - [ ] Implement proper HMAC-SHA256 derivation from SSH K and H values
 - [ ] Integrate with your SSH library (libssh, openssh, etc.)
 - [ ] Add replay protection for packet numbers
 - [ ] Consider key rotation for long-lived connections
 - [ ] Test bidirectional communication under packet loss
+- [ ] Track draft changes and negotiate compatible SSH/QUIC versions
 
 ## References
 

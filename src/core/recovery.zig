@@ -12,6 +12,7 @@ const std = @import("std");
 const Error = @import("../utils/error.zig");
 const PacketSpace = @import("packet_space.zig").PacketSpace;
 const PacketNumber = @import("packet_space.zig").PacketNumber;
+const AckRange = @import("packet_space.zig").AckRange;
 
 /// RTT constants (in microseconds)
 pub const RTT_CONSTANTS = struct {
@@ -309,11 +310,17 @@ pub const LossRecovery = struct {
                 // Detect lost packets
                 const time_threshold = self.rtt_stats.lossTimeThreshold();
                 var lost_packets = space.detectLostPackets(now, time_threshold, RTT_CONSTANTS.K_PACKET_THRESHOLD);
-                defer lost_packets.deinit();
+                defer lost_packets.deinit(space.allocator);
 
                 if (lost_packets.items.len > 0) {
-                    // TODO: Calculate lost bytes and handle congestion control
-                    // space.onPacketsLost(lost_packets.items);
+                    const lost_stats = space.lostPacketStats(lost_packets.items);
+                    space.onPacketsLost(lost_packets.items);
+                    if (lost_stats.lost_bytes > 0) {
+                        self.congestion_controller.onPacketsLost(
+                            lost_stats.lost_bytes,
+                            lost_stats.largest_lost_time,
+                        );
+                    }
                 }
             } else if (loss_time != null) {
                 if (earliest_loss_time == null or loss_time.? < earliest_loss_time.?) {
@@ -347,34 +354,27 @@ pub const LossRecovery = struct {
     pub fn onAckReceived(
         self: *Self,
         space: *PacketSpace,
-        acked_ranges: []const struct { start: PacketNumber, end: PacketNumber },
+        acked_ranges: []const AckRange,
         ack_delay: u64,
         now: u64,
     ) void {
-        // Calculate newly acked bytes (simplified)
-        var acked_bytes: u64 = 0;
-        for (acked_ranges) |range| {
-            acked_bytes += (range.end - range.start + 1) * CC_CONSTANTS.MAX_DATAGRAM_SIZE;
+        const ack_result = space.processAck(acked_ranges, ack_delay, now) catch return;
+
+        if (ack_result.largest_newly_acked_time > 0 and ack_result.largest_newly_acked != null) {
+            const rtt = now - ack_result.largest_newly_acked_time;
+            self.rtt_stats.updateRtt(ack_delay, rtt, now);
         }
 
-        // Update RTT if this acks the largest packet number
-        if (space.largest_sent_packet != null and acked_ranges.len > 0) {
-            const largest_acked = acked_ranges[acked_ranges.len - 1].end;
-            if (largest_acked == space.largest_sent_packet.?) {
-                // Calculate RTT (simplified - would need sent time)
-                const rtt = now - space.time_of_last_ack_eliciting_packet;
-                self.rtt_stats.updateRtt(ack_delay, rtt, now);
-            }
-        }
-
-        // Process the ack in the packet space FIRST to update largest_acked_time
-        space.onAckReceived(acked_ranges, ack_delay, now);
-
-        // Then process for congestion control using the updated state
-        self.congestion_controller.onAckReceived(acked_bytes, space.largest_acked_time, now);
+        self.congestion_controller.onAckReceived(
+            ack_result.newly_acked_bytes,
+            space.largest_acked_time,
+            now,
+        );
 
         // Reset PTO count on successful ack
-        self.pto_count = 0;
+        if (ack_result.newly_acked_count > 0) {
+            self.pto_count = 0;
+        }
     }
 
     /// Detect persistent congestion
@@ -431,4 +431,40 @@ test "loss recovery initialization" {
 
     try std.testing.expectEqual(RTT_CONSTANTS.INITIAL_RTT, recovery.getSmoothedRtt());
     try std.testing.expectEqual(CC_CONSTANTS.INITIAL_WINDOW, recovery.getCongestionWindow());
+}
+
+test "ack processing uses packet-space byte accounting" {
+    var space = try PacketSpace.init(std.testing.allocator, .application);
+    defer space.deinit();
+    var recovery = LossRecovery.init();
+
+    try space.onPacketSent(0, 1_000, true, true, 100);
+    try space.onPacketSent(1, 2_000, true, true, 200);
+
+    const initial_cwnd = recovery.getCongestionWindow();
+    const ack = [_]AckRange{.{ .start = 0, .end = 1 }};
+    recovery.onAckReceived(&space, &ack, 0, 4_000);
+
+    try std.testing.expectEqual(@as(usize, 0), space.sent_packets.count());
+    try std.testing.expectEqual(initial_cwnd + 300, recovery.getCongestionWindow());
+}
+
+test "loss timeout removes lost packets and reduces congestion window" {
+    var space = try PacketSpace.init(std.testing.allocator, .application);
+    defer space.deinit();
+    var recovery = LossRecovery.init();
+
+    try space.onPacketSent(0, 1_000, true, true, 1200);
+    try space.onPacketSent(1, 2_000, true, true, 1200);
+    try space.onPacketSent(2, 3_000, true, true, 1200);
+
+    const ack = [_]AckRange{.{ .start = 2, .end = 2 }};
+    recovery.onAckReceived(&space, &ack, 0, 4_000);
+
+    recovery.loss_detection_timer = 5_000;
+    const spaces = [_]*PacketSpace{&space};
+    try recovery.onLossDetectionTimeout(&spaces, 1_000_000);
+
+    try std.testing.expectEqual(@as(usize, 0), space.sent_packets.count());
+    try std.testing.expect(recovery.getCongestionWindow() < CC_CONSTANTS.INITIAL_WINDOW);
 }

@@ -6,6 +6,7 @@
 const std = @import("std");
 const Error = @import("../utils/error.zig");
 const Time = @import("../utils/time.zig");
+const SpinMutex = @import("../utils/sync.zig").SpinMutex;
 
 /// Telemetry configuration for crypto workloads
 pub const CryptoTelemetryConfig = struct {
@@ -260,38 +261,38 @@ pub const CryptoTelemetrySystem = struct {
     // Alert system
     active_alerts: std.ArrayList(CryptoAlert),
     alert_history: std.ArrayList(CryptoAlert),
-    next_alert_id: std.atomic.Atomic(u64),
+    next_alert_id: std.atomic.Value(u64),
 
     // Collection state
     last_collection_time: i64,
     collection_counter: u64,
 
     // Real-time counters (atomic for thread safety)
-    connection_count: std.atomic.Atomic(u32),
-    request_count: std.atomic.Atomic(u64),
-    bytes_transferred: std.atomic.Atomic(u64),
+    connection_count: std.atomic.Value(u32),
+    request_count: std.atomic.Value(u64),
+    bytes_transferred: std.atomic.Value(u64),
 
     // Previous counter values for rate calculation (prevents drift)
     prev_request_count: u64,
     prev_bytes_transferred: u64,
-    error_count: std.atomic.Atomic(u64),
-    zero_rtt_attempts: std.atomic.Atomic(u64),
-    zero_rtt_successes: std.atomic.Atomic(u64),
+    error_count: std.atomic.Value(u64),
+    zero_rtt_attempts: std.atomic.Value(u64),
+    zero_rtt_successes: std.atomic.Value(u64),
 
     // Protocol counters
-    doq_requests: std.atomic.Atomic(u64),
-    http3_requests: std.atomic.Atomic(u64),
-    grpc_requests: std.atomic.Atomic(u64),
-    custom_requests: std.atomic.Atomic(u64),
+    doq_requests: std.atomic.Value(u64),
+    http3_requests: std.atomic.Value(u64),
+    grpc_requests: std.atomic.Value(u64),
+    custom_requests: std.atomic.Value(u64),
 
     // Priority counters
-    critical_requests: std.atomic.Atomic(u64),
-    high_requests: std.atomic.Atomic(u64),
-    normal_requests: std.atomic.Atomic(u64),
-    background_requests: std.atomic.Atomic(u64),
+    critical_requests: std.atomic.Value(u64),
+    high_requests: std.atomic.Value(u64),
+    normal_requests: std.atomic.Value(u64),
+    background_requests: std.atomic.Value(u64),
 
     // Thread synchronization
-    metrics_mutex: std.Thread.Mutex,
+    metrics_mutex: SpinMutex,
 
     allocator: std.mem.Allocator,
 
@@ -305,26 +306,26 @@ pub const CryptoTelemetrySystem = struct {
             .latency_histogram = LatencyHistogram.init(),
             .active_alerts = .{},
             .alert_history = .{},
-            .next_alert_id = std.atomic.Atomic(u64).init(1),
+            .next_alert_id = std.atomic.Value(u64).init(1),
             .last_collection_time = Time.nowMicros(),
             .collection_counter = 0,
-            .connection_count = std.atomic.Atomic(u32).init(0),
-            .request_count = std.atomic.Atomic(u64).init(0),
-            .bytes_transferred = std.atomic.Atomic(u64).init(0),
+            .connection_count = std.atomic.Value(u32).init(0),
+            .request_count = std.atomic.Value(u64).init(0),
+            .bytes_transferred = std.atomic.Value(u64).init(0),
             .prev_request_count = 0,
             .prev_bytes_transferred = 0,
-            .error_count = std.atomic.Atomic(u64).init(0),
-            .zero_rtt_attempts = std.atomic.Atomic(u64).init(0),
-            .zero_rtt_successes = std.atomic.Atomic(u64).init(0),
-            .doq_requests = std.atomic.Atomic(u64).init(0),
-            .http3_requests = std.atomic.Atomic(u64).init(0),
-            .grpc_requests = std.atomic.Atomic(u64).init(0),
-            .custom_requests = std.atomic.Atomic(u64).init(0),
-            .critical_requests = std.atomic.Atomic(u64).init(0),
-            .high_requests = std.atomic.Atomic(u64).init(0),
-            .normal_requests = std.atomic.Atomic(u64).init(0),
-            .background_requests = std.atomic.Atomic(u64).init(0),
-            .metrics_mutex = std.Thread.Mutex{},
+            .error_count = std.atomic.Value(u64).init(0),
+            .zero_rtt_attempts = std.atomic.Value(u64).init(0),
+            .zero_rtt_successes = std.atomic.Value(u64).init(0),
+            .doq_requests = std.atomic.Value(u64).init(0),
+            .http3_requests = std.atomic.Value(u64).init(0),
+            .grpc_requests = std.atomic.Value(u64).init(0),
+            .custom_requests = std.atomic.Value(u64).init(0),
+            .critical_requests = std.atomic.Value(u64).init(0),
+            .high_requests = std.atomic.Value(u64).init(0),
+            .normal_requests = std.atomic.Value(u64).init(0),
+            .background_requests = std.atomic.Value(u64).init(0),
+            .metrics_mutex = .{},
             .allocator = allocator,
         };
     }
@@ -337,23 +338,23 @@ pub const CryptoTelemetrySystem = struct {
 
     /// Record a request with protocol and priority tracking
     pub fn recordRequest(self: *Self, protocol: enum { doq, http3, grpc, custom }, priority: enum { critical, high, normal, background }, latency_us: u64, bytes: u64) void {
-        _ = self.request_count.fetchAdd(1, .Monotonic);
-        _ = self.bytes_transferred.fetchAdd(bytes, .Monotonic);
+        _ = self.request_count.fetchAdd(1, .monotonic);
+        _ = self.bytes_transferred.fetchAdd(bytes, .monotonic);
 
         // Record protocol usage
         switch (protocol) {
-            .doq => _ = self.doq_requests.fetchAdd(1, .Monotonic),
-            .http3 => _ = self.http3_requests.fetchAdd(1, .Monotonic),
-            .grpc => _ = self.grpc_requests.fetchAdd(1, .Monotonic),
-            .custom => _ = self.custom_requests.fetchAdd(1, .Monotonic),
+            .doq => _ = self.doq_requests.fetchAdd(1, .monotonic),
+            .http3 => _ = self.http3_requests.fetchAdd(1, .monotonic),
+            .grpc => _ = self.grpc_requests.fetchAdd(1, .monotonic),
+            .custom => _ = self.custom_requests.fetchAdd(1, .monotonic),
         }
 
         // Record priority usage
         switch (priority) {
-            .critical => _ = self.critical_requests.fetchAdd(1, .Monotonic),
-            .high => _ = self.high_requests.fetchAdd(1, .Monotonic),
-            .normal => _ = self.normal_requests.fetchAdd(1, .Monotonic),
-            .background => _ = self.background_requests.fetchAdd(1, .Monotonic),
+            .critical => _ = self.critical_requests.fetchAdd(1, .monotonic),
+            .high => _ = self.high_requests.fetchAdd(1, .monotonic),
+            .normal => _ = self.normal_requests.fetchAdd(1, .monotonic),
+            .background => _ = self.background_requests.fetchAdd(1, .monotonic),
         }
 
         // Record latency
@@ -372,22 +373,22 @@ pub const CryptoTelemetrySystem = struct {
     /// Record connection events
     pub fn recordConnection(self: *Self, connected: bool, zero_rtt_used: bool, zero_rtt_success: bool) void {
         if (connected) {
-            _ = self.connection_count.fetchAdd(1, .Monotonic);
+            _ = self.connection_count.fetchAdd(1, .monotonic);
         } else {
-            _ = self.connection_count.fetchSub(1, .Monotonic);
+            _ = self.connection_count.fetchSub(1, .monotonic);
         }
 
         if (zero_rtt_used) {
-            _ = self.zero_rtt_attempts.fetchAdd(1, .Monotonic);
+            _ = self.zero_rtt_attempts.fetchAdd(1, .monotonic);
             if (zero_rtt_success) {
-                _ = self.zero_rtt_successes.fetchAdd(1, .Monotonic);
+                _ = self.zero_rtt_successes.fetchAdd(1, .monotonic);
             }
         }
     }
 
     /// Record error event
     pub fn recordError(self: *Self, error_type: []const u8, severity: AlertSeverity) void {
-        _ = self.error_count.fetchAdd(1, .Monotonic);
+        _ = self.error_count.fetchAdd(1, .monotonic);
 
         if (severity == .critical or severity == .emergency) {
             self.raiseAlert(severity, "Error", error_type, "error_rate", 1.0, 0.0, "Investigate error cause immediately");
@@ -405,12 +406,12 @@ pub const CryptoTelemetrySystem = struct {
 
         // Update current metrics
         self.current_metrics.timestamp = now;
-        self.current_metrics.total_connections = self.connection_count.load(.Monotonic);
-        self.current_metrics.active_connections = self.connection_count.load(.Monotonic); // Simplified
+        self.current_metrics.total_connections = self.connection_count.load(.monotonic);
+        self.current_metrics.active_connections = self.connection_count.load(.monotonic); // Simplified
 
         // Calculate rates from actual counter deltas (prevents drift over time)
-        const current_request_count = self.request_count.load(.Monotonic);
-        const current_bytes = self.bytes_transferred.load(.Monotonic);
+        const current_request_count = self.request_count.load(.monotonic);
+        const current_bytes = self.bytes_transferred.load(.monotonic);
 
         const requests_delta = current_request_count - self.prev_request_count;
         const bytes_delta = current_bytes - self.prev_bytes_transferred;
@@ -429,31 +430,31 @@ pub const CryptoTelemetrySystem = struct {
         self.current_metrics.p99_latency_us = self.latency_histogram.getPercentile(99);
 
         // Calculate Zero-RTT success rate
-        const zero_rtt_attempts = self.zero_rtt_attempts.load(.Monotonic);
+        const zero_rtt_attempts = self.zero_rtt_attempts.load(.monotonic);
         if (zero_rtt_attempts > 0) {
-            self.current_metrics.zero_rtt_success_rate = @as(f32, @floatFromInt(self.zero_rtt_successes.load(.Monotonic))) / @as(f32, @floatFromInt(zero_rtt_attempts));
+            self.current_metrics.zero_rtt_success_rate = @as(f32, @floatFromInt(self.zero_rtt_successes.load(.monotonic))) / @as(f32, @floatFromInt(zero_rtt_attempts));
         }
 
         // Calculate protocol distribution
-        const total_protocol_requests = self.doq_requests.load(.Monotonic) + self.http3_requests.load(.Monotonic) +
-            self.grpc_requests.load(.Monotonic) + self.custom_requests.load(.Monotonic);
+        const total_protocol_requests = self.doq_requests.load(.monotonic) + self.http3_requests.load(.monotonic) +
+            self.grpc_requests.load(.monotonic) + self.custom_requests.load(.monotonic);
         if (total_protocol_requests > 0) {
             const total_f32 = @as(f32, @floatFromInt(total_protocol_requests));
-            self.current_metrics.protocol_distribution.dns_over_quic_percent = @as(f32, @floatFromInt(self.doq_requests.load(.Monotonic))) / total_f32 * 100.0;
-            self.current_metrics.protocol_distribution.http3_percent = @as(f32, @floatFromInt(self.http3_requests.load(.Monotonic))) / total_f32 * 100.0;
-            self.current_metrics.protocol_distribution.grpc_over_quic_percent = @as(f32, @floatFromInt(self.grpc_requests.load(.Monotonic))) / total_f32 * 100.0;
-            self.current_metrics.protocol_distribution.custom_protocol_percent = @as(f32, @floatFromInt(self.custom_requests.load(.Monotonic))) / total_f32 * 100.0;
+            self.current_metrics.protocol_distribution.dns_over_quic_percent = @as(f32, @floatFromInt(self.doq_requests.load(.monotonic))) / total_f32 * 100.0;
+            self.current_metrics.protocol_distribution.http3_percent = @as(f32, @floatFromInt(self.http3_requests.load(.monotonic))) / total_f32 * 100.0;
+            self.current_metrics.protocol_distribution.grpc_over_quic_percent = @as(f32, @floatFromInt(self.grpc_requests.load(.monotonic))) / total_f32 * 100.0;
+            self.current_metrics.protocol_distribution.custom_protocol_percent = @as(f32, @floatFromInt(self.custom_requests.load(.monotonic))) / total_f32 * 100.0;
         }
 
         // Calculate priority distribution
-        const total_priority_requests = self.critical_requests.load(.Monotonic) + self.high_requests.load(.Monotonic) +
-            self.normal_requests.load(.Monotonic) + self.background_requests.load(.Monotonic);
+        const total_priority_requests = self.critical_requests.load(.monotonic) + self.high_requests.load(.monotonic) +
+            self.normal_requests.load(.monotonic) + self.background_requests.load(.monotonic);
         if (total_priority_requests > 0) {
             const total_f32 = @as(f32, @floatFromInt(total_priority_requests));
-            self.current_metrics.priority_distribution.critical_percent = @as(f32, @floatFromInt(self.critical_requests.load(.Monotonic))) / total_f32 * 100.0;
-            self.current_metrics.priority_distribution.high_percent = @as(f32, @floatFromInt(self.high_requests.load(.Monotonic))) / total_f32 * 100.0;
-            self.current_metrics.priority_distribution.normal_percent = @as(f32, @floatFromInt(self.normal_requests.load(.Monotonic))) / total_f32 * 100.0;
-            self.current_metrics.priority_distribution.background_percent = @as(f32, @floatFromInt(self.background_requests.load(.Monotonic))) / total_f32 * 100.0;
+            self.current_metrics.priority_distribution.critical_percent = @as(f32, @floatFromInt(self.critical_requests.load(.monotonic))) / total_f32 * 100.0;
+            self.current_metrics.priority_distribution.high_percent = @as(f32, @floatFromInt(self.high_requests.load(.monotonic))) / total_f32 * 100.0;
+            self.current_metrics.priority_distribution.normal_percent = @as(f32, @floatFromInt(self.normal_requests.load(.monotonic))) / total_f32 * 100.0;
+            self.current_metrics.priority_distribution.background_percent = @as(f32, @floatFromInt(self.background_requests.load(.monotonic))) / total_f32 * 100.0;
         }
 
         // Add to history
@@ -505,7 +506,7 @@ pub const CryptoTelemetrySystem = struct {
     /// Raise an alert
     fn raiseAlert(self: *Self, severity: AlertSeverity, category: []const u8, message: []const u8, metric_name: []const u8, current_value: f64, threshold_value: f64, suggested_action: ?[]const u8) void {
         const alert = CryptoAlert{
-            .id = self.next_alert_id.fetchAdd(1, .Monotonic),
+            .id = self.next_alert_id.fetchAdd(1, .monotonic),
             .timestamp = Time.nowMicros(),
             .severity = severity,
             .category = category,

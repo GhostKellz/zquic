@@ -64,12 +64,12 @@ zig build -Dpost-quantum=true -Dexperimental-crypto=true
 - **ML-DSA-65** post-quantum digital signatures (FIPS 204)
 - Requires `-Dpost-quantum=true -Dexperimental-crypto=true`
 
-### 🔑 **SSH/QUIC Integration**
-- **SSH secret injection**: Bypass TLS handshake using SSH-derived secrets ([draft-denis-ssh-quic](https://datatracker.ietf.org/doc/draft-denis-ssh-quic/))
+### 🔑 **SSH/QUIC Integration** *(Draft)*
+- **SSH secret injection**: Bypass TLS handshake using pre-derived SSH secrets ([draft-denis-ssh-quic](https://datatracker.ietf.org/doc/draft-denis-ssh-quic/))
 - **Secure key handling**: Secrets passed by pointer, automatic zeroing on cleanup
 - **Bidirectional encryption**: Proper local/remote key separation for client ↔ server traffic
 - **TLS fallback**: `SshQuicContext` supports both SSH-injected and standard TLS modes
-- **Zero-copy secrets**: `initFromPtrs()` avoids unnecessary stack copies of sensitive material
+- **Validation**: Rejects all-zero and reused client/server directional secrets
 
 ```zig
 // Example: Initialize QUIC with SSH-derived secrets
@@ -143,7 +143,7 @@ const ciphertext = try ctx.encrypt(plaintext, packet_number, allocator);
 
 ### Zig Integration
 ```bash
-zig fetch --save https://github.com/ghostkellz/zquic/archive/main.tar.gz
+zig fetch --save https://github.com/ghostkellz/zquic/archive/refs/tags/v0.9.14.tar.gz
 ```
 
 ### Installation
@@ -162,8 +162,8 @@ Keep the dependency metadata intact (`build.zig.zon` pins dependencies) and buil
 # Format and lint quickly
 ./dev/fmt.sh
 
-# Full build + test sweep (unit + integration + fuzz)
-./dev/test.sh
+# Release validation matrix
+./dev/validate.sh
 
 # Smoke test HTTP/3 or DoQ locally
 ./dev/smoke_test.sh
@@ -171,9 +171,9 @@ Keep the dependency metadata intact (`build.zig.zon` pins dependencies) and buil
 ./dev/vpn_smoke.sh
 ```
 
-Prefer individual commands? Run `zig build integration-tests` for handshake coverage or `zig build fuzz-tests` for the packet parser harness.
+Prefer individual commands? Run `/opt/zig-dev/zig build integration-tests` for handshake coverage or `/opt/zig-dev/zig build fuzz-tests` for the packet parser harness.
 
-The `dev/` scripts wrap the raw `zig` commands and provide the configuration we use in CI (re-enabling CI workflows is tracked separately).
+The `dev/` scripts default to `/opt/zig-dev/zig` and accept `ZIG=/path/to/zig` overrides.
 
 ## 🎯 Production Readiness Status
 
@@ -195,10 +195,10 @@ The `dev/` scripts wrap the raw `zig` commands and provide the configuration we 
 - Internal async runtime + connection pool validated via new tests
 - Documentation refreshed to match current feature flags
 
-### 📈 Performance Targets
-- ReleaseFast builds target 100K+ TPS workloads
-- <1 ms Zero-RTT handshakes when PQ is enabled
-- Deterministic memory behavior verified through integration tests and leak checks
+### 📈 Performance Posture
+- ReleaseFast builds are the benchmark profile for throughput work
+- Async runtime, packet, and buffer paths have dedicated regression coverage
+- Deterministic memory behavior is checked through integration tests and release validation
 
 ### Basic Usage (Zig)
 

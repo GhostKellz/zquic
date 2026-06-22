@@ -16,6 +16,7 @@ const std = @import("std");
 const zcrypto = @import("zcrypto");
 const Error = @import("../utils/error.zig");
 const builtin = @import("builtin");
+const net_sys = @import("../net/sys.zig");
 const NetAddress = @import("../net/address.zig");
 
 // Import zcrypto hardware acceleration
@@ -28,7 +29,7 @@ pub const ZeroCopyBuffer = struct {
     capacity: usize,
     read_offset: usize,
     write_offset: usize,
-    reference_count: std.atomic.Atomic(u32),
+    reference_count: std.atomic.Value(u32),
     allocator: std.mem.Allocator,
 
     // Memory mapping support
@@ -50,7 +51,7 @@ pub const ZeroCopyBuffer = struct {
             .capacity = capacity,
             .read_offset = 0,
             .write_offset = 0,
-            .reference_count = std.atomic.Atomic(u32).init(1),
+            .reference_count = std.atomic.Value(u32).init(1),
             .allocator = allocator,
             .memory_mapped = false,
             .file_descriptor = null,
@@ -74,7 +75,7 @@ pub const ZeroCopyBuffer = struct {
             .capacity = capacity,
             .read_offset = 0,
             .write_offset = 0,
-            .reference_count = std.atomic.Atomic(u32).init(1),
+            .reference_count = std.atomic.Value(u32).init(1),
             .allocator = allocator,
             .memory_mapped = true,
             .file_descriptor = fd,
@@ -84,7 +85,7 @@ pub const ZeroCopyBuffer = struct {
     }
 
     pub fn deinit(self: *Self) void {
-        if (self.reference_count.fetchSub(1, .AcqRel) == 1) {
+        if (self.reference_count.fetchSub(1, .acq_rel) == 1) {
             if (self.memory_mapped) {
                 std.posix.munmap(self.data);
             } else {
@@ -94,7 +95,7 @@ pub const ZeroCopyBuffer = struct {
     }
 
     pub fn clone(self: *Self) Self {
-        _ = self.reference_count.fetchAdd(1, .AcqRel);
+        _ = self.reference_count.fetchAdd(1, .acq_rel);
         return self.*;
     }
 
@@ -251,28 +252,28 @@ pub const VectorizedIO = struct {
 /// High-performance memory pool with zero-copy capabilities
 pub const ZeroCopyPool = struct {
     buffers: std.ArrayList(ZeroCopyBuffer),
-    available_buffers: std.fifo.LinearFifo(usize, .Dynamic),
+    available_buffers: std.ArrayListUnmanaged(usize),
     buffer_size: usize,
     max_buffers: usize,
     allocator: std.mem.Allocator,
 
     // Performance counters
-    allocations: std.atomic.Atomic(u64),
-    deallocations: std.atomic.Atomic(u64),
-    cache_hits: std.atomic.Atomic(u64),
-    cache_misses: std.atomic.Atomic(u64),
+    allocations: std.atomic.Value(u64),
+    deallocations: std.atomic.Value(u64),
+    cache_hits: std.atomic.Value(u64),
+    cache_misses: std.atomic.Value(u64),
 
     pub fn init(allocator: std.mem.Allocator, buffer_size: usize, max_buffers: usize) !ZeroCopyPool {
         return ZeroCopyPool{
             .buffers = .{},
-            .available_buffers = std.fifo.LinearFifo(usize, .Dynamic).init(allocator),
+            .available_buffers = .empty,
             .buffer_size = buffer_size,
             .max_buffers = max_buffers,
             .allocator = allocator,
-            .allocations = std.atomic.Atomic(u64).init(0),
-            .deallocations = std.atomic.Atomic(u64).init(0),
-            .cache_hits = std.atomic.Atomic(u64).init(0),
-            .cache_misses = std.atomic.Atomic(u64).init(0),
+            .allocations = std.atomic.Value(u64).init(0),
+            .deallocations = std.atomic.Value(u64).init(0),
+            .cache_hits = std.atomic.Value(u64).init(0),
+            .cache_misses = std.atomic.Value(u64).init(0),
         };
     }
 
@@ -281,21 +282,22 @@ pub const ZeroCopyPool = struct {
             buffer.deinit();
         }
         self.buffers.deinit();
-        self.available_buffers.deinit();
+        self.available_buffers.deinit(self.allocator);
     }
 
     pub fn acquire(self: *ZeroCopyPool) !ZeroCopyBuffer {
-        _ = self.allocations.fetchAdd(1, .Monotonic);
+        _ = self.allocations.fetchAdd(1, .monotonic);
 
         // Try to get from cache first
-        if (self.available_buffers.readItem()) |index| {
-            _ = self.cache_hits.fetchAdd(1, .Monotonic);
+        if (self.available_buffers.items.len > 0) {
+            const index = self.available_buffers.orderedRemove(self.available_buffers.items.len - 1);
+            _ = self.cache_hits.fetchAdd(1, .monotonic);
             var buffer = self.buffers.items[index];
             buffer.reset();
             return buffer;
         }
 
-        _ = self.cache_misses.fetchAdd(1, .Monotonic);
+        _ = self.cache_misses.fetchAdd(1, .monotonic);
 
         // Create new buffer if under limit
         if (self.buffers.items.len < self.max_buffers) {
@@ -309,13 +311,13 @@ pub const ZeroCopyPool = struct {
     }
 
     pub fn release(self: *ZeroCopyPool, buffer: ZeroCopyBuffer) void {
-        _ = self.deallocations.fetchAdd(1, .Monotonic);
+        _ = self.deallocations.fetchAdd(1, .monotonic);
 
         // Find buffer in pool
         for (self.buffers.items, 0..) |*pooled_buffer, i| {
             if (pooled_buffer.data.ptr == buffer.data.ptr) {
                 pooled_buffer.reset();
-                self.available_buffers.writeItem(i) catch |err| {
+                self.available_buffers.append(self.allocator, i) catch |err| {
                     std.log.warn("ZeroCopyPool: Failed to return buffer to pool: {}", .{err});
                 };
                 return;
@@ -330,11 +332,11 @@ pub const ZeroCopyPool = struct {
     pub fn getStats(self: *const ZeroCopyPool) PoolStats {
         return PoolStats{
             .total_buffers = self.buffers.items.len,
-            .available_buffers = self.available_buffers.count,
-            .allocations = self.allocations.load(.Monotonic),
-            .deallocations = self.deallocations.load(.Monotonic),
-            .cache_hits = self.cache_hits.load(.Monotonic),
-            .cache_misses = self.cache_misses.load(.Monotonic),
+            .available_buffers = self.available_buffers.items.len,
+            .allocations = self.allocations.load(.monotonic),
+            .deallocations = self.deallocations.load(.monotonic),
+            .cache_hits = self.cache_hits.load(.monotonic),
+            .cache_misses = self.cache_misses.load(.monotonic),
         };
     }
 
@@ -470,8 +472,8 @@ pub const SIMDOptimizations = struct {
 pub const LockFreeRingBuffer = struct {
     buffer: []u8,
     capacity: usize,
-    write_index: std.atomic.Atomic(usize),
-    read_index: std.atomic.Atomic(usize),
+    write_index: std.atomic.Value(usize),
+    read_index: std.atomic.Value(usize),
 
     pub fn init(allocator: std.mem.Allocator, capacity: usize) !LockFreeRingBuffer {
         // Round up to power of 2 for efficient modulo operation
@@ -481,8 +483,8 @@ pub const LockFreeRingBuffer = struct {
         return LockFreeRingBuffer{
             .buffer = buffer,
             .capacity = actual_capacity,
-            .write_index = std.atomic.Atomic(usize).init(0),
-            .read_index = std.atomic.Atomic(usize).init(0),
+            .write_index = std.atomic.Value(usize).init(0),
+            .read_index = std.atomic.Value(usize).init(0),
         };
     }
 
@@ -491,8 +493,8 @@ pub const LockFreeRingBuffer = struct {
     }
 
     pub fn write(self: *LockFreeRingBuffer, data: []const u8) bool {
-        const write_idx = self.write_index.load(.Acquire);
-        const read_idx = self.read_index.load(.Acquire);
+        const write_idx = self.write_index.load(.acquire);
+        const read_idx = self.read_index.load(.acquire);
 
         // Check if there's enough space
         const available = self.capacity - ((write_idx - read_idx) & (self.capacity - 1));
@@ -511,13 +513,13 @@ pub const LockFreeRingBuffer = struct {
         }
 
         // Update write index
-        self.write_index.store((write_idx + data.len) & (self.capacity - 1), .Release);
+        self.write_index.store((write_idx + data.len) & (self.capacity - 1), .release);
         return true;
     }
 
     pub fn read(self: *LockFreeRingBuffer, buffer: []u8) usize {
-        const read_idx = self.read_index.load(.Acquire);
-        const write_idx = self.write_index.load(.Acquire);
+        const read_idx = self.read_index.load(.acquire);
+        const write_idx = self.write_index.load(.acquire);
 
         // Check available data
         const available = (write_idx - read_idx) & (self.capacity - 1);
@@ -537,19 +539,19 @@ pub const LockFreeRingBuffer = struct {
         }
 
         // Update read index
-        self.read_index.store((read_idx + to_read) & (self.capacity - 1), .Release);
+        self.read_index.store((read_idx + to_read) & (self.capacity - 1), .release);
         return to_read;
     }
 
     pub fn availableRead(self: *const LockFreeRingBuffer) usize {
-        const read_idx = self.read_index.load(.Acquire);
-        const write_idx = self.write_index.load(.Acquire);
+        const read_idx = self.read_index.load(.acquire);
+        const write_idx = self.write_index.load(.acquire);
         return (write_idx - read_idx) & (self.capacity - 1);
     }
 
     pub fn availableWrite(self: *const LockFreeRingBuffer) usize {
-        const read_idx = self.read_index.load(.Acquire);
-        const write_idx = self.write_index.load(.Acquire);
+        const read_idx = self.read_index.load(.acquire);
+        const write_idx = self.write_index.load(.acquire);
         return self.capacity - ((write_idx - read_idx) & (self.capacity - 1));
     }
 };
@@ -660,7 +662,7 @@ pub const BatchNetworkOps = struct {
         });
     }
 
-    pub fn flushSends(self: *BatchNetworkOps, socket: std.posix.socket_t) !usize {
+    pub fn flushSends(self: *BatchNetworkOps, socket: net_sys.Socket) !usize {
         if (self.send_batch.items.len == 0) return 0;
 
         var sent_count: usize = 0;
@@ -675,13 +677,8 @@ pub const BatchNetworkOps = struct {
         for (self.send_batch.items) |batch_item| {
             var addr_storage: NetAddress.PosixAddress = undefined;
             const addr_len = NetAddress.toPosix(&batch_item.destination, &addr_storage);
-            const bytes_sent = std.posix.sendto(
-                socket,
-                batch_item.data,
-                batch_item.flags,
-                @ptrCast(&addr_storage),
-                addr_len,
-            ) catch continue;
+            _ = batch_item.flags;
+            const bytes_sent = net_sys.sendTo(socket, batch_item.data, &addr_storage, addr_len) catch continue;
 
             if (bytes_sent == batch_item.data.len) {
                 sent_count += 1;
@@ -692,7 +689,7 @@ pub const BatchNetworkOps = struct {
         return sent_count;
     }
 
-    pub fn flushReceives(self: *BatchNetworkOps, socket: std.posix.socket_t) !usize {
+    pub fn flushReceives(self: *BatchNetworkOps, socket: net_sys.Socket) !usize {
         if (self.receive_batch.items.len == 0) return 0;
 
         var received_count: usize = 0;
@@ -707,13 +704,8 @@ pub const BatchNetworkOps = struct {
         for (self.receive_batch.items) |*batch_item| {
             var addr_storage: NetAddress.PosixAddress = undefined;
             var addr_len: std.posix.socklen_t = @sizeOf(NetAddress.PosixAddress);
-            const bytes_received = std.posix.recvfrom(
-                socket,
-                batch_item.buffer,
-                batch_item.flags,
-                @ptrCast(&addr_storage),
-                &addr_len,
-            ) catch continue;
+            _ = batch_item.flags;
+            const bytes_received = net_sys.receiveFrom(socket, batch_item.buffer, &addr_storage, &addr_len) catch continue;
 
             batch_item.source = NetAddress.fromPosix(&addr_storage);
             batch_item.bytes_received = bytes_received;
@@ -791,17 +783,17 @@ pub const HardwareCRC32 = struct {
 
 /// Performance monitoring and profiling
 pub const PerformanceMonitor = struct {
-    cpu_cycles: std.atomic.Atomic(u64),
-    cache_misses: std.atomic.Atomic(u64),
-    branch_mispredicts: std.atomic.Atomic(u64),
-    instructions_retired: std.atomic.Atomic(u64),
+    cpu_cycles: std.atomic.Value(u64),
+    cache_misses: std.atomic.Value(u64),
+    branch_mispredicts: std.atomic.Value(u64),
+    instructions_retired: std.atomic.Value(u64),
 
     pub fn init() PerformanceMonitor {
         return PerformanceMonitor{
-            .cpu_cycles = std.atomic.Atomic(u64).init(0),
-            .cache_misses = std.atomic.Atomic(u64).init(0),
-            .branch_mispredicts = std.atomic.Atomic(u64).init(0),
-            .instructions_retired = std.atomic.Atomic(u64).init(0),
+            .cpu_cycles = std.atomic.Value(u64).init(0),
+            .cache_misses = std.atomic.Value(u64).init(0),
+            .branch_mispredicts = std.atomic.Value(u64).init(0),
+            .instructions_retired = std.atomic.Value(u64).init(0),
         };
     }
 
@@ -825,8 +817,8 @@ pub const PerformanceMonitor = struct {
             const cycles_elapsed = end_cycles - self.start_cycles;
             const instructions_elapsed = end_instructions - self.start_instructions;
 
-            _ = self.monitor.cpu_cycles.fetchAdd(cycles_elapsed, .Monotonic);
-            _ = self.monitor.instructions_retired.fetchAdd(instructions_elapsed, .Monotonic);
+            _ = self.monitor.cpu_cycles.fetchAdd(cycles_elapsed, .monotonic);
+            _ = self.monitor.instructions_retired.fetchAdd(instructions_elapsed, .monotonic);
         }
     };
 
@@ -853,10 +845,10 @@ pub const PerformanceMonitor = struct {
 
     pub fn getStats(self: *const PerformanceMonitor) PerfStats {
         return PerfStats{
-            .cpu_cycles = self.cpu_cycles.load(.Monotonic),
-            .cache_misses = self.cache_misses.load(.Monotonic),
-            .branch_mispredicts = self.branch_mispredicts.load(.Monotonic),
-            .instructions_retired = self.instructions_retired.load(.Monotonic),
+            .cpu_cycles = self.cpu_cycles.load(.monotonic),
+            .cache_misses = self.cache_misses.load(.monotonic),
+            .branch_mispredicts = self.branch_mispredicts.load(.monotonic),
+            .instructions_retired = self.instructions_retired.load(.monotonic),
         };
     }
 
@@ -877,7 +869,7 @@ pub const PerformanceMonitor = struct {
 pub const NumaAllocator = struct {
     parent_allocator: std.mem.Allocator,
     numa_nodes: []NumaNode,
-    current_node: std.atomic.Atomic(u32),
+    current_node: std.atomic.Value(u32),
 
     const NumaNode = struct {
         id: u32,
@@ -893,7 +885,7 @@ pub const NumaAllocator = struct {
         return NumaAllocator{
             .parent_allocator = parent_allocator,
             .numa_nodes = numa_nodes,
-            .current_node = std.atomic.Atomic(u32).init(0),
+            .current_node = std.atomic.Value(u32).init(0),
         };
     }
 
@@ -940,7 +932,7 @@ pub const NumaAllocator = struct {
 
     fn getCurrentNumaNode(self: *const NumaAllocator) u32 {
         // Simple round-robin for now
-        const node_id = self.current_node.fetchAdd(1, .Monotonic) % @as(u32, @intCast(self.numa_nodes.len));
+        const node_id = self.current_node.fetchAdd(1, .monotonic) % @as(u32, @intCast(self.numa_nodes.len));
         return node_id;
     }
 
@@ -1102,9 +1094,9 @@ pub const ZeroCopyPacketPool = struct {
     large_buffers: std.ArrayList(ZeroCopyBuffer),
     medium_buffers: std.ArrayList(ZeroCopyBuffer),
     small_buffers: std.ArrayList(ZeroCopyBuffer),
-    available_large: std.fifo.LinearFifo(usize, .Dynamic),
-    available_medium: std.fifo.LinearFifo(usize, .Dynamic),
-    available_small: std.fifo.LinearFifo(usize, .Dynamic),
+    available_large: std.ArrayListUnmanaged(usize),
+    available_medium: std.ArrayListUnmanaged(usize),
+    available_small: std.ArrayListUnmanaged(usize),
     allocator: std.mem.Allocator,
 
     const LARGE_SIZE = 9000; // Jumbo frames
@@ -1116,9 +1108,9 @@ pub const ZeroCopyPacketPool = struct {
             .large_buffers = .{},
             .medium_buffers = .{},
             .small_buffers = .{},
-            .available_large = std.fifo.LinearFifo(usize, .Dynamic).init(allocator),
-            .available_medium = std.fifo.LinearFifo(usize, .Dynamic).init(allocator),
-            .available_small = std.fifo.LinearFifo(usize, .Dynamic).init(allocator),
+            .available_large = .empty,
+            .available_medium = .empty,
+            .available_small = .empty,
             .allocator = allocator,
         };
     }
@@ -1137,9 +1129,9 @@ pub const ZeroCopyPacketPool = struct {
         self.large_buffers.deinit();
         self.medium_buffers.deinit();
         self.small_buffers.deinit();
-        self.available_large.deinit();
-        self.available_medium.deinit();
-        self.available_small.deinit();
+        self.available_large.deinit(self.allocator);
+        self.available_medium.deinit(self.allocator);
+        self.available_small.deinit(self.allocator);
     }
 
     pub fn acquireBuffer(self: *ZeroCopyPacketPool, size: usize) !ZeroCopyBuffer {
@@ -1155,11 +1147,12 @@ pub const ZeroCopyPacketPool = struct {
     fn acquireBufferFromPool(
         self: *ZeroCopyPacketPool,
         buffers: *std.ArrayList(ZeroCopyBuffer),
-        available: *std.fifo.LinearFifo(usize, .Dynamic),
+        available: *std.ArrayListUnmanaged(usize),
         buffer_size: usize,
     ) !ZeroCopyBuffer {
         // Try to get from available buffers first
-        if (available.readItem()) |index| {
+        if (available.items.len > 0) {
+            const index = available.orderedRemove(available.items.len - 1);
             var buffer = buffers.items[index];
             buffer.reset();
             return buffer;
@@ -1177,7 +1170,7 @@ pub const ZeroCopyPacketPool = struct {
         for (self.large_buffers.items, 0..) |*pooled_buffer, i| {
             if (pooled_buffer.data.ptr == buffer.data.ptr) {
                 pooled_buffer.reset();
-                self.available_large.writeItem(i) catch |err| {
+                self.available_large.append(self.allocator, i) catch |err| {
                     std.log.warn("ZeroCopyPacketPool: Failed to return large buffer: {}", .{err});
                 };
                 return;
@@ -1187,7 +1180,7 @@ pub const ZeroCopyPacketPool = struct {
         for (self.medium_buffers.items, 0..) |*pooled_buffer, i| {
             if (pooled_buffer.data.ptr == buffer.data.ptr) {
                 pooled_buffer.reset();
-                self.available_medium.writeItem(i) catch |err| {
+                self.available_medium.append(self.allocator, i) catch |err| {
                     std.log.warn("ZeroCopyPacketPool: Failed to return medium buffer: {}", .{err});
                 };
                 return;
@@ -1197,7 +1190,7 @@ pub const ZeroCopyPacketPool = struct {
         for (self.small_buffers.items, 0..) |*pooled_buffer, i| {
             if (pooled_buffer.data.ptr == buffer.data.ptr) {
                 pooled_buffer.reset();
-                self.available_small.writeItem(i) catch |err| {
+                self.available_small.append(self.allocator, i) catch |err| {
                     std.log.warn("ZeroCopyPacketPool: Failed to return small buffer: {}", .{err});
                 };
                 return;
@@ -1221,9 +1214,9 @@ pub const ZeroCopyPacketProcessor = struct {
     allocator: std.mem.Allocator,
 
     // Performance metrics
-    packets_processed: std.atomic.Atomic(u64),
-    bytes_processed: std.atomic.Atomic(u64),
-    memory_copies_avoided: std.atomic.Atomic(u64),
+    packets_processed: std.atomic.Value(u64),
+    bytes_processed: std.atomic.Value(u64),
+    memory_copies_avoided: std.atomic.Value(u64),
 
     const Self = @This();
 
@@ -1233,9 +1226,9 @@ pub const ZeroCopyPacketProcessor = struct {
             .crypto_accelerator = HardwareCrypto.init() catch null,
             .vectorized_io = VectorizedIO.init(allocator),
             .allocator = allocator,
-            .packets_processed = std.atomic.Atomic(u64).init(0),
-            .bytes_processed = std.atomic.Atomic(u64).init(0),
-            .memory_copies_avoided = std.atomic.Atomic(u64).init(0),
+            .packets_processed = std.atomic.Value(u64).init(0),
+            .bytes_processed = std.atomic.Value(u64).init(0),
+            .memory_copies_avoided = std.atomic.Value(u64).init(0),
         };
     }
 
@@ -1250,9 +1243,9 @@ pub const ZeroCopyPacketProcessor = struct {
     /// Process packet in-place without memory copies
     pub fn processPacketInPlace(self: *Self, buffer: *ZeroCopyBuffer, packet_len: usize) !ProcessedPacket {
         // Update metrics
-        _ = self.packets_processed.fetchAdd(1, .Monotonic);
-        _ = self.bytes_processed.fetchAdd(packet_len, .Monotonic);
-        _ = self.memory_copies_avoided.fetchAdd(1, .Monotonic);
+        _ = self.packets_processed.fetchAdd(1, .monotonic);
+        _ = self.bytes_processed.fetchAdd(packet_len, .monotonic);
+        _ = self.memory_copies_avoided.fetchAdd(1, .monotonic);
 
         // Prefetch data into cache
         buffer.prefetch();

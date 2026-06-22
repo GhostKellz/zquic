@@ -32,7 +32,7 @@ jobs:
           set -euo pipefail
           zig build --fetch
           echo "🔧 Building ZQUIC with crypto support..."
-          zig build -Dpost-quantum=true
+          zig build -Dpost-quantum=true -Dexperimental-crypto=true
           
           echo "📦 Build results:"
           ls -la zig-out/bin/ || echo "No binaries found"
@@ -43,14 +43,14 @@ jobs:
           echo "🔐 Testing basic crypto functionality..."
           
           # Just check if crypto-related binaries work
-          if [ -x "zig-out/bin/pq_quic_demo" ]; then
-            echo "✓ pq_quic_demo exists"
-            timeout 5s zig-out/bin/pq_quic_demo --help || echo "Basic test completed"
+          if [ -x "zig-out/bin/zquic-pq-demo" ]; then
+            echo "✓ zquic-pq-demo exists"
+            timeout 5s zig-out/bin/zquic-pq-demo --help || echo "Basic test completed"
           fi
 
       - name: Verify Crypto Build Artifacts
         run: |
           set -euo pipefail
           echo "📋 Crypto module validation complete"
-          echo "   - Post-quantum: ML-KEM-768 + SLH-DSA via zcrypto"
+          echo "   - Post-quantum: ML-KEM-768/1024 + ML-DSA-65 via zcrypto"
           echo "   - Runtime: CPU-based (no GPU required)"

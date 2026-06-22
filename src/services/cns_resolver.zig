@@ -8,6 +8,7 @@ const zcrypto = @import("zcrypto");
 const build_options = @import("build_options");
 const Error = @import("../utils/error.zig");
 const Time = @import("../utils/time.zig");
+const SpinMutex = @import("../utils/sync.zig").SpinMutex;
 
 /// Conditionally import HTTP/3 if enabled
 const http3 = if (build_options.enable_http3) @import("../http3.zig") else struct {};
@@ -226,7 +227,7 @@ pub const DnsMessage = struct {
         return DnsMessage{
             .header = std.mem.zeroes(DnsHeader),
             .questions = .{},
-            .answers = .{},
+            .answers = .empty,
             .authorities = .{},
             .additionals = .{},
             .allocator = allocator,
@@ -378,7 +379,7 @@ pub const CacheEntry = struct {
     pub fn init(allocator: std.mem.Allocator, question: *const DnsQuestion) !CacheEntry {
         return CacheEntry{
             .question = try question.clone(allocator),
-            .answers = .{},
+            .answers = .empty,
             .expiry_time = 0,
             .hit_count = 0,
         };
@@ -403,7 +404,7 @@ pub const DnsCache = struct {
     max_size_mb: u32,
     current_size: u32,
     allocator: std.mem.Allocator,
-    mutex: std.Thread.RwLock,
+    mutex: SpinMutex,
 
     pub fn init(allocator: std.mem.Allocator, max_size_mb: u32) DnsCache {
         return DnsCache{
@@ -411,7 +412,7 @@ pub const DnsCache = struct {
             .max_size_mb = max_size_mb,
             .current_size = 0,
             .allocator = allocator,
-            .mutex = std.Thread.RwLock{},
+            .mutex = .{},
         };
     }
 
@@ -426,8 +427,8 @@ pub const DnsCache = struct {
     /// Get cached answers by cloning them. Caller owns returned list and must deinit.
     /// Returns null if not found or expired.
     pub fn get(self: *DnsCache, question: *const DnsQuestion, allocator: std.mem.Allocator) !?std.ArrayList(DnsResourceRecord) {
-        self.mutex.lockShared();
-        defer self.mutex.unlockShared();
+        self.mutex.lock();
+        defer self.mutex.unlock();
 
         const key = self.hashQuestion(question);
         if (self.cache.getPtr(key)) |entry| {

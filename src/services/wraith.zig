@@ -8,6 +8,7 @@ const zcrypto = @import("zcrypto");
 const build_options = @import("build_options");
 const Error = @import("../utils/error.zig");
 const Time = @import("../utils/time.zig");
+const SpinMutex = @import("../utils/sync.zig").SpinMutex;
 const VERSION = zquic_core.version;
 
 /// Conditionally import HTTP/3 if enabled
@@ -129,7 +130,7 @@ pub const BackendPool = struct {
     algorithm: LoadBalancingAlgorithm,
     current_index: usize, // For round-robin
     allocator: std.mem.Allocator,
-    mutex: std.Thread.Mutex,
+    mutex: SpinMutex,
 
     pub fn init(allocator: std.mem.Allocator, algorithm: LoadBalancingAlgorithm) BackendPool {
         return BackendPool{
@@ -137,7 +138,7 @@ pub const BackendPool = struct {
             .algorithm = algorithm,
             .current_index = 0,
             .allocator = allocator,
-            .mutex = std.Thread.Mutex{},
+            .mutex = .{},
         };
     }
 
@@ -445,7 +446,7 @@ pub const ResponseCache = struct {
     max_size_mb: u32,
     current_size_bytes: u64,
     allocator: std.mem.Allocator,
-    mutex: std.Thread.RwLock,
+    mutex: SpinMutex,
 
     const CacheEntry = struct {
         response_data: []u8,
@@ -471,7 +472,7 @@ pub const ResponseCache = struct {
             .max_size_mb = max_size_mb,
             .current_size_bytes = 0,
             .allocator = allocator,
-            .mutex = std.Thread.RwLock{},
+            .mutex = .{},
         };
     }
 
@@ -484,8 +485,8 @@ pub const ResponseCache = struct {
     }
 
     pub fn get(self: *ResponseCache, key: u64) ?CacheEntry {
-        self.mutex.lockShared();
-        defer self.mutex.unlockShared();
+        self.mutex.lock();
+        defer self.mutex.unlock();
 
         if (self.cache.getPtr(key)) |entry| {
             const now = Time.nowSeconds();

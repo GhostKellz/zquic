@@ -46,7 +46,7 @@ pub const UdpMultiplexer = struct {
 
     // Async operation support
     receive_buffer: []u8,
-    send_queue: std.fifo.LinearFifo(OutboundPacket, .Dynamic),
+    send_queue: std.ArrayListUnmanaged(OutboundPacket),
 
     // Statistics
     packets_received: u64 = 0,
@@ -72,15 +72,18 @@ pub const UdpMultiplexer = struct {
             .config = config,
             .allocator = allocator,
             .receive_buffer = receive_buffer,
-            .send_queue = std.fifo.LinearFifo(OutboundPacket, .Dynamic).init(allocator),
+            .send_queue = .empty,
         };
     }
 
     pub fn deinit(self: *Self) void {
-        self.socket.deinit(self.allocator);
+        self.socket.deinit();
         self.connections.deinit();
         self.allocator.free(self.receive_buffer);
-        self.send_queue.deinit();
+        for (self.send_queue.items) |packet| {
+            self.allocator.free(packet.data);
+        }
+        self.send_queue.deinit(self.allocator);
     }
 
     /// Add a new connection to the multiplexer
@@ -173,6 +176,10 @@ pub const UdpMultiplexer = struct {
 
     /// Queue a packet for sending (for async operation)
     pub fn queuePacket(self: *Self, packet_data: []const u8, destination: NetAddress.Address, connection_id: ?Packet.ConnectionId) Error.ZquicError!void {
+        if (self.send_queue.items.len >= self.config.send_queue_size) {
+            return Error.ZquicError.SendQueueFull;
+        }
+
         const packet_copy = self.allocator.dupe(u8, packet_data) catch return Error.ZquicError.OutOfMemory;
 
         const outbound_packet = OutboundPacket{
@@ -181,14 +188,18 @@ pub const UdpMultiplexer = struct {
             .connection_id = connection_id,
         };
 
-        self.send_queue.writeItem(outbound_packet) catch return Error.ZquicError.SendQueueFull;
+        self.send_queue.append(self.allocator, outbound_packet) catch {
+            self.allocator.free(packet_copy);
+            return Error.ZquicError.OutOfMemory;
+        };
     }
 
     /// Process queued outbound packets
     pub fn processSendQueue(self: *Self) Error.ZquicError!u32 {
         var packets_sent: u32 = 0;
 
-        while (self.send_queue.readItem()) |packet| {
+        while (self.send_queue.items.len > 0) {
+            const packet = self.send_queue.orderedRemove(0);
             defer self.allocator.free(packet.data);
 
             self.sendPacket(packet.data, packet.destination, packet.connection_id) catch |err| {
@@ -251,7 +262,7 @@ pub const UdpMultiplexer = struct {
             .bytes_received = self.bytes_received,
             .bytes_sent = self.bytes_sent,
             .active_connections = self.connection_count,
-            .send_queue_size = self.send_queue.count,
+            .send_queue_size = self.send_queue.items.len,
         };
     }
 
@@ -281,7 +292,7 @@ test "connection management" {
     defer multiplexer.deinit();
 
     const conn_id = try Packet.ConnectionId.init(&[_]u8{ 1, 2, 3, 4 });
-    var connection = Connection.Connection.init(std.testing.allocator, .client, conn_id);
+    var connection = try Connection.Connection.init(std.testing.allocator, .client, .{});
     defer connection.deinit();
 
     const remote_addr = NetAddress.initIp4([4]u8{ 192, 168, 1, 1 }, 4433);

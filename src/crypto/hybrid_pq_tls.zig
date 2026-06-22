@@ -1,7 +1,7 @@
 //! Hybrid Post-Quantum TLS 1.3 Implementation
 //!
 //! Implements RFC 9420 compliant hybrid key exchange using ML-KEM-768 + X25519
-//! Provides quantum-safe cryptography while maintaining compatibility with classical systems
+//! Provides experimental hybrid key exchange while maintaining compatibility with classical systems.
 //!
 //! IMPORTANT: This module requires -Dpost-quantum=true -Dexperimental-crypto=true
 
@@ -10,6 +10,13 @@ const build_options = @import("build_options");
 const zcrypto = @import("zcrypto");
 const Error = @import("../utils/error.zig");
 const EnhancedTlsContext = @import("enhanced_tls.zig").EnhancedTlsContext;
+const ML_KEM_768 = zcrypto.post_quantum.ML_KEM_768;
+
+const X25519_KEY_SIZE: usize = 32;
+const ML_KEM_PUBLIC_KEY_SIZE: usize = ML_KEM_768.PUBLIC_KEY_SIZE;
+const ML_KEM_PRIVATE_KEY_SIZE: usize = ML_KEM_768.PRIVATE_KEY_SIZE;
+const ML_KEM_CIPHERTEXT_SIZE: usize = ML_KEM_768.CIPHERTEXT_SIZE;
+const HYBRID_SECRET_SIZE: usize = 64;
 
 // Compile-time check for post-quantum support
 comptime {
@@ -23,15 +30,36 @@ pub const HybridConfig = struct {
     enable_ml_kem: bool = true,
     enable_x25519: bool = true,
     prefer_pq: bool = true,
-    fallback_to_classical: bool = true,
+    fallback_to_classical: bool = false,
+
+    pub fn validate(self: HybridConfig) Error.ZquicError!void {
+        if (!self.enable_ml_kem and !self.enable_x25519) return Error.ZquicError.CryptoError;
+        if (!self.enable_ml_kem and self.enable_x25519 and !self.fallback_to_classical) {
+            return Error.ZquicError.CryptoError;
+        }
+    }
+
+    fn clientHelloLen(self: HybridConfig) usize {
+        var len: usize = 0;
+        if (self.enable_x25519) len += X25519_KEY_SIZE;
+        if (self.enable_ml_kem) len += ML_KEM_PUBLIC_KEY_SIZE;
+        return len;
+    }
+
+    fn serverHelloLen(self: HybridConfig) usize {
+        var len: usize = 0;
+        if (self.enable_x25519) len += X25519_KEY_SIZE;
+        if (self.enable_ml_kem) len += ML_KEM_PUBLIC_KEY_SIZE + ML_KEM_CIPHERTEXT_SIZE;
+        return len;
+    }
 };
 
 /// Hybrid key exchange result containing both classical and PQ components
 pub const HybridKeyExchange = struct {
     // Classical X25519 components
-    x25519_public: [32]u8,
-    x25519_secret: [32]u8,
-    x25519_shared: ?[32]u8,
+    x25519_public: [X25519_KEY_SIZE]u8,
+    x25519_secret: [X25519_KEY_SIZE]u8,
+    x25519_shared: ?[X25519_KEY_SIZE]u8,
 
     // ML-KEM-768 components
     ml_kem_public: []u8,
@@ -40,7 +68,7 @@ pub const HybridKeyExchange = struct {
     ml_kem_shared: ?[32]u8,
 
     // Combined hybrid secret
-    hybrid_secret: [64]u8,
+    hybrid_secret: [HYBRID_SECRET_SIZE]u8,
 
     allocator: std.mem.Allocator,
 
@@ -48,14 +76,14 @@ pub const HybridKeyExchange = struct {
 
     pub fn init(allocator: std.mem.Allocator) !Self {
         return Self{
-            .x25519_public = std.mem.zeroes([32]u8),
-            .x25519_secret = std.mem.zeroes([32]u8),
+            .x25519_public = std.mem.zeroes([X25519_KEY_SIZE]u8),
+            .x25519_secret = std.mem.zeroes([X25519_KEY_SIZE]u8),
             .x25519_shared = null,
-            .ml_kem_public = try allocator.alloc(u8, 1184), // ML-KEM-768 public key size
-            .ml_kem_secret = try allocator.alloc(u8, 2400), // ML-KEM-768 secret key size
+            .ml_kem_public = try allocator.alloc(u8, ML_KEM_PUBLIC_KEY_SIZE),
+            .ml_kem_secret = try allocator.alloc(u8, ML_KEM_PRIVATE_KEY_SIZE),
             .ml_kem_ciphertext = null,
             .ml_kem_shared = null,
-            .hybrid_secret = std.mem.zeroes([64]u8),
+            .hybrid_secret = std.mem.zeroes([HYBRID_SECRET_SIZE]u8),
             .allocator = allocator,
         };
     }
@@ -81,6 +109,8 @@ pub const HybridKeyExchange = struct {
 
     /// Generate hybrid key pair (X25519 + ML-KEM-768)
     pub fn generateKeyPair(self: *Self, config: HybridConfig) !void {
+        try config.validate();
+
         if (config.enable_x25519) {
             // Generate X25519 key pair using zcrypto.kex stable API
             const keypair = try zcrypto.kex.X25519.generateKeypair();
@@ -98,7 +128,9 @@ pub const HybridKeyExchange = struct {
     }
 
     /// Perform client-side key encapsulation
-    pub fn clientEncapsulate(self: *Self, server_x25519_public: [32]u8, server_ml_kem_public: []const u8, config: HybridConfig) !void {
+    pub fn clientEncapsulate(self: *Self, server_x25519_public: [X25519_KEY_SIZE]u8, server_ml_kem_public: []const u8, config: HybridConfig) !void {
+        try config.validate();
+
         if (config.enable_x25519) {
             // X25519 key agreement using zcrypto.kex stable API
             const x25519_shared = try zcrypto.kex.X25519.computeSharedSecret(self.x25519_secret, server_x25519_public);
@@ -106,10 +138,10 @@ pub const HybridKeyExchange = struct {
         }
 
         if (config.enable_ml_kem) {
+            if (server_ml_kem_public.len != ML_KEM_PUBLIC_KEY_SIZE) return Error.ZquicError.CryptoError;
             // ML-KEM-768 encapsulation using zcrypto post_quantum API
-            self.ml_kem_ciphertext = try self.allocator.alloc(u8, 1088); // ML-KEM-768 ciphertext size
-            const ml_kem = zcrypto.post_quantum.ML_KEM_768;
-            const result = try ml_kem.encapsulate(server_ml_kem_public[0..1184].*);
+            self.ml_kem_ciphertext = try self.allocator.alloc(u8, ML_KEM_CIPHERTEXT_SIZE);
+            const result = try ML_KEM_768.encapsulate(server_ml_kem_public[0..ML_KEM_PUBLIC_KEY_SIZE].*);
             @memcpy(self.ml_kem_ciphertext.?, &result.ciphertext);
             self.ml_kem_shared = result.shared_secret;
         }
@@ -119,7 +151,9 @@ pub const HybridKeyExchange = struct {
     }
 
     /// Perform server-side key decapsulation
-    pub fn serverDecapsulate(self: *Self, client_x25519_public: [32]u8, ml_kem_ciphertext: []const u8, config: HybridConfig) !void {
+    pub fn serverDecapsulate(self: *Self, client_x25519_public: [X25519_KEY_SIZE]u8, ml_kem_ciphertext: []const u8, config: HybridConfig) !void {
+        try config.validate();
+
         if (config.enable_x25519) {
             // X25519 key agreement using zcrypto.kex stable API
             const x25519_shared = try zcrypto.kex.X25519.computeSharedSecret(self.x25519_secret, client_x25519_public);
@@ -127,11 +161,11 @@ pub const HybridKeyExchange = struct {
         }
 
         if (config.enable_ml_kem) {
+            if (ml_kem_ciphertext.len != ML_KEM_CIPHERTEXT_SIZE) return Error.ZquicError.CryptoError;
             // ML-KEM-768 decapsulation using zcrypto post_quantum API
-            const ml_kem = zcrypto.post_quantum.ML_KEM_768;
-            const secret_key: [2400]u8 = self.ml_kem_secret[0..2400].*;
-            const ciphertext: [1088]u8 = ml_kem_ciphertext[0..1088].*;
-            const ml_kem_shared = try ml_kem.decapsulate(ciphertext, secret_key);
+            const secret_key: [ML_KEM_PRIVATE_KEY_SIZE]u8 = self.ml_kem_secret[0..ML_KEM_PRIVATE_KEY_SIZE].*;
+            const ciphertext: [ML_KEM_CIPHERTEXT_SIZE]u8 = ml_kem_ciphertext[0..ML_KEM_CIPHERTEXT_SIZE].*;
+            const ml_kem_shared = try ML_KEM_768.decapsulate(secret_key, ciphertext);
             self.ml_kem_shared = ml_kem_shared;
         }
 
@@ -141,6 +175,8 @@ pub const HybridKeyExchange = struct {
 
     /// Derive hybrid secret from both classical and post-quantum components
     fn deriveHybridSecret(self: *Self, config: HybridConfig) !void {
+        try config.validate();
+
         var kdf_input: [96]u8 = undefined; // 32 bytes X25519 + 32 bytes ML-KEM + 32 bytes domain separator
         var offset: usize = 0;
 
@@ -156,9 +192,11 @@ pub const HybridKeyExchange = struct {
             offset += 32;
         }
 
-        // Add domain separator for hybrid derivation
-        const domain_sep = "ZQUIC-HYBRID-PQ-TLS-1.3\x00\x00\x00\x00\x00\x00\x00\x00";
-        @memcpy(kdf_input[offset .. offset + 32], domain_sep);
+        // Add zero-padded domain separator for hybrid derivation.
+        const domain_sep = "ZQUIC-HYBRID-PQ-TLS-1.3";
+        var domain_block = std.mem.zeroes([32]u8);
+        @memcpy(domain_block[0..domain_sep.len], domain_sep);
+        @memcpy(kdf_input[offset .. offset + 32], &domain_block);
         offset += 32;
 
         // Use HKDF to derive final hybrid secret.
@@ -169,7 +207,7 @@ pub const HybridKeyExchange = struct {
     }
 
     /// Get the hybrid shared secret for TLS key derivation
-    pub fn getSharedSecret(self: *const Self) [64]u8 {
+    pub fn getSharedSecret(self: *const Self) [HYBRID_SECRET_SIZE]u8 {
         return self.hybrid_secret;
     }
 };
@@ -185,6 +223,7 @@ pub const HybridPQTlsContext = struct {
     const Self = @This();
 
     pub fn init(allocator: std.mem.Allocator, is_server: bool, config: HybridConfig) !Self {
+        try config.validate();
         return Self{
             .hybrid_kx = try HybridKeyExchange.init(allocator),
             .config = config,
@@ -200,6 +239,7 @@ pub const HybridPQTlsContext = struct {
 
     /// Initialize hybrid TLS handshake
     pub fn initializeHandshake(self: *Self) !void {
+        try self.config.validate();
         // Generate our hybrid key pair
         try self.hybrid_kx.generateKeyPair(self.config);
 
@@ -211,11 +251,21 @@ pub const HybridPQTlsContext = struct {
     /// public keys plus the ML-KEM ciphertext for the client to decapsulate.
     pub fn processClientHello(self: *Self, client_hello: []const u8) ![]u8 {
         if (!self.is_server) return Error.ZquicError.InvalidState;
-        if (client_hello.len < 32 + 1184) return Error.ZquicError.CryptoError;
+        try self.config.validate();
+        if (client_hello.len != self.config.clientHelloLen()) return Error.ZquicError.CryptoError;
 
         // Parse client hybrid key exchange data
-        const client_x25519_public = std.mem.bytesToValue([32]u8, client_hello[0..32]);
-        const client_ml_kem_public = client_hello[32..];
+        var offset: usize = 0;
+        const client_x25519_public = if (self.config.enable_x25519) blk: {
+            const key = std.mem.bytesToValue([X25519_KEY_SIZE]u8, client_hello[offset .. offset + X25519_KEY_SIZE]);
+            offset += X25519_KEY_SIZE;
+            break :blk key;
+        } else std.mem.zeroes([X25519_KEY_SIZE]u8);
+        const client_ml_kem_public = if (self.config.enable_ml_kem) blk: {
+            const key = client_hello[offset .. offset + ML_KEM_PUBLIC_KEY_SIZE];
+            offset += ML_KEM_PUBLIC_KEY_SIZE;
+            break :blk key;
+        } else &[_]u8{};
 
         // Perform server-side key exchange: X25519 agreement + ML-KEM encapsulation
         if (self.config.enable_x25519) {
@@ -226,9 +276,8 @@ pub const HybridPQTlsContext = struct {
 
         if (self.config.enable_ml_kem) {
             // ML-KEM encapsulation to client's public key
-            self.hybrid_kx.ml_kem_ciphertext = try self.allocator.alloc(u8, 1088); // ML-KEM-768 ciphertext size
-            const ml_kem = zcrypto.post_quantum.ML_KEM_768;
-            const result = try ml_kem.encapsulate(client_ml_kem_public[0..1184].*);
+            self.hybrid_kx.ml_kem_ciphertext = try self.allocator.alloc(u8, ML_KEM_CIPHERTEXT_SIZE);
+            const result = try ML_KEM_768.encapsulate(client_ml_kem_public[0..ML_KEM_PUBLIC_KEY_SIZE].*);
             @memcpy(self.hybrid_kx.ml_kem_ciphertext.?, &result.ciphertext);
             self.hybrid_kx.ml_kem_shared = result.shared_secret;
         }
@@ -236,13 +285,21 @@ pub const HybridPQTlsContext = struct {
         // Derive combined hybrid secret
         try self.hybrid_kx.deriveHybridSecret(self.config);
 
-        // Generate server hello response: our public keys + ML-KEM ciphertext
-        // Format: X25519 public (32) + ML-KEM public (1184) + ML-KEM ciphertext (1088)
-        var response = try self.allocator.alloc(u8, 32 + 1184 + 1088);
-        @memcpy(response[0..32], &self.hybrid_kx.x25519_public);
-        @memcpy(response[32..1216], self.hybrid_kx.ml_kem_public);
-        if (self.hybrid_kx.ml_kem_ciphertext) |ct| {
-            @memcpy(response[1216..2304], ct);
+        var response = try self.allocator.alloc(u8, self.config.serverHelloLen());
+        offset = 0;
+        if (self.config.enable_x25519) {
+            @memcpy(response[offset .. offset + X25519_KEY_SIZE], &self.hybrid_kx.x25519_public);
+            offset += X25519_KEY_SIZE;
+        }
+        if (self.config.enable_ml_kem) {
+            @memcpy(response[offset .. offset + ML_KEM_PUBLIC_KEY_SIZE], self.hybrid_kx.ml_kem_public);
+            offset += ML_KEM_PUBLIC_KEY_SIZE;
+            if (self.hybrid_kx.ml_kem_ciphertext) |ct| {
+                @memcpy(response[offset .. offset + ML_KEM_CIPHERTEXT_SIZE], ct);
+            } else {
+                self.allocator.free(response);
+                return Error.ZquicError.CryptoError;
+            }
         }
 
         std.log.info("Server processed client hello with hybrid PQ keys", .{});
@@ -254,12 +311,21 @@ pub const HybridPQTlsContext = struct {
     /// and ML-KEM decapsulation to derive the same shared secret.
     pub fn processServerHello(self: *Self, server_hello: []const u8) !void {
         if (self.is_server) return Error.ZquicError.InvalidState;
-        if (server_hello.len < 32 + 1184 + 1088) return Error.ZquicError.CryptoError;
+        try self.config.validate();
+        if (server_hello.len != self.config.serverHelloLen()) return Error.ZquicError.CryptoError;
 
-        // Parse server response: X25519 public (32) + ML-KEM public (1184) + ML-KEM ciphertext (1088)
-        const server_x25519_public = std.mem.bytesToValue([32]u8, server_hello[0..32]);
-        // Server ML-KEM public key at [32..1216] - not used by client for decapsulation
-        const ml_kem_ciphertext = server_hello[1216..2304];
+        var offset: usize = 0;
+        const server_x25519_public = if (self.config.enable_x25519) blk: {
+            const key = std.mem.bytesToValue([X25519_KEY_SIZE]u8, server_hello[offset .. offset + X25519_KEY_SIZE]);
+            offset += X25519_KEY_SIZE;
+            break :blk key;
+        } else std.mem.zeroes([X25519_KEY_SIZE]u8);
+        if (self.config.enable_ml_kem) offset += ML_KEM_PUBLIC_KEY_SIZE; // server ML-KEM public key is not used for decapsulation
+        const ml_kem_ciphertext = if (self.config.enable_ml_kem) blk: {
+            const ct = server_hello[offset .. offset + ML_KEM_CIPHERTEXT_SIZE];
+            offset += ML_KEM_CIPHERTEXT_SIZE;
+            break :blk ct;
+        } else &[_]u8{};
 
         // Perform client-side key exchange: X25519 agreement + ML-KEM decapsulation
         if (self.config.enable_x25519) {
@@ -269,10 +335,9 @@ pub const HybridPQTlsContext = struct {
 
         if (self.config.enable_ml_kem) {
             // ML-KEM decapsulation using our secret key and server's ciphertext
-            const ml_kem = zcrypto.post_quantum.ML_KEM_768;
-            const secret_key: [2400]u8 = self.hybrid_kx.ml_kem_secret[0..2400].*;
-            const ciphertext: [1088]u8 = ml_kem_ciphertext[0..1088].*;
-            const ml_kem_shared = try ml_kem.decapsulate(ciphertext, secret_key);
+            const secret_key: [ML_KEM_PRIVATE_KEY_SIZE]u8 = self.hybrid_kx.ml_kem_secret[0..ML_KEM_PRIVATE_KEY_SIZE].*;
+            const ciphertext: [ML_KEM_CIPHERTEXT_SIZE]u8 = ml_kem_ciphertext[0..ML_KEM_CIPHERTEXT_SIZE].*;
+            const ml_kem_shared = try ML_KEM_768.decapsulate(secret_key, ciphertext);
             self.hybrid_kx.ml_kem_shared = ml_kem_shared;
         }
 
@@ -287,17 +352,17 @@ pub const HybridPQTlsContext = struct {
         const shared_secret = self.hybrid_kx.getSharedSecret();
 
         // Derive QUIC traffic keys from hybrid secret.
-        var quic_keys = try allocator.alloc(u8, 128); // 64 bytes client + 64 bytes server keys
+        var quic_keys = try allocator.alloc(u8, HYBRID_SECRET_SIZE * 2);
         errdefer allocator.free(quic_keys);
 
         const label = "QUIC client traffic secret";
-        const client_derived = try zcrypto.kdf.hkdfSha256(allocator, &shared_secret, label, "", 64);
-        @memcpy(quic_keys[0..64], client_derived);
+        const client_derived = try zcrypto.kdf.hkdfSha256(allocator, &shared_secret, label, "", HYBRID_SECRET_SIZE);
+        @memcpy(quic_keys[0..HYBRID_SECRET_SIZE], client_derived);
         allocator.free(client_derived);
 
         const server_label = "QUIC server traffic secret";
-        const server_derived = try zcrypto.kdf.hkdfSha256(allocator, &shared_secret, server_label, "", 64);
-        @memcpy(quic_keys[64..128], server_derived);
+        const server_derived = try zcrypto.kdf.hkdfSha256(allocator, &shared_secret, server_label, "", HYBRID_SECRET_SIZE);
+        @memcpy(quic_keys[HYBRID_SECRET_SIZE .. HYBRID_SECRET_SIZE * 2], server_derived);
         allocator.free(server_derived);
 
         return quic_keys;
@@ -337,7 +402,7 @@ pub fn testHybridPQTLS() !void {
         .enable_ml_kem = true,
         .enable_x25519 = true,
         .prefer_pq = true,
-        .fallback_to_classical = true,
+        .fallback_to_classical = false,
     };
 
     // Create server and client contexts
@@ -351,14 +416,14 @@ pub fn testHybridPQTLS() !void {
     try server.initializeHandshake();
     try client.initializeHandshake();
 
-    // Client sends hello with its public keys: X25519 (32) + ML-KEM public (1184)
-    var client_hello = try allocator.alloc(u8, 32 + 1184);
+    // Client sends hello with its public keys: X25519 + ML-KEM public.
+    var client_hello = try allocator.alloc(u8, config.clientHelloLen());
     defer allocator.free(client_hello);
-    @memcpy(client_hello[0..32], &client.hybrid_kx.x25519_public);
-    @memcpy(client_hello[32..], client.hybrid_kx.ml_kem_public);
+    @memcpy(client_hello[0..X25519_KEY_SIZE], &client.hybrid_kx.x25519_public);
+    @memcpy(client_hello[X25519_KEY_SIZE..], client.hybrid_kx.ml_kem_public);
 
     // Server processes client hello, encapsulates to client's ML-KEM public key
-    // Returns: X25519 public (32) + ML-KEM public (1184) + ML-KEM ciphertext (1088)
+    // Returns: X25519 public + ML-KEM public + ML-KEM ciphertext.
     const server_hello = try server.processClientHello(client_hello);
     defer allocator.free(server_hello);
 
@@ -374,4 +439,82 @@ pub fn testHybridPQTLS() !void {
     }
 
     std.log.info("Hybrid PQ-TLS test passed! Security level: {s}", .{client.getSecurityLevel()});
+}
+
+test "HybridConfig rejects implicit classical-only fallback" {
+    try std.testing.expectError(Error.ZquicError.CryptoError, (HybridConfig{
+        .enable_ml_kem = false,
+        .enable_x25519 = true,
+        .fallback_to_classical = false,
+    }).validate());
+
+    try (HybridConfig{
+        .enable_ml_kem = false,
+        .enable_x25519 = true,
+        .fallback_to_classical = true,
+    }).validate();
+
+    try std.testing.expectError(Error.ZquicError.CryptoError, (HybridConfig{
+        .enable_ml_kem = false,
+        .enable_x25519 = false,
+    }).validate());
+}
+
+test "Hybrid PQ-TLS rejects malformed key share lengths" {
+    const allocator = std.testing.allocator;
+    const config = HybridConfig{};
+
+    var server = try HybridPQTlsContext.init(allocator, true, config);
+    defer server.deinit();
+    try server.initializeHandshake();
+
+    var client = try HybridPQTlsContext.init(allocator, false, config);
+    defer client.deinit();
+    try client.initializeHandshake();
+
+    var client_hello = try allocator.alloc(u8, config.clientHelloLen());
+    defer allocator.free(client_hello);
+    @memcpy(client_hello[0..X25519_KEY_SIZE], &client.hybrid_kx.x25519_public);
+    @memcpy(client_hello[X25519_KEY_SIZE..], client.hybrid_kx.ml_kem_public);
+
+    try std.testing.expectError(
+        Error.ZquicError.CryptoError,
+        server.processClientHello(client_hello[0 .. client_hello.len - 1]),
+    );
+
+    const server_hello = try server.processClientHello(client_hello);
+    defer allocator.free(server_hello);
+
+    try std.testing.expectError(
+        Error.ZquicError.CryptoError,
+        client.processServerHello(server_hello[0 .. server_hello.len - 1]),
+    );
+}
+
+test "Hybrid key exchange rejects malformed ML-KEM slices before fixed-array conversion" {
+    const allocator = std.testing.allocator;
+    const config = HybridConfig{};
+
+    var kx = try HybridKeyExchange.init(allocator);
+    defer kx.deinit();
+    try kx.generateKeyPair(config);
+
+    const peer_x25519 = fixedTestBytes(X25519_KEY_SIZE, 0x55);
+    const short_public = fixedTestBytes(ML_KEM_PUBLIC_KEY_SIZE - 1, 0x66);
+    const short_ciphertext = fixedTestBytes(ML_KEM_CIPHERTEXT_SIZE - 1, 0x77);
+
+    try std.testing.expectError(
+        Error.ZquicError.CryptoError,
+        kx.clientEncapsulate(peer_x25519, &short_public, config),
+    );
+    try std.testing.expectError(
+        Error.ZquicError.CryptoError,
+        kx.serverDecapsulate(peer_x25519, &short_ciphertext, config),
+    );
+}
+
+fn fixedTestBytes(comptime len: usize, value: u8) [len]u8 {
+    var bytes = std.mem.zeroes([len]u8);
+    @memset(bytes[0..], value);
+    return bytes;
 }

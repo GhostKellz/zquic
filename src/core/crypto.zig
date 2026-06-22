@@ -162,6 +162,9 @@ pub const AeadOps = struct {
         plaintext: []const u8,
         ciphertext: []u8,
     ) Error.ZquicError!usize {
+        if (iv.len != 12) return Error.ZquicError.CryptoError;
+        if (ciphertext.len < plaintext.len + 16) return Error.ZquicError.CryptoError;
+
         // Construct nonce from IV and packet number
         var nonce: [12]u8 = undefined;
         @memcpy(nonce[0..iv.len], iv);
@@ -230,6 +233,7 @@ pub const AeadOps = struct {
         plaintext: []u8,
     ) Error.ZquicError!usize {
         if (ciphertext.len < 16) return Error.ZquicError.CryptoError;
+        if (iv.len != 12) return Error.ZquicError.CryptoError;
 
         // Construct nonce from IV and packet number
         var nonce: [12]u8 = undefined;
@@ -244,6 +248,7 @@ pub const AeadOps = struct {
 
         const encrypted_data = ciphertext[0 .. ciphertext.len - 16];
         const tag = ciphertext[ciphertext.len - 16 ..];
+        if (plaintext.len < encrypted_data.len) return Error.ZquicError.CryptoError;
 
         return switch (self.cipher_suite) {
             .aes_128_gcm_sha256 => blk: {
@@ -357,6 +362,8 @@ pub const HeaderProtection = struct {
         header: []u8,
         sample: []const u8,
     ) Error.ZquicError!void {
+        if (header.len == 0) return Error.ZquicError.CryptoError;
+
         var mask: [5]u8 = undefined;
         try self.generateMask(hp_key, sample, &mask);
 
@@ -455,6 +462,9 @@ pub const QuicCrypto = struct {
         output: []u8,
     ) Error.ZquicError!usize {
         const keys = self.getKeys(level) orelse return Error.ZquicError.CryptoError;
+        if (output.len < header.len + payload.len + self.aead.cipher_suite.tagLength()) {
+            return Error.ZquicError.CryptoError;
+        }
 
         // Encrypt payload
         const ciphertext_len = try self.aead.encrypt(
@@ -490,6 +500,7 @@ pub const QuicCrypto = struct {
         output: []u8,
     ) Error.ZquicError!usize {
         const keys = self.getKeys(level) orelse return Error.ZquicError.CryptoError;
+        if (header_len == 0 or header_len > packet.len) return Error.ZquicError.CryptoError;
 
         // Remove header protection first
         const sample_offset = header_len + 4;
@@ -537,4 +548,196 @@ test "quic crypto initialization" {
     // Initially no keys should be installed
     try std.testing.expect(crypto.getKeys(.initial) == null);
     try std.testing.expect(crypto.getKeys(.application) == null);
+}
+
+fn filledBytes(comptime len: usize, value: u8) [len]u8 {
+    var bytes = std.mem.zeroes([len]u8);
+    @memset(bytes[0..], value);
+    return bytes;
+}
+
+fn testDirectionalKeys(
+    allocator: std.mem.Allocator,
+    cipher_suite: CipherSuite,
+    key_fill: u8,
+    iv_fill: u8,
+    hp_fill: u8,
+) !DirectionalKeys {
+    var key = filledBytes(32, key_fill);
+    var iv = filledBytes(12, iv_fill);
+    var hp_key = filledBytes(32, hp_fill);
+    return DirectionalKeys.init(
+        allocator,
+        cipher_suite,
+        key[0..cipher_suite.keyLength()],
+        &iv,
+        hp_key[0..cipher_suite.keyLength()],
+    );
+}
+
+test "aead rejects invalid key iv output and plaintext sizes" {
+    const aead = AeadOps.init(.aes_256_gcm_sha384);
+    const key = filledBytes(32, 0x42);
+    const short_key = filledBytes(31, 0x42);
+    const iv = filledBytes(12, 0x11);
+    const short_iv = filledBytes(11, 0x11);
+    const aad = "quic header";
+    const plaintext = "packet payload";
+
+    var ciphertext: [plaintext.len + 16]u8 = undefined;
+    try std.testing.expectError(
+        Error.ZquicError.CryptoError,
+        aead.encrypt(&short_key, &iv, 7, aad, plaintext, &ciphertext),
+    );
+    try std.testing.expectError(
+        Error.ZquicError.CryptoError,
+        aead.encrypt(&key, &short_iv, 7, aad, plaintext, &ciphertext),
+    );
+    try std.testing.expectError(
+        Error.ZquicError.CryptoError,
+        aead.encrypt(&key, &iv, 7, aad, plaintext, ciphertext[0 .. ciphertext.len - 1]),
+    );
+
+    const ciphertext_len = try aead.encrypt(&key, &iv, 7, aad, plaintext, &ciphertext);
+    var decrypted: [plaintext.len]u8 = undefined;
+    try std.testing.expectError(
+        Error.ZquicError.CryptoError,
+        aead.decrypt(&key, &short_iv, 7, aad, ciphertext[0..ciphertext_len], &decrypted),
+    );
+    try std.testing.expectError(
+        Error.ZquicError.CryptoError,
+        aead.decrypt(&key, &iv, 7, aad, ciphertext[0..ciphertext_len], decrypted[0 .. decrypted.len - 1]),
+    );
+    try std.testing.expectError(
+        Error.ZquicError.CryptoError,
+        aead.decrypt(&key, &iv, 7, aad, ciphertext[0..15], &decrypted),
+    );
+}
+
+test "aead rejects tampered ciphertext tag aad and packet number" {
+    const aead = AeadOps.init(.chacha20_poly1305_sha256);
+    const key = filledBytes(32, 0xA5);
+    const wrong_key = filledBytes(32, 0xC3);
+    const iv = filledBytes(12, 0x5A);
+    const aad = "short header";
+    const plaintext = "authenticated QUIC packet payload";
+
+    var ciphertext: [plaintext.len + 16]u8 = undefined;
+    const ciphertext_len = try aead.encrypt(&key, &iv, 9, aad, plaintext, &ciphertext);
+
+    var decrypted: [plaintext.len]u8 = undefined;
+    const decrypted_len = try aead.decrypt(&key, &iv, 9, aad, ciphertext[0..ciphertext_len], &decrypted);
+    try std.testing.expectEqualStrings(plaintext, decrypted[0..decrypted_len]);
+
+    try std.testing.expectError(
+        Error.ZquicError.CryptoError,
+        aead.decrypt(&wrong_key, &iv, 9, aad, ciphertext[0..ciphertext_len], &decrypted),
+    );
+
+    var tampered_ciphertext = ciphertext;
+    tampered_ciphertext[0] ^= 0x01;
+    try std.testing.expectError(
+        Error.ZquicError.CryptoError,
+        aead.decrypt(&key, &iv, 9, aad, tampered_ciphertext[0..ciphertext_len], &decrypted),
+    );
+
+    var tampered_tag = ciphertext;
+    tampered_tag[ciphertext_len - 1] ^= 0x01;
+    try std.testing.expectError(
+        Error.ZquicError.CryptoError,
+        aead.decrypt(&key, &iv, 9, aad, tampered_tag[0..ciphertext_len], &decrypted),
+    );
+
+    try std.testing.expectError(
+        Error.ZquicError.CryptoError,
+        aead.decrypt(&key, &iv, 10, aad, ciphertext[0..ciphertext_len], &decrypted),
+    );
+    try std.testing.expectError(
+        Error.ZquicError.CryptoError,
+        aead.decrypt(&key, &iv, 9, "mutated header", ciphertext[0..ciphertext_len], &decrypted),
+    );
+    try std.testing.expectError(
+        Error.ZquicError.CryptoError,
+        aead.decrypt(&key, &iv, 9, aad, ciphertext[0 .. ciphertext_len - 1], &decrypted),
+    );
+}
+
+test "header protection rejects malformed inputs" {
+    const hp = HeaderProtection.init(.aes_256_gcm_sha384);
+    const hp_key = filledBytes(32, 0x33);
+    const short_hp_key = filledBytes(31, 0x33);
+    const sample = filledBytes(16, 0x44);
+    const short_sample = filledBytes(15, 0x44);
+    var mask: [5]u8 = undefined;
+    var short_mask: [4]u8 = undefined;
+    var header = [_]u8{ 0x40, 0x00, 0x00, 0x00, 0x01 };
+    var empty_header: [0]u8 = .{};
+
+    try hp.generateMask(&hp_key, &sample, &mask);
+    try std.testing.expectError(
+        Error.ZquicError.CryptoError,
+        hp.generateMask(&short_hp_key, &sample, &mask),
+    );
+    try std.testing.expectError(
+        Error.ZquicError.CryptoError,
+        hp.generateMask(&hp_key, &short_sample, &mask),
+    );
+    try std.testing.expectError(
+        Error.ZquicError.CryptoError,
+        hp.generateMask(&hp_key, &sample, &short_mask),
+    );
+    try std.testing.expectError(
+        Error.ZquicError.CryptoError,
+        hp.protect(&hp_key, &empty_header, &sample),
+    );
+    try hp.protect(&hp_key, &header, &sample);
+    try hp.unprotect(&hp_key, &header, &sample);
+    try std.testing.expectEqualSlices(u8, &[_]u8{ 0x40, 0x00, 0x00, 0x00, 0x01 }, &header);
+}
+
+test "quic crypto packet roundtrip rejects tampering and undersized buffers" {
+    const allocator = std.testing.allocator;
+    var crypto = QuicCrypto.init(allocator, .aes_256_gcm_sha384);
+    defer crypto.deinit();
+
+    const local = try testDirectionalKeys(allocator, .aes_256_gcm_sha384, 0x10, 0x20, 0x30);
+    const remote = try testDirectionalKeys(allocator, .aes_256_gcm_sha384, 0x10, 0x20, 0x30);
+    crypto.installKeys(.application, local, remote);
+
+    const header = [_]u8{ 0x40, 0x00, 0x00, 0x00, 0x07 };
+    const payload = "long enough QUIC application payload for header protection sample";
+    var packet: [header.len + payload.len + 16]u8 = undefined;
+
+    try std.testing.expectError(
+        Error.ZquicError.CryptoError,
+        crypto.encryptPacket(.application, 7, &header, payload, packet[0 .. packet.len - 1]),
+    );
+
+    const packet_len = try crypto.encryptPacket(.application, 7, &header, payload, &packet);
+    var packet_copy = packet;
+    var decrypted: [payload.len]u8 = undefined;
+    const decrypted_len = try crypto.decryptPacket(.application, 7, packet_copy[0..packet_len], header.len, &decrypted);
+    try std.testing.expectEqualStrings(payload, decrypted[0..decrypted_len]);
+
+    var tampered_packet = packet;
+    tampered_packet[packet_len - 1] ^= 0x01;
+    try std.testing.expectError(
+        Error.ZquicError.CryptoError,
+        crypto.decryptPacket(.application, 7, tampered_packet[0..packet_len], header.len, &decrypted),
+    );
+
+    var tampered_header_packet = packet;
+    tampered_header_packet[0] ^= 0x40;
+    try std.testing.expectError(
+        Error.ZquicError.CryptoError,
+        crypto.decryptPacket(.application, 7, tampered_header_packet[0..packet_len], header.len, &decrypted),
+    );
+    try std.testing.expectError(
+        Error.ZquicError.CryptoError,
+        crypto.decryptPacket(.application, 8, packet[0..packet_len], header.len, &decrypted),
+    );
+    try std.testing.expectError(
+        Error.ZquicError.CryptoError,
+        crypto.decryptPacket(.application, 7, packet[0..packet_len], packet_len + 1, &decrypted),
+    );
 }

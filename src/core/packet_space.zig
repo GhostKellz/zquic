@@ -60,6 +60,27 @@ pub const SentPacket = struct {
     }
 };
 
+/// Acknowledgment range, inclusive.
+pub const AckRange = struct {
+    start: PacketNumber,
+    end: PacketNumber,
+};
+
+/// Result of processing ACK ranges in a packet number space.
+pub const AckResult = struct {
+    newly_acked_count: usize = 0,
+    newly_acked_bytes: u64 = 0,
+    largest_newly_acked: ?PacketNumber = null,
+    largest_newly_acked_time: u64 = 0,
+};
+
+/// Aggregate information for packets declared lost.
+pub const LostPacketStats = struct {
+    lost_count: usize = 0,
+    lost_bytes: u64 = 0,
+    largest_lost_time: u64 = 0,
+};
+
 /// QUIC Packet Number Space
 pub const PacketSpace = struct {
     /// Space type identifier
@@ -155,25 +176,41 @@ pub const PacketSpace = struct {
             packet_number;
     }
 
-    /// Process acknowledgment of packets
-    pub fn onAckReceived(
+    /// Process acknowledgment of packets.
+    ///
+    /// ACK ranges that reference packet numbers never sent in this packet
+    /// number space are protocol violations. Ranges are inclusive.
+    pub fn processAck(
         self: *Self,
-        acked_ranges: []const struct { start: PacketNumber, end: PacketNumber },
+        acked_ranges: []const AckRange,
         ack_delay: u64,
         now: u64,
-    ) void {
+    ) Error.ZquicError!AckResult {
         _ = ack_delay; // TODO: Use for RTT calculation
+        if (self.state != .active) return Error.ZquicError.InvalidState;
+
+        var result = AckResult{};
         var newly_acked_packets = std.array_list.Managed(PacketNumber).init(self.allocator);
         defer newly_acked_packets.deinit();
 
-        // Find newly acknowledged packets
+        try self.validateAckRanges(acked_ranges);
+
+        // Find newly acknowledged packets.
         for (acked_ranges) |range| {
             var pn = range.start;
             while (pn <= range.end) : (pn += 1) {
-                if (self.sent_packets.contains(pn)) {
-                    newly_acked_packets.append(pn) catch continue;
+                if (self.sent_packets.get(pn)) |packet| {
+                    try newly_acked_packets.append(pn);
+                    result.newly_acked_count += 1;
+                    if (packet.in_flight) {
+                        result.newly_acked_bytes += packet.sent_bytes;
+                    }
 
-                    // Update largest acked
+                    if (result.largest_newly_acked == null or pn > result.largest_newly_acked.?) {
+                        result.largest_newly_acked = pn;
+                        result.largest_newly_acked_time = packet.time_sent;
+                    }
+
                     if (self.largest_acked_packet == null or pn > self.largest_acked_packet.?) {
                         self.largest_acked_packet = pn;
                         self.largest_acked_time = now;
@@ -182,15 +219,65 @@ pub const PacketSpace = struct {
             }
         }
 
-        // Remove acknowledged packets
         for (newly_acked_packets.items) |pn| {
             _ = self.sent_packets.remove(pn);
         }
 
-        // Reset PTO count on successful acknowledgment
-        if (newly_acked_packets.items.len > 0) {
+        if (result.newly_acked_count > 0) {
             self.pto_count = 0;
         }
+
+        return result;
+    }
+
+    /// Backward-compatible ACK handler for older call sites.
+    pub fn onAckReceived(
+        self: *Self,
+        acked_ranges: []const AckRange,
+        ack_delay: u64,
+        now: u64,
+    ) void {
+        _ = self.processAck(acked_ranges, ack_delay, now) catch return;
+    }
+
+    fn validateAckRanges(self: *const Self, acked_ranges: []const AckRange) Error.ZquicError!void {
+        const largest_sent = self.largest_sent_packet orelse {
+            if (acked_ranges.len == 0) return;
+            return Error.ZquicError.ProtocolViolation;
+        };
+
+        for (acked_ranges, 0..) |range, i| {
+            if (range.start > range.end) {
+                return Error.ZquicError.ProtocolViolation;
+            }
+            if (range.end > largest_sent) {
+                return Error.ZquicError.ProtocolViolation;
+            }
+
+            var j: usize = i + 1;
+            while (j < acked_ranges.len) : (j += 1) {
+                const other = acked_ranges[j];
+                const overlaps = range.start <= other.end and other.start <= range.end;
+                if (overlaps) {
+                    return Error.ZquicError.ProtocolViolation;
+                }
+            }
+        }
+    }
+
+    /// Return byte/time accounting for packets about to be declared lost.
+    pub fn lostPacketStats(self: *const Self, lost_packets: []const PacketNumber) LostPacketStats {
+        var stats = LostPacketStats{};
+        for (lost_packets) |pn| {
+            if (self.sent_packets.get(pn)) |packet| {
+                stats.lost_count += 1;
+                if (packet.in_flight) {
+                    stats.lost_bytes += packet.sent_bytes;
+                }
+                stats.largest_lost_time = @max(stats.largest_lost_time, packet.time_sent);
+            }
+        }
+        return stats;
     }
 
     /// Detect lost packets based on time and packet number thresholds
@@ -417,20 +504,58 @@ test "packet space acknowledgments and loss detection" {
     try space.onPacketSent(1, 2_000, true, true, 1200);
     try space.onPacketSent(2, 3_000, true, true, 1200);
 
-    const ack_first = [_]struct { start: PacketNumber, end: PacketNumber }{.{ .start = 0, .end = 0 }};
+    const ack_first = [_]AckRange{.{ .start = 0, .end = 0 }};
     space.onAckReceived(&ack_first, 0, 4_000);
     try std.testing.expectEqual(@as(PacketNumber, 0), space.largest_acked_packet.?);
     try std.testing.expectEqual(@as(usize, 2), space.sent_packets.count());
 
-    const ack_latest = [_]struct { start: PacketNumber, end: PacketNumber }{.{ .start = 2, .end = 2 }};
+    const ack_latest = [_]AckRange{.{ .start = 2, .end = 2 }};
     space.onAckReceived(&ack_latest, 0, 5_000);
     try std.testing.expectEqual(@as(PacketNumber, 2), space.largest_acked_packet.?);
 
     var lost = space.detectLostPackets(6_000, 500, 1);
-    defer lost.deinit();
+    defer lost.deinit(allocator);
     try std.testing.expectEqual(@as(usize, 1), lost.items.len);
     try std.testing.expectEqual(@as(PacketNumber, 1), lost.items[0]);
 
     space.onPacketsLost(lost.items);
+    try std.testing.expectEqual(@as(usize, 0), space.sent_packets.count());
+}
+
+test "packet space rejects invalid ack ranges" {
+    var space = try PacketSpace.init(std.testing.allocator, .application);
+    defer space.deinit();
+
+    try space.onPacketSent(0, 1_000, true, true, 1200);
+    try space.onPacketSent(1, 2_000, true, true, 1200);
+
+    const reversed = [_]AckRange{.{ .start = 1, .end = 0 }};
+    try std.testing.expectError(Error.ZquicError.ProtocolViolation, space.processAck(&reversed, 0, 3_000));
+
+    const unsent = [_]AckRange{.{ .start = 2, .end = 2 }};
+    try std.testing.expectError(Error.ZquicError.ProtocolViolation, space.processAck(&unsent, 0, 3_000));
+
+    const overlapping = [_]AckRange{
+        .{ .start = 0, .end = 1 },
+        .{ .start = 1, .end = 1 },
+    };
+    try std.testing.expectError(Error.ZquicError.ProtocolViolation, space.processAck(&overlapping, 0, 3_000));
+}
+
+test "packet space reports actual newly acked bytes" {
+    var space = try PacketSpace.init(std.testing.allocator, .application);
+    defer space.deinit();
+
+    try space.onPacketSent(0, 1_000, true, true, 100);
+    try space.onPacketSent(1, 2_000, true, true, 200);
+    try space.onPacketSent(2, 3_000, true, false, 300);
+
+    const ack = [_]AckRange{.{ .start = 0, .end = 2 }};
+    const result = try space.processAck(&ack, 0, 4_000);
+
+    try std.testing.expectEqual(@as(usize, 3), result.newly_acked_count);
+    try std.testing.expectEqual(@as(u64, 300), result.newly_acked_bytes);
+    try std.testing.expectEqual(@as(PacketNumber, 2), result.largest_newly_acked.?);
+    try std.testing.expectEqual(@as(u64, 3_000), result.largest_newly_acked_time);
     try std.testing.expectEqual(@as(usize, 0), space.sent_packets.count());
 }

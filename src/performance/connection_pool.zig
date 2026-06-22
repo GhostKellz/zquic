@@ -11,6 +11,7 @@
 const std = @import("std");
 const Error = @import("../utils/error.zig");
 const Time = @import("../utils/time.zig");
+const SpinMutex = @import("../utils/sync.zig").SpinMutex;
 const Connection = @import("../core/connection.zig").Connection;
 const ConnectionState = @import("../core/connection.zig").ConnectionState;
 const ConnectionParams = @import("../core/connection.zig").ConnectionParams;
@@ -38,29 +39,29 @@ pub const ConnectionPoolConfig = struct {
 
 /// Connection pool statistics
 pub const PoolStats = struct {
-    total_connections: std.atomic.Atomic(u32),
-    active_connections: std.atomic.Atomic(u32),
-    idle_connections: std.atomic.Atomic(u32),
-    connections_created: std.atomic.Atomic(u64),
-    connections_destroyed: std.atomic.Atomic(u64),
-    connections_reused: std.atomic.Atomic(u64),
-    acquire_requests: std.atomic.Atomic(u64),
-    acquire_timeouts: std.atomic.Atomic(u64),
-    health_check_failures: std.atomic.Atomic(u64),
+    total_connections: std.atomic.Value(u32),
+    active_connections: std.atomic.Value(u32),
+    idle_connections: std.atomic.Value(u32),
+    connections_created: std.atomic.Value(u64),
+    connections_destroyed: std.atomic.Value(u64),
+    connections_reused: std.atomic.Value(u64),
+    acquire_requests: std.atomic.Value(u64),
+    acquire_timeouts: std.atomic.Value(u64),
+    health_check_failures: std.atomic.Value(u64),
 
     const Self = @This();
 
     pub fn init() Self {
         return Self{
-            .total_connections = std.atomic.Atomic(u32).init(0),
-            .active_connections = std.atomic.Atomic(u32).init(0),
-            .idle_connections = std.atomic.Atomic(u32).init(0),
-            .connections_created = std.atomic.Atomic(u64).init(0),
-            .connections_destroyed = std.atomic.Atomic(u64).init(0),
-            .connections_reused = std.atomic.Atomic(u64).init(0),
-            .acquire_requests = std.atomic.Atomic(u64).init(0),
-            .acquire_timeouts = std.atomic.Atomic(u64).init(0),
-            .health_check_failures = std.atomic.Atomic(u64).init(0),
+            .total_connections = std.atomic.Value(u32).init(0),
+            .active_connections = std.atomic.Value(u32).init(0),
+            .idle_connections = std.atomic.Value(u32).init(0),
+            .connections_created = std.atomic.Value(u64).init(0),
+            .connections_destroyed = std.atomic.Value(u64).init(0),
+            .connections_reused = std.atomic.Value(u64).init(0),
+            .acquire_requests = std.atomic.Value(u64).init(0),
+            .acquire_timeouts = std.atomic.Value(u64).init(0),
+            .health_check_failures = std.atomic.Value(u64).init(0),
         };
     }
 };
@@ -71,10 +72,10 @@ pub const PooledConnection = struct {
     pool: *ConnectionPool,
     id: u64,
     created_at: i64,
-    last_used: std.atomic.Atomic(i64),
-    use_count: std.atomic.Atomic(u64),
-    is_healthy: std.atomic.Atomic(bool),
-    reference_count: std.atomic.Atomic(u32),
+    last_used: std.atomic.Value(i64),
+    use_count: std.atomic.Value(u64),
+    is_healthy: std.atomic.Value(bool),
+    reference_count: std.atomic.Value(u32),
 
     const Self = @This();
 
@@ -85,35 +86,35 @@ pub const PooledConnection = struct {
             .pool = pool,
             .id = id,
             .created_at = now,
-            .last_used = std.atomic.Atomic(i64).init(now),
-            .use_count = std.atomic.Atomic(u64).init(0),
-            .is_healthy = std.atomic.Atomic(bool).init(true),
-            .reference_count = std.atomic.Atomic(u32).init(1),
+            .last_used = std.atomic.Value(i64).init(now),
+            .use_count = std.atomic.Value(u64).init(0),
+            .is_healthy = std.atomic.Value(bool).init(true),
+            .reference_count = std.atomic.Value(u32).init(1),
         };
     }
 
     /// Mark connection as used
     pub fn markUsed(self: *Self) void {
-        _ = self.last_used.store(Time.nowMicros(), .Monotonic);
-        _ = self.use_count.fetchAdd(1, .Monotonic);
+        _ = self.last_used.store(Time.nowMicros(), .monotonic);
+        _ = self.use_count.fetchAdd(1, .monotonic);
     }
 
     /// Check if connection is idle
     pub fn isIdle(self: *const Self, idle_timeout_us: i64) bool {
-        const last_used = self.last_used.load(.Monotonic);
+        const last_used = self.last_used.load(.monotonic);
         const now = Time.nowMicros();
         return (now - last_used) > idle_timeout_us;
     }
 
     /// Acquire reference to connection
     pub fn acquire(self: *Self) bool {
-        const old_ref = self.reference_count.fetchAdd(1, .AcqRel);
+        const old_ref = self.reference_count.fetchAdd(1, .acq_rel);
         return old_ref > 0;
     }
 
     /// Release reference to connection
     pub fn release(self: *Self) void {
-        const old_ref = self.reference_count.fetchSub(1, .AcqRel);
+        const old_ref = self.reference_count.fetchSub(1, .acq_rel);
         if (old_ref == 1) {
             // Last reference released, return to pool
             self.pool.releaseConnection(self);
@@ -124,7 +125,7 @@ pub const PooledConnection = struct {
     pub fn checkHealth(self: *Self) bool {
         // Check connection state
         if (self.connection.getState() == .closed or self.connection.getState() == .draining) {
-            _ = self.is_healthy.store(false, .Monotonic);
+            _ = self.is_healthy.store(false, .monotonic);
             return false;
         }
 
@@ -134,24 +135,24 @@ pub const PooledConnection = struct {
         const max_silence = 60_000_000; // 60 seconds
 
         if (now - last_activity > max_silence) {
-            _ = self.is_healthy.store(false, .Monotonic);
+            _ = self.is_healthy.store(false, .monotonic);
             return false;
         }
 
-        _ = self.is_healthy.store(true, .Monotonic);
+        _ = self.is_healthy.store(true, .monotonic);
         return true;
     }
 };
 
 /// Lock-free FIFO queue for pooled connections
 const ConnectionQueue = struct {
-    head: std.atomic.Atomic(?*QueueNode),
-    tail: std.atomic.Atomic(?*QueueNode),
-    size: std.atomic.Atomic(u32),
+    head: std.atomic.Value(?*QueueNode),
+    tail: std.atomic.Value(?*QueueNode),
+    size: std.atomic.Value(u32),
     allocator: std.mem.Allocator,
 
     const QueueNode = struct {
-        next: std.atomic.Atomic(?*QueueNode),
+        next: std.atomic.Value(?*QueueNode),
         connection: *PooledConnection,
     };
 
@@ -159,9 +160,9 @@ const ConnectionQueue = struct {
 
     pub fn init(allocator: std.mem.Allocator) Self {
         return Self{
-            .head = std.atomic.Atomic(?*QueueNode).init(null),
-            .tail = std.atomic.Atomic(?*QueueNode).init(null),
-            .size = std.atomic.Atomic(u32).init(0),
+            .head = std.atomic.Value(?*QueueNode).init(null),
+            .tail = std.atomic.Value(?*QueueNode).init(null),
+            .size = std.atomic.Value(u32).init(0),
             .allocator = allocator,
         };
     }
@@ -175,39 +176,39 @@ const ConnectionQueue = struct {
     pub fn push(self: *Self, connection: *PooledConnection) !void {
         const node = try self.allocator.create(QueueNode);
         node.* = QueueNode{
-            .next = std.atomic.Atomic(?*QueueNode).init(null),
+            .next = std.atomic.Value(?*QueueNode).init(null),
             .connection = connection,
         };
 
-        const prev_tail = self.tail.swap(node, .AcqRel);
+        const prev_tail = self.tail.swap(node, .acq_rel);
         if (prev_tail) |tail| {
-            _ = tail.next.store(node, .Release);
+            _ = tail.next.store(node, .release);
         } else {
-            _ = self.head.store(node, .Release);
+            _ = self.head.store(node, .release);
         }
 
-        _ = self.size.fetchAdd(1, .Monotonic);
+        _ = self.size.fetchAdd(1, .monotonic);
     }
 
     pub fn pop(self: *Self) ?*QueueNode {
-        const head = self.head.load(.Acquire) orelse return null;
-        const next = head.next.load(.Acquire);
+        const head = self.head.load(.acquire) orelse return null;
+        const next = head.next.load(.acquire);
 
-        if (self.head.cmpxchgWeak(head, next, .AcqRel, .Monotonic)) |_| {
+        if (self.head.cmpxchgWeak(head, next, .acq_rel, .monotonic)) |_| {
             // CAS failed, try again
             return self.pop();
         }
 
         if (next == null) {
-            _ = self.tail.cmpxchgWeak(head, null, .AcqRel, .Monotonic);
+            _ = self.tail.cmpxchgWeak(head, null, .acq_rel, .monotonic);
         }
 
-        _ = self.size.fetchSub(1, .Monotonic);
+        _ = self.size.fetchSub(1, .monotonic);
         return head;
     }
 
     pub fn len(self: *const Self) u32 {
-        return self.size.load(.Monotonic);
+        return self.size.load(.monotonic);
     }
 };
 
@@ -220,15 +221,15 @@ pub const ConnectionPool = struct {
     // Connection management
     idle_connections: ConnectionQueue,
     all_connections: std.HashMap(u64, *PooledConnection, std.hash_map.DefaultContext(u64), std.hash_map.default_max_load_percentage),
-    connection_id_counter: std.atomic.Atomic(u64),
+    connection_id_counter: std.atomic.Value(u64),
 
     // Threading
     health_check_thread: ?std.Thread = null,
     scaling_thread: ?std.Thread = null,
-    shutdown: std.atomic.Atomic(bool),
+    shutdown: std.atomic.Value(bool),
 
     // Synchronization
-    pool_mutex: std.Thread.Mutex,
+    pool_mutex: SpinMutex,
 
     const Self = @This();
 
@@ -239,9 +240,9 @@ pub const ConnectionPool = struct {
             .stats = PoolStats.init(),
             .idle_connections = ConnectionQueue.init(allocator),
             .all_connections = std.HashMap(u64, *PooledConnection, std.hash_map.DefaultContext(u64), std.hash_map.default_max_load_percentage).init(allocator),
-            .connection_id_counter = std.atomic.Atomic(u64).init(1),
-            .shutdown = std.atomic.Atomic(bool).init(false),
-            .pool_mutex = std.Thread.Mutex{},
+            .connection_id_counter = std.atomic.Value(u64).init(1),
+            .shutdown = std.atomic.Value(bool).init(false),
+            .pool_mutex = .{},
         };
 
         // Pre-create initial connections
@@ -258,7 +259,7 @@ pub const ConnectionPool = struct {
 
     pub fn deinit(self: *Self) void {
         // Signal shutdown
-        _ = self.shutdown.store(true, .Monotonic);
+        _ = self.shutdown.store(true, .monotonic);
 
         // Wait for background threads
         if (self.health_check_thread) |thread| {
@@ -286,7 +287,7 @@ pub const ConnectionPool = struct {
 
     /// Acquire a connection from the pool
     pub fn acquireConnection(self: *Self, target_host: []const u8, target_port: u16) !*PooledConnection {
-        _ = self.stats.acquire_requests.fetchAdd(1, .Monotonic);
+        _ = self.stats.acquire_requests.fetchAdd(1, .monotonic);
 
         const start_time = Time.nowMicros();
         const timeout_us = self.config.acquire_timeout_ms * 1000;
@@ -302,9 +303,9 @@ pub const ConnectionPool = struct {
                 if (self.config.enable_reuse and pooled_conn.checkHealth()) {
                     if (pooled_conn.acquire()) {
                         pooled_conn.markUsed();
-                        _ = self.stats.connections_reused.fetchAdd(1, .Monotonic);
-                        _ = self.stats.active_connections.fetchAdd(1, .Monotonic);
-                        _ = self.stats.idle_connections.fetchSub(1, .Monotonic);
+                        _ = self.stats.connections_reused.fetchAdd(1, .monotonic);
+                        _ = self.stats.active_connections.fetchAdd(1, .monotonic);
+                        _ = self.stats.idle_connections.fetchSub(1, .monotonic);
                         return pooled_conn;
                     }
                 }
@@ -314,9 +315,9 @@ pub const ConnectionPool = struct {
             }
 
             // No idle connections available, try to create a new one
-            if (self.stats.total_connections.load(.Monotonic) < self.config.max_pool_size) {
+            if (self.stats.total_connections.load(.monotonic) < self.config.max_pool_size) {
                 if (self.createConnection(target_host, target_port)) |pooled_conn| {
-                    _ = self.stats.active_connections.fetchAdd(1, .Monotonic);
+                    _ = self.stats.active_connections.fetchAdd(1, .monotonic);
                     return pooled_conn;
                 } else |_| {
                     // Failed to create connection
@@ -326,7 +327,7 @@ pub const ConnectionPool = struct {
             // Check timeout
             const now = Time.nowMicros();
             if (now - start_time > timeout_us) {
-                _ = self.stats.acquire_timeouts.fetchAdd(1, .Monotonic);
+                _ = self.stats.acquire_timeouts.fetchAdd(1, .monotonic);
                 return Error.ZquicError.Timeout;
             }
 
@@ -337,7 +338,7 @@ pub const ConnectionPool = struct {
 
     /// Release a connection back to the pool
     pub fn releaseConnection(self: *Self, pooled_conn: *PooledConnection) void {
-        _ = self.stats.active_connections.fetchSub(1, .Monotonic);
+        _ = self.stats.active_connections.fetchSub(1, .monotonic);
 
         // Check if connection is still healthy
         if (!pooled_conn.checkHealth() or pooled_conn.connection.getState() != .established) {
@@ -346,7 +347,7 @@ pub const ConnectionPool = struct {
         }
 
         // Check if we have too many idle connections
-        if (self.stats.idle_connections.load(.Monotonic) >= self.config.max_pool_size / 2) {
+        if (self.stats.idle_connections.load(.monotonic) >= self.config.max_pool_size / 2) {
             self.destroyConnection(pooled_conn);
             return;
         }
@@ -358,7 +359,7 @@ pub const ConnectionPool = struct {
             return;
         };
 
-        _ = self.stats.idle_connections.fetchAdd(1, .Monotonic);
+        _ = self.stats.idle_connections.fetchAdd(1, .monotonic);
     }
 
     /// Create initial pool of connections
@@ -371,7 +372,7 @@ pub const ConnectionPool = struct {
                     self.destroyConnection(pooled_conn);
                     continue;
                 };
-                _ = self.stats.idle_connections.fetchAdd(1, .Monotonic);
+                _ = self.stats.idle_connections.fetchAdd(1, .monotonic);
             } else |_| {
                 // Failed to create initial connection, continue with others
                 continue;
@@ -390,7 +391,7 @@ pub const ConnectionPool = struct {
 
         // Create pooled connection wrapper
         const pooled_conn = try self.allocator.create(PooledConnection);
-        const conn_id = self.connection_id_counter.fetchAdd(1, .Monotonic);
+        const conn_id = self.connection_id_counter.fetchAdd(1, .monotonic);
         pooled_conn.* = PooledConnection.init(connection, self, conn_id);
 
         // Add to connection registry
@@ -398,8 +399,8 @@ pub const ConnectionPool = struct {
         defer self.pool_mutex.unlock();
 
         try self.all_connections.put(conn_id, pooled_conn);
-        _ = self.stats.total_connections.fetchAdd(1, .Monotonic);
-        _ = self.stats.connections_created.fetchAdd(1, .Monotonic);
+        _ = self.stats.total_connections.fetchAdd(1, .monotonic);
+        _ = self.stats.connections_created.fetchAdd(1, .monotonic);
 
         return pooled_conn;
     }
@@ -417,8 +418,8 @@ pub const ConnectionPool = struct {
         self.allocator.destroy(pooled_conn.connection);
         self.allocator.destroy(pooled_conn);
 
-        _ = self.stats.total_connections.fetchSub(1, .Monotonic);
-        _ = self.stats.connections_destroyed.fetchAdd(1, .Monotonic);
+        _ = self.stats.total_connections.fetchSub(1, .monotonic);
+        _ = self.stats.connections_destroyed.fetchAdd(1, .monotonic);
     }
 
     /// Get pool statistics
@@ -428,7 +429,7 @@ pub const ConnectionPool = struct {
 
     /// Health check worker thread
     fn healthCheckWorker(pool: *ConnectionPool) void {
-        while (!pool.shutdown.load(.Monotonic)) {
+        while (!pool.shutdown.load(.monotonic)) {
             const start_time = Time.nowMicros();
 
             // Check health of all connections
@@ -442,7 +443,7 @@ pub const ConnectionPool = struct {
 
                 if (!pooled_conn.checkHealth()) {
                     unhealthy_connections.append(pooled_conn.id) catch continue;
-                    _ = pool.stats.health_check_failures.fetchAdd(1, .Monotonic);
+                    _ = pool.stats.health_check_failures.fetchAdd(1, .monotonic);
                 }
 
                 // Check for idle timeout
@@ -473,10 +474,10 @@ pub const ConnectionPool = struct {
 
     /// Adaptive scaling worker thread
     fn scalingWorker(pool: *ConnectionPool) void {
-        while (!pool.shutdown.load(.Monotonic)) {
-            const total_conns = pool.stats.total_connections.load(.Monotonic);
-            const active_conns = pool.stats.active_connections.load(.Monotonic);
-            const idle_conns = pool.stats.idle_connections.load(.Monotonic);
+        while (!pool.shutdown.load(.monotonic)) {
+            const total_conns = pool.stats.total_connections.load(.monotonic);
+            const active_conns = pool.stats.active_connections.load(.monotonic);
+            const idle_conns = pool.stats.idle_connections.load(.monotonic);
 
             // Scale up if needed
             if (active_conns > total_conns * 8 / 10 and total_conns < pool.config.max_pool_size) {
@@ -488,7 +489,7 @@ pub const ConnectionPool = struct {
                             pool.destroyConnection(pooled_conn);
                             break;
                         };
-                        _ = pool.stats.idle_connections.fetchAdd(1, .Monotonic);
+                        _ = pool.stats.idle_connections.fetchAdd(1, .monotonic);
                     } else |_| {
                         break;
                     }
@@ -503,7 +504,7 @@ pub const ConnectionPool = struct {
                     if (pool.idle_connections.pop()) |node| {
                         defer pool.allocator.destroy(node);
                         pool.destroyConnection(node.connection);
-                        _ = pool.stats.idle_connections.fetchSub(1, .Monotonic);
+                        _ = pool.stats.idle_connections.fetchSub(1, .monotonic);
                     } else {
                         break;
                     }

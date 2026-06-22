@@ -1,3 +1,126 @@
+## [0.9.14] - 2026-06-21
+
+### Added
+- Native release validation matrix in `dev/validate.sh` covering default,
+  minimal, full-feature, integration, fuzz, and experimental-PQ builds.
+- HTTP/3 and DoQ compliance notes for RFC 9114/RFC 9250 coverage boundaries.
+- Service maturity descriptors and docs for GhostBridge, Wraith, CNS resolver,
+  and ZVM integration.
+- Crypto maturity documentation separating supported default crypto utilities
+  from draft SSH/QUIC and experimental PQ/TLS scaffolding.
+- Prometheus build-info and HTTP/3 duration sum/count metrics.
+- Deterministic flow-control, migration, packet-fuzz, HTTP/3, DoQ, service, and
+  crypto hardening tests.
+- Production-PQC roadmap in `docs/future-features.md` and Phase 6 planning.
+- Versioned experimental PQ transcript binder for role, suite, feature-flag,
+  key, and ciphertext binding.
+- Deterministic PQC vectors for ML-KEM-768/1024, ML-DSA-65 signatures,
+  transcript hashes, and serialized transcript replay.
+- QUIC ecosystem positioning notes against quiche, ngtcp2, MsQuic, and aioquic.
+- Root-level `performance` and `transport` module exports so connection pooling,
+  zero-copy helpers, and enhanced UDP multiplexing stay in the active compile
+  graph.
+- Experimental PQ-capable connection pooling for crypto workloads, including
+  initialized hybrid PQ-TLS contexts, PQ pool metrics, and default suppression of
+  0-RTT on PQ pooled connections.
+- Explicit PQ resumption ticket policy support with PQ binders, early-data
+  posture, and validation paths for hybrid-PQ tickets.
+- Authenticated PQ resumption tickets with issuer key IDs and HMAC-SHA256 ticket
+  MACs for pooled and standalone resumption paths.
+- Configurable active/previous PQ ticket issuer material for persistence across
+  restarts and bounded ticket-key rotation windows.
+- Root-level `zero_rtt_resumption` export for downstream access to resumption
+  ticket and issuer configuration types.
+- Interop-style PQ trace bundles carrying client/server transcript traces and
+  transcript hashes for replay and tamper rejection tests.
+- Public advanced HTTP/3 server exports for proxy/load-balancing server
+  scaffolding.
+
+### Changed
+- Updated the current release line to consume `zcrypto v1.0.5`.
+- Release docs now prefer immutable `v0.9.14` archive URLs instead of branch
+  archives.
+- Dev scripts default to `/opt/zig-dev/zig` while allowing `ZIG=/path/to/zig`
+  overrides.
+- Moved low-level UDP socket operations behind `src/net/sys.zig`.
+- Consolidated spin-lock usage in `src/utils/sync.zig`.
+- Marked SSH/QUIC as a draft integration and PQ/hybrid TLS as experimental
+  unless explicitly enabled and verified.
+- Advanced HTTP/3 server internals now use the current request/response APIs,
+  enum status codes, stream-scoped responses, and current connection lifecycle
+  ownership.
+- Crypto workload connection pooling now initializes and owns underlying QUIC
+  connections instead of allocating uninitialized connection storage.
+- Advanced HTTP/3 connection handling now drains currently open core QUIC
+  streams through the connection stream table instead of relying on a
+  non-existent `acceptStream` shim.
+
+### Fixed
+- Hardened QUIC AEAD/header-protection helpers against short IVs, undersized
+  output buffers, bad plaintext buffers, empty headers, and invalid header
+  lengths.
+- Added negative crypto coverage for wrong keys, wrong nonce/packet number,
+  truncated tags, tampered headers, malformed ML-KEM inputs, and ML-DSA bad
+  signatures.
+- Added PQ transcript negative coverage for downgraded flags, malformed key
+  lengths, wrong roles, mismatched secrets, and mismatched binder material.
+- Hardened hybrid PQ TLS length checks, fallback policy, and domain-separator
+  derivation to avoid unchecked fixed-array slicing and panic-prone copies.
+- PQ requests in the crypto connection multiplexer now create explicit
+  PQ-capable pooled connections instead of silently creating non-PQ pooled
+  connections.
+- Hardened SSH/QUIC secret injection with non-zero/distinct directional secret
+  validation, explicit key zeroization, packet-number tamper checks, and draft
+  posture docs.
+- Replaced stale Zig stdlib APIs and duplicated synchronization primitives in
+  active runtime, service, and network paths.
+- Removed stale X448/SLH-DSA/RSA support claims from the current crypto
+  contract.
+- Fixed enhanced UDP multiplexer initialization, socket cleanup, receive path,
+  connection-ID generation, migration tracker teardown, and coalesced-packet
+  length accounting.
+- Fixed stale HTTP/3 advanced-server route/proxy response handling and removed
+  calls to non-existent connection/request/response APIs.
+- Fixed stale 0-RTT session-manager APIs for Zig-dev `DynamicBitSet` and
+  unmanaged array hash maps.
+- Replaced remaining removed Zig-dev APIs including `std.mem.copy` and
+  writer-side `writeIntBig`.
+- PQ resumption validation now rejects wrong issuers, tampered MACs, mismatched
+  PQ binders, and early-data policy mismatches before connection reuse.
+- PQ pooled resumption now signs new tickets with the active issuer and accepts
+  the previous issuer only for validation during rotation.
+
+### Security
+- Default builds remain on stable zcrypto primitives; post-quantum code requires
+  both `-Dpost-quantum=true` and `-Dexperimental-crypto=true`.
+- PQ, VPN, SSH/QUIC, and hybrid TLS paths are documented as experimental or
+  draft where applicable.
+- PQ pooling and resumption moved closer to production readiness with
+  authenticated tickets, issuer validation, explicit early-data policy, and
+  deterministic tamper tests. Deployments can now configure persistent active
+  and previous issuer material; production use still requires interop
+  validation, operational key rotation, and security review.
+- Added advisory tracking docs and expanded `SECURITY.md` release-audit notes.
+
+### Verified
+- `/opt/zig-dev/zig build test --summary all`
+- `/opt/zig-dev/zig build --summary all`
+- `/opt/zig-dev/zig build integration-tests --summary all`
+- `/opt/zig-dev/zig build fuzz-tests --summary all`
+- `/opt/zig-dev/zig build test -Dpost-quantum=true -Dexperimental-crypto=true --summary all`
+- `/opt/zig-dev/zig build -Dpost-quantum=true -Dexperimental-crypto=true --summary all`
+- `/opt/zig-dev/zig build test -Dmonitoring=true --summary all`
+- `/opt/zig-dev/zig build test -Dservices=true --summary all`
+- `./dev/validate.sh`
+- `docker compose -f docker/compose.yml run --rm zquic-verify bash docker/run-verify.sh`
+
+### Notes
+- This release moves zquic closer to a serious Zig QUIC library by improving
+  correctness, test coverage, crypto honesty, service boundaries, and release
+  repeatability. PQ pooling and PQ resumption tickets are now preview-grade
+  opt-in surfaces with authenticated tickets and stricter validation; production
+  PQC session resumption remains a future release gate, not a default claim.
+
 ## [0.9.13] - 2026-06-04
 
 ### Changed

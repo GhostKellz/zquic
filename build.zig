@@ -6,12 +6,12 @@
 //! - DoQ: DNS-over-QUIC (+0.3MB)
 //! - Services: GhostBridge/Wraith (+1.5MB)
 //! - VPN: zcrypto VPN features (+0.5MB)
-//! - Post-Quantum: zcrypto PQ features (+1.5MB)
+//! - Post-Quantum: experimental zcrypto PQ features (+1.5MB)
 //! - Monitoring: Performance tracking (+0.2MB)
 //!
 //! Examples:
-//!   zig build                              # Common features (HTTP/3, DoQ, PQ)
-//!   zig build -Dpost-quantum=false        # Disable PQ crypto (-1.5MB)
+//!   zig build                              # Common features (HTTP/3, DoQ; PQ disabled)
+//!   zig build -Dpost-quantum=true -Dexperimental-crypto=true # Enable experimental PQ
 //!   zig build -Dvpn=false -Dservices=false # Minimal features
 //!   zig build -Dservices=true -Dvpn=true  # Full enterprise build
 

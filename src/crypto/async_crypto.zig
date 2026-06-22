@@ -5,6 +5,7 @@
 const std = @import("std");
 const zcrypto = @import("zcrypto");
 const Error = @import("../utils/error.zig");
+const SpinMutex = @import("../utils/sync.zig").SpinMutex;
 
 /// Production safety flag - set to false to reject placeholder crypto
 const allow_placeholder_crypto = false;
@@ -87,7 +88,7 @@ pub const AsyncCryptoProcessor = struct {
     allocator: std.mem.Allocator,
     is_running: bool,
     worker_count: u32,
-    mutex: std.Thread.Mutex,
+    mutex: SpinMutex,
 
     // Encryption keys for AEAD operations
     encryption_key: [32]u8,

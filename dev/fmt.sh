@@ -3,11 +3,12 @@
 # Run from project root: ./dev/fmt.sh
 
 set -e
+ZIG="${ZIG:-/opt/zig-dev/zig}"
 
 echo "=== Formatting ZQUIC source ==="
 
-zig fmt src/
-zig fmt examples/
-zig fmt tests/ 2>/dev/null || true
+"$ZIG" fmt src/
+"$ZIG" fmt examples/
+"$ZIG" fmt tests/ 2>/dev/null || true
 
 echo "Done."

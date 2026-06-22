@@ -17,6 +17,7 @@ pub const DnsRecordType = @import("doq/message.zig").DnsRecordType;
 pub const DnsResponseCode = @import("doq/message.zig").DnsResponseCode;
 pub const DnsQuestion = @import("doq/message.zig").DnsQuestion;
 pub const DnsResourceRecord = @import("doq/message.zig").DnsResourceRecord;
+pub const createResponseForQuery = @import("doq/message.zig").createResponseForQuery;
 pub const DoQServerConfig = @import("doq/server.zig").DoQServerConfig;
 pub const ServerConfig = DoQServerConfig;
 
@@ -58,4 +59,9 @@ pub fn init(allocator: std.mem.Allocator, config: DoqConfig) !void {
 // Feature-specific cleanup
 pub fn deinit() void {
     // Clean up DoQ specific state
+}
+
+test {
+    _ = @import("doq/message.zig");
+    _ = @import("doq/server.zig");
 }

@@ -412,3 +412,134 @@ test "integration: static middleware serves files" {
     try std.testing.expectEqualStrings("hello quic", response.getBody());
     try std.testing.expect(std.mem.eql(u8, response.headers.get("cache-control") orelse "", "public, max-age=3600"));
 }
+
+test "integration: router returns 405 with allow header" {
+    var debug_allocator: std.heap.DebugAllocator(.{}) = .init;
+    defer _ = debug_allocator.deinit();
+    const allocator = debug_allocator.allocator();
+
+    var server = try Http3.Http3Server.init(allocator, .{});
+    defer server.deinit();
+
+    const handler = struct {
+        fn handle(_: *Http3.Request, res: *Http3.Response) Error.ZquicError!void {
+            try res.text("ok");
+        }
+    }.handle;
+
+    try server.get("/items", handler);
+    try server.post("/items", handler);
+
+    var request = Http3.Request.init(allocator, 40, "conn-405");
+    defer request.deinit();
+    const headers = try buildHeaderFields(allocator, &.{
+        .{ .name = ":method", .value = "DELETE" },
+        .{ .name = ":path", .value = "/items" },
+        .{ .name = ":authority", .value = "localhost" },
+    });
+    defer {
+        for (headers) |*field| field.deinit();
+        allocator.free(headers);
+    }
+    try request.parseFromHeaders(headers);
+
+    var response = Http3.Response.init(allocator, request.context.stream_id);
+    defer response.deinit();
+
+    try server.router.handleRequest(&request, &response);
+    try std.testing.expectEqual(Http3.StatusCode.method_not_allowed, response.status);
+    try std.testing.expectEqualStrings("GET, POST", response.headers.get("allow").?);
+}
+
+test "integration: POST request body is visible to handler" {
+    var debug_allocator: std.heap.DebugAllocator(.{}) = .init;
+    defer _ = debug_allocator.deinit();
+    const allocator = debug_allocator.allocator();
+
+    var server = try Http3.Http3Server.init(allocator, .{});
+    defer server.deinit();
+
+    const handler = struct {
+        fn echo(req: *Http3.Request, res: *Http3.Response) Error.ZquicError!void {
+            try res.text(req.getBody());
+        }
+    }.echo;
+
+    try server.post("/echo", handler);
+
+    var request = Http3.Request.init(allocator, 41, "conn-post");
+    defer request.deinit();
+    const headers = try buildHeaderFields(allocator, &.{
+        .{ .name = ":method", .value = "POST" },
+        .{ .name = ":path", .value = "/echo" },
+        .{ .name = ":authority", .value = "localhost" },
+        .{ .name = "content-length", .value = "11" },
+    });
+    defer {
+        for (headers) |*field| field.deinit();
+        allocator.free(headers);
+    }
+    try request.parseFromHeaders(headers);
+    try request.appendBody("hello ");
+    try request.appendBody("zquic");
+
+    var response = Http3.Response.init(allocator, request.context.stream_id);
+    defer response.deinit();
+
+    try server.router.handleRequest(&request, &response);
+    try std.testing.expectEqualStrings("hello zquic", response.getBody());
+}
+
+test "integration: concurrent request streams stay isolated" {
+    var debug_allocator: std.heap.DebugAllocator(.{}) = .init;
+    defer _ = debug_allocator.deinit();
+    const allocator = debug_allocator.allocator();
+
+    var server = try Http3.Http3Server.init(allocator, .{});
+    defer server.deinit();
+
+    const handler = struct {
+        fn streamId(req: *Http3.Request, res: *Http3.Response) Error.ZquicError!void {
+            try res.writeFormat("stream={d}", .{req.context.stream_id});
+        }
+    }.streamId;
+
+    try server.get("/stream", handler);
+
+    var req_a = Http3.Request.init(allocator, 44, "conn-concurrent");
+    defer req_a.deinit();
+    var req_b = Http3.Request.init(allocator, 48, "conn-concurrent");
+    defer req_b.deinit();
+
+    const headers_a = try buildHeaderFields(allocator, &.{
+        .{ .name = ":method", .value = "GET" },
+        .{ .name = ":path", .value = "/stream" },
+        .{ .name = ":authority", .value = "localhost" },
+    });
+    defer {
+        for (headers_a) |*field| field.deinit();
+        allocator.free(headers_a);
+    }
+    const headers_b = try buildHeaderFields(allocator, &.{
+        .{ .name = ":method", .value = "GET" },
+        .{ .name = ":path", .value = "/stream" },
+        .{ .name = ":authority", .value = "localhost" },
+    });
+    defer {
+        for (headers_b) |*field| field.deinit();
+        allocator.free(headers_b);
+    }
+    try req_a.parseFromHeaders(headers_a);
+    try req_b.parseFromHeaders(headers_b);
+
+    var res_a = Http3.Response.init(allocator, req_a.context.stream_id);
+    defer res_a.deinit();
+    var res_b = Http3.Response.init(allocator, req_b.context.stream_id);
+    defer res_b.deinit();
+
+    try server.router.handleRequest(&req_a, &res_a);
+    try server.router.handleRequest(&req_b, &res_b);
+
+    try std.testing.expectEqualStrings("stream=44", res_a.getBody());
+    try std.testing.expectEqualStrings("stream=48", res_b.getBody());
+}

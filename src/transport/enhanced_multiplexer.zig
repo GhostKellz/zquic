@@ -80,6 +80,7 @@ pub const CoalescedPacket = struct {
     data: []u8,
     destinations: []NetAddress.Address,
     socket_index: u8,
+    used_len: usize,
     packet_count: u32,
 
     pub fn init(allocator: std.mem.Allocator, socket_idx: u8) !CoalescedPacket {
@@ -87,6 +88,7 @@ pub const CoalescedPacket = struct {
             .data = try allocator.alloc(u8, 1400), // MTU-sized buffer
             .destinations = try allocator.alloc(NetAddress.Address, 16),
             .socket_index = socket_idx,
+            .used_len = 0,
             .packet_count = 0,
         };
     }
@@ -139,7 +141,7 @@ pub const EnhancedUdpMultiplexer = struct {
             const addr_index = i % local_addresses.len;
             socket.* = UdpSocket.init(local_addresses[addr_index]) catch |err| {
                 // Clean up already initialized sockets
-                for (sockets[0..i]) |*s| s.deinit(allocator);
+                for (sockets[0..i]) |*s| s.deinit();
                 return switch (err) {
                     error.AddressInUse => Error.ZquicError.AddressInUse,
                     error.AddressNotAvailable => Error.ZquicError.InvalidArgument,
@@ -185,12 +187,16 @@ pub const EnhancedUdpMultiplexer = struct {
             }
         }
 
+        const socket_load = try allocator.alloc(u32, config.num_sockets);
+        errdefer allocator.free(socket_load);
+        @memset(socket_load, 0);
+
         return Self{
             .sockets = sockets,
             .connections = std.HashMap(u64, ConnectionEntry, std.hash_map.AutoContext(u64), std.hash_map.default_max_load_percentage).init(allocator),
             .config = config,
             .allocator = allocator,
-            .socket_load = try allocator.alloc(u32, config.num_sockets),
+            .socket_load = socket_load,
             .next_socket_index = 0,
             .receive_buffers = receive_buffers,
             .batch_packets = batch_packets,
@@ -198,7 +204,7 @@ pub const EnhancedUdpMultiplexer = struct {
             .coalesced_packets = coalesced_packets,
             .coalescing_enabled = config.enable_packet_coalescing,
             .connection_id_generator = ConnectionIdGenerator.init(config.connection_id_length),
-            .migration_tracker = MigrationTrackersrc / transport / enhanced_multiplexer.zig,
+            .migration_tracker = MigrationTracker.init(allocator),
             .stats = MultiplexerStats.init(),
         };
     }
@@ -206,7 +212,7 @@ pub const EnhancedUdpMultiplexer = struct {
     pub fn deinit(self: *Self) void {
         // Clean up sockets
         for (self.sockets) |*socket| {
-            socket.deinit(allocator);
+            socket.deinit();
         }
         self.allocator.free(self.sockets);
 
@@ -225,8 +231,8 @@ pub const EnhancedUdpMultiplexer = struct {
         // Clean up other resources
         self.allocator.free(self.batch_packets);
         self.allocator.free(self.socket_load);
-        self.connections.deinit(allocator);
-        self.migration_tracker.deinit(allocator);
+        self.connections.deinit();
+        self.migration_tracker.deinit();
     }
 
     /// Select optimal socket for new connection using load balancing
@@ -292,7 +298,7 @@ pub const EnhancedUdpMultiplexer = struct {
 
         for (self.sockets, 0..) |*socket, socket_index| {
             while (self.batch_count < self.config.batch_size) {
-                const result = socket.tryReceive(self.receive_buffers[socket_index]) orelse break;
+                const result = (try socket.tryReceiveFrom(self.receive_buffers[socket_index])) orelse break;
 
                 if (result.bytes_received > 0) {
                     // Create a copy of the packet data for batch processing
@@ -351,7 +357,7 @@ pub const EnhancedUdpMultiplexer = struct {
 
             // Route to connection
             const full_packet = Packet.Packet.init(packet, packet_data);
-            try entry.connection.processPacket(full_packet);
+            try entry.connection.super_connection.receivePacketAsync(full_packet);
 
             self.stats.packets_received += 1;
             self.stats.bytes_received += packet_data.len;
@@ -397,10 +403,13 @@ pub const EnhancedUdpMultiplexer = struct {
             // Try to coalesce with existing packets
             var coalesced = &self.coalesced_packets[socket_index];
 
-            if (coalesced.packet_count > 0 and coalesced.data.len + packet_data.len <= self.config.coalescing_threshold) {
+            if (coalesced.used_len + packet_data.len <= self.config.coalescing_threshold and
+                coalesced.packet_count < coalesced.destinations.len)
+            {
                 // Add to coalesced packet
-                std.mem.copy(u8, coalesced.data[coalesced.data.len..], packet_data);
+                @memcpy(coalesced.data[coalesced.used_len..][0..packet_data.len], packet_data);
                 coalesced.destinations[coalesced.packet_count] = destination;
+                coalesced.used_len += packet_data.len;
                 coalesced.packet_count += 1;
 
                 // Send if threshold reached
@@ -431,12 +440,13 @@ pub const EnhancedUdpMultiplexer = struct {
     fn sendCoalescedPacket(self: *Self, coalesced: *CoalescedPacket, socket_index: u8) Error.ZquicError!void {
         // For now, send to first destination (GSO support would send to all)
         if (coalesced.packet_count > 0) {
-            _ = try self.sockets[socket_index].sendTo(coalesced.data[0..coalesced.data.len], coalesced.destinations[0]);
+            _ = try self.sockets[socket_index].sendTo(coalesced.data[0..coalesced.used_len], coalesced.destinations[0]);
 
             self.stats.packets_sent += coalesced.packet_count;
-            self.stats.bytes_sent += coalesced.data.len;
+            self.stats.bytes_sent += coalesced.used_len;
 
             // Reset coalesced packet
+            coalesced.used_len = 0;
             coalesced.packet_count = 0;
         }
     }
@@ -455,13 +465,13 @@ pub const EnhancedUdpMultiplexer = struct {
         const current_time = Time.nowMicros();
         const timeout_us = @as(i64, self.config.connection_timeout_ms) * 1000;
 
-        var expired_connections = .{};
-        defer expired_connections.deinit(allocator);
+        var expired_connections: std.ArrayList(u64) = .empty;
+        defer expired_connections.deinit(self.allocator);
 
         var iterator = self.connections.iterator();
         while (iterator.next()) |entry| {
             if (entry.value_ptr.isExpired(current_time, timeout_us)) {
-                expired_connections.append(allocator, entry.key_ptr.*) catch continue;
+                expired_connections.append(self.allocator, entry.key_ptr.*) catch continue;
             }
         }
 
@@ -506,7 +516,7 @@ pub const ConnectionIdGenerator = struct {
         self.counter += 1;
 
         var bytes: [20]u8 = undefined;
-        std.mem.writeIntBig(u64, bytes[0..8], self.counter);
+        std.mem.writeInt(u64, bytes[0..8], self.counter, .big);
 
         return Packet.ConnectionId.init(bytes[0..self.length]);
     }
@@ -533,7 +543,7 @@ pub const MigrationTracker = struct {
     }
 
     pub fn deinit(self: *MigrationTracker) void {
-        self.active_migrations.deinit(allocator);
+        self.active_migrations.deinit();
     }
 
     pub fn startMigration(self: *MigrationTracker, connection_id: Packet.ConnectionId, old_address: NetAddress.Address, new_address: NetAddress.Address) Error.ZquicError!void {

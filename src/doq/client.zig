@@ -142,7 +142,7 @@ pub const DoQClient = struct {
         self.connection_created_at = @intCast((try std.time.Instant.now()).timestamp.sec);
         self.stats.connections_created += 1;
 
-        std.log.info("✅ DoQ: Connected successfully with quantum-safe encryption");
+        std.log.info("DoQ: Connected successfully with configured QUIC crypto");
     }
 
     /// Disconnect from DoQ server

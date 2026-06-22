@@ -1,6 +1,27 @@
 # zcrypto Integration Guide
 
-ZQUIC uses [`zcrypto`](https://github.com/ghostkellz/zcrypto) for cryptographic operations. This document covers the current stable API contract and build configuration.
+ZQUIC uses [`zcrypto v1.0.5`](https://github.com/ghostkellz/zcrypto) for cryptographic operations. This document covers the current stable API contract and build configuration.
+
+## v1.0.5 Contract
+
+The default zquic build consumes the stable `zcrypto` surface only. Experimental
+post-quantum code is compiled only when both zquic flags are enabled:
+`-Dpost-quantum=true -Dexperimental-crypto=true`.
+
+zquic expects these `zcrypto` build features:
+
+| zcrypto feature | zquic default | Reason |
+|-----------------|---------------|--------|
+| `tls` | enabled | QUIC TLS and packet crypto helpers |
+| `hardware-accel` | enabled | AEAD/hash acceleration where available |
+| `async` | disabled | zquic owns its runtime path |
+| `vpn` | follows `-Dvpn` | Optional VPN helper surface |
+| `post-quantum` | requires both PQ flags | Experimental ML-KEM/ML-DSA paths |
+| `experimental-crypto` | follows `-Dexperimental-crypto` | Gate for non-default crypto APIs |
+
+Unsupported algorithm claims are intentionally excluded from the stable
+contract. In this release line, do not document RSA, SLH-DSA, or X448 support
+unless the code and tests have been added.
 
 ## Stable Core Modules
 
@@ -121,6 +142,7 @@ Post-quantum modules require `-Dpost-quantum=true -Dexperimental-crypto=true`:
 2. The ZQUIC PQ integration (`src/crypto/pq_quic.zig`, `src/crypto/hybrid_pq_tls.zig`) is **experimental scaffolding**
 3. Do not rely on the PQ path for production cryptographic security until explicitly marked stable
 4. The hybrid classical+PQ key exchange uses real X25519 and ML-KEM-768 primitives, but the overall integration is still under development
+5. RSA and SLH-DSA are not part of the zquic v0.9.14 crypto contract
 
 ### ZQUIC PQ Implementation Status
 
@@ -131,7 +153,57 @@ Post-quantum modules require `-Dpost-quantum=true -Dexperimental-crypto=true`:
 | X25519 | Real | Uses zcrypto's X25519 implementation |
 | ML-DSA-65 | Real | Uses zcrypto's stdlib-backed ML-DSA-65 implementation |
 
-**Note**: The `ml_kem_1024_x25519_sha384` cipher suite uses real ML-KEM-1024 for post-quantum security and X25519 for classical security. The former X448 suite was renamed to accurately reflect the classical algorithm used.
+**Note**: The `ml_kem_1024_x25519_sha384` cipher suite uses real ML-KEM-1024 for post-quantum security and X25519 for classical security.
+
+### PQ Transcript Binding
+
+`src/crypto/pq_quic.zig` defines `PQHandshakeTranscript` for the experimental
+PQ path. This is an internal binder contract, not a QUIC wire format.
+
+The current transcript domain is `zquic pq transcript v1`. The transcript hash
+binds:
+
+- transcript version
+- PQ cipher-suite id
+- client/server role
+- experimental-crypto feature flag
+- ML-KEM public key
+- optional X25519 public key for hybrid suites
+- ML-KEM ciphertext
+
+Client and server hashes are role-separated. Secret agreement checks require the
+expected client/server roles, matching suite and binder material, and equal
+derived secrets.
+
+### PQ Ticket Issuer Rotation
+
+PQ-capable connection pooling uses authenticated resumption tickets when
+`src/performance/crypto_connection_multiplexer.zig` is compiled behind the PQ
+flags. The default issuer is process-local random material, which is safe for
+tests and single-process evaluation but intentionally invalidates tickets after
+restart.
+
+Deployments that need ticket continuity can configure explicit issuer material:
+
+```zig
+const zero_rtt = zquic.zero_rtt_resumption;
+const crypto_pool = zquic.performance.CryptoConnectionMultiplexer;
+
+const active = zero_rtt.TicketIssuerMaterial.init(active_key_id, active_mac_key);
+const previous = zero_rtt.TicketIssuerMaterial.init(previous_key_id, previous_mac_key);
+
+var mux = crypto_pool.CryptoConnectionMultiplexer.init(allocator, .{
+    .enable_post_quantum = true,
+    .enable_zero_rtt = true,
+    .pq_ticket_issuer = active,
+    .pq_previous_ticket_issuer = previous,
+});
+defer mux.deinit();
+```
+
+New tickets are signed with the active issuer. The previous issuer is
+validation-only and should be retained no longer than the maximum ticket
+lifetime. Remove it after the rotation window closes.
 
 ## TLS Configuration
 
