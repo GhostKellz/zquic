@@ -42,25 +42,26 @@ else
     echo "  zquic URL: $ZQUIC_URL"
 fi
 
-echo "[2/5] Getting dependency hash from Zig..."
-FETCH_OUTPUT=$(ZIG_GLOBAL_CACHE_DIR="$ZIG_GLOBAL_CACHE_DIR" ZIG_LOCAL_CACHE_DIR="$ZIG_LOCAL_CACHE_DIR" "$ZIG" fetch "$FETCH_SOURCE" 2>&1)
-ZQUIC_HASH=$(echo "$FETCH_OUTPUT" | grep -E '^zquic-[A-Za-z0-9._-]+-[A-Za-z0-9_-]+$' | tail -1)
+echo "[2/5] Preparing dependency metadata..."
+if [ -z "$ZQUIC_URL" ]; then
+    FETCH_OUTPUT=$(ZIG_GLOBAL_CACHE_DIR="$ZIG_GLOBAL_CACHE_DIR" ZIG_LOCAL_CACHE_DIR="$ZIG_LOCAL_CACHE_DIR" "$ZIG" fetch "$FETCH_SOURCE" 2>&1)
+    ZQUIC_HASH=$(echo "$FETCH_OUTPUT" | grep -E '^zquic-[A-Za-z0-9._-]+-[A-Za-z0-9_-]+$' | tail -1)
 
-if [ -z "$ZQUIC_HASH" ]; then
-    echo "ERROR: Could not extract zquic hash from Zig fetch output"
-    echo "Fetch output was:"
-    echo "$FETCH_OUTPUT"
-    exit 1
-fi
+    if [ -z "$ZQUIC_HASH" ]; then
+        echo "ERROR: Could not extract zquic hash from Zig fetch output"
+        echo "Fetch output was:"
+        echo "$FETCH_OUTPUT"
+        exit 1
+    fi
 
-echo "  Computed zquic hash: $ZQUIC_HASH"
-if [ -n "$ZQUIC_URL" ]; then
-    DEPENDENCY_SPEC=".url = \"$ZQUIC_URL\",
-            .hash = \"$ZQUIC_HASH\","
+    echo "  Computed zquic hash: $ZQUIC_HASH"
+else
+    echo "  will run zig fetch --save=zquic after consumer fingerprint bootstrap"
 fi
 
 # Create initial build.zig.zon without fingerprint (Zig will compute it)
-cat > "$TMPDIR/build.zig.zon" << EOF
+if [ -z "$ZQUIC_URL" ]; then
+    cat > "$TMPDIR/build.zig.zon" << EOF
 .{
     .name = .zquic_consumer_test,
     .version = "0.0.1",
@@ -77,6 +78,21 @@ cat > "$TMPDIR/build.zig.zon" << EOF
     },
 }
 EOF
+else
+    cat > "$TMPDIR/build.zig.zon" << EOF
+.{
+    .name = .zquic_consumer_test,
+    .version = "0.0.1",
+    .fingerprint = 0x1,
+    .dependencies = .{},
+    .paths = .{
+        "build.zig",
+        "build.zig.zon",
+        "src",
+    },
+}
+EOF
+fi
 
 # Create a minimal build.zig (Zig 0.16.0-dev API)
 cat > "$TMPDIR/build.zig" << 'EOF'
@@ -159,7 +175,8 @@ echo "  Computed fingerprint: $FINGERPRINT"
 
 # Update build.zig.zon with correct fingerprint
 echo "[4/5] Updating package with correct fingerprint..."
-cat > "$TMPDIR/build.zig.zon" << EOF
+if [ -z "$ZQUIC_URL" ]; then
+    cat > "$TMPDIR/build.zig.zon" << EOF
 .{
     .name = .zquic_consumer_test,
     .version = "0.0.1",
@@ -176,28 +193,13 @@ cat > "$TMPDIR/build.zig.zon" << EOF
     },
 }
 EOF
-
-echo "[5/6] Building consumer test..."
-BUILD_OUTPUT=$(ZIG_GLOBAL_CACHE_DIR="$ZIG_GLOBAL_CACHE_DIR" ZIG_LOCAL_CACHE_DIR="$ZIG_LOCAL_CACHE_DIR" "$ZIG" build 2>&1) || {
-    ACTUAL_HASH=$(echo "$BUILD_OUTPUT" | grep -o 'fetched package has [A-Za-z0-9._-]*' | head -1 | sed 's/fetched package has //')
-    if [ -z "$ACTUAL_HASH" ]; then
-        echo "$BUILD_OUTPUT"
-        exit 1
-    fi
-
-    echo "  Zig reported canonical package hash: $ACTUAL_HASH"
-    ZQUIC_HASH="$ACTUAL_HASH"
+else
     cat > "$TMPDIR/build.zig.zon" << EOF
 .{
     .name = .zquic_consumer_test,
     .version = "0.0.1",
     .fingerprint = $FINGERPRINT,
-    .dependencies = .{
-        .zquic = .{
-            .url = "$ZQUIC_URL",
-            .hash = "$ZQUIC_HASH",
-        },
-    },
+    .dependencies = .{},
     .paths = .{
         "build.zig",
         "build.zig.zon",
@@ -205,7 +207,14 @@ BUILD_OUTPUT=$(ZIG_GLOBAL_CACHE_DIR="$ZIG_GLOBAL_CACHE_DIR" ZIG_LOCAL_CACHE_DIR=
     },
 }
 EOF
-    ZIG_GLOBAL_CACHE_DIR="$ZIG_GLOBAL_CACHE_DIR" ZIG_LOCAL_CACHE_DIR="$ZIG_LOCAL_CACHE_DIR" "$ZIG" build 2>&1
+    echo "  Saving zquic dependency with Zig package manager..."
+    ZIG_GLOBAL_CACHE_DIR="$ZIG_GLOBAL_CACHE_DIR" ZIG_LOCAL_CACHE_DIR="$ZIG_LOCAL_CACHE_DIR" "$ZIG" fetch --save=zquic "$ZQUIC_URL"
+fi
+
+echo "[5/6] Building consumer test..."
+BUILD_OUTPUT=$(ZIG_GLOBAL_CACHE_DIR="$ZIG_GLOBAL_CACHE_DIR" ZIG_LOCAL_CACHE_DIR="$ZIG_LOCAL_CACHE_DIR" "$ZIG" build 2>&1) || {
+    echo "$BUILD_OUTPUT"
+    exit 1
 }
 
 echo "[6/6] Running consumer test..."

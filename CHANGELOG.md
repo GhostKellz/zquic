@@ -1,4 +1,4 @@
-## [0.9.15] - Unreleased
+## [0.9.15] - 2026-06-23
 
 ### Added
 - Updated the zcrypto dependency to `v1.0.6` and recorded the accompanying
