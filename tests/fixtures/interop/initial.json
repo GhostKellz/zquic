@@ -1,0 +1,22 @@
+{
+  "name": "client-initial-minimal",
+  "role": "client",
+  "quic_version": 1,
+  "alpn": "h3",
+  "cipher_suite": "TLS_AES_128_GCM_SHA256",
+  "feature_flags": [],
+  "packet_space": "initial",
+  "packet_type": "initial",
+  "expected_result": "accept",
+  "destination_connection_id": "0102030405060708",
+  "source_connection_id": "a1a2a3a4a5a6a7a8",
+  "packet_number": 0,
+  "packet_number_length": 1,
+  "header_length": 23,
+  "frame_summary": [
+    "CRYPTO offset=0 length=16",
+    "PADDING length=8"
+  ],
+  "packet_hex": "c00000000108010203040506070808a1a2a3a4a5a6a7a80010494e495449414c5f54524143455f3031"
+}
+

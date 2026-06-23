@@ -29,6 +29,41 @@ pub const ResumptionPolicy = enum(u8) {
     }
 };
 
+pub const RememberedTransportParameters = struct {
+    max_udp_payload_size: u64 = 1472,
+    initial_max_data: u64 = 1_048_576,
+    initial_max_stream_data_bidi_local: u64 = 65_536,
+    initial_max_stream_data_bidi_remote: u64 = 65_536,
+    initial_max_stream_data_uni: u64 = 65_536,
+    initial_max_streams_bidi: u64 = 100,
+    initial_max_streams_uni: u64 = 100,
+    disable_active_migration: bool = false,
+    active_connection_id_limit: u64 = 2,
+
+    pub fn eql(self: RememberedTransportParameters, other: RememberedTransportParameters) bool {
+        return self.max_udp_payload_size == other.max_udp_payload_size and
+            self.initial_max_data == other.initial_max_data and
+            self.initial_max_stream_data_bidi_local == other.initial_max_stream_data_bidi_local and
+            self.initial_max_stream_data_bidi_remote == other.initial_max_stream_data_bidi_remote and
+            self.initial_max_stream_data_uni == other.initial_max_stream_data_uni and
+            self.initial_max_streams_bidi == other.initial_max_streams_bidi and
+            self.initial_max_streams_uni == other.initial_max_streams_uni and
+            self.disable_active_migration == other.disable_active_migration and
+            self.active_connection_id_limit == other.active_connection_id_limit;
+    }
+};
+
+pub const EarlyDataPolicy = struct {
+    alpn: []const u8 = "h3",
+    application_policy_id: [16]u8 = std.mem.zeroes([16]u8),
+    transport_parameters: RememberedTransportParameters = .{},
+    allow_early_data: bool = true,
+};
+
+fn hashAlpn(alpn: []const u8) [32]u8 {
+    return zcrypto.hash.sha256(alpn);
+}
+
 /// Local session-ticket issuer used to authenticate resumption tickets.
 ///
 /// Production deployments should persist and rotate this key material. The
@@ -59,32 +94,28 @@ pub const TicketIssuer = struct {
     }
 
     pub fn sign(self: *const TicketIssuer, ticket: *const SessionTicket) [32]u8 {
-        var input: [110]u8 = undefined;
-        defer secureZero(&input);
-
-        var offset: usize = 0;
-        @memcpy(input[offset..][0..8], &self.key_id);
-        offset += 8;
-        @memcpy(input[offset..][0..16], &ticket.ticket_id);
-        offset += 16;
-        std.mem.writeInt(i64, input[offset..][0..8], ticket.creation_time, .big);
-        offset += 8;
-        std.mem.writeInt(i64, input[offset..][0..8], ticket.expiry_time, .big);
-        offset += 8;
-        @memcpy(input[offset..][0..32], &ticket.resumption_secret);
-        offset += 32;
-        input[offset] = @intFromEnum(ticket.resumption_policy);
-        offset += 1;
-        @memcpy(input[offset..][0..32], &ticket.pq_binder);
-        offset += 32;
-        input[offset] = ticket.early_data_cipher;
-        offset += 1;
-        std.mem.writeInt(u32, input[offset..][0..4], ticket.max_early_data, .big);
-        offset += 4;
-
         var mac: [32]u8 = undefined;
         var hmac = std.crypto.auth.hmac.sha2.HmacSha256.init(&self.mac_key);
-        hmac.update(input[0..offset]);
+        hmac.update(&self.key_id);
+        hmac.update(&ticket.ticket_id);
+        hmac.update(std.mem.asBytes(&ticket.creation_time));
+        hmac.update(std.mem.asBytes(&ticket.expiry_time));
+        hmac.update(&ticket.resumption_secret);
+        hmac.update(&[_]u8{@intFromEnum(ticket.resumption_policy)});
+        hmac.update(&ticket.pq_binder);
+        hmac.update(&[_]u8{ticket.early_data_cipher});
+        hmac.update(std.mem.asBytes(&ticket.max_early_data));
+        hmac.update(&ticket.alpn_hash);
+        hmac.update(&ticket.application_policy_id);
+        hmac.update(std.mem.asBytes(&ticket.remembered_transport_parameters.max_udp_payload_size));
+        hmac.update(std.mem.asBytes(&ticket.remembered_transport_parameters.initial_max_data));
+        hmac.update(std.mem.asBytes(&ticket.remembered_transport_parameters.initial_max_stream_data_bidi_local));
+        hmac.update(std.mem.asBytes(&ticket.remembered_transport_parameters.initial_max_stream_data_bidi_remote));
+        hmac.update(std.mem.asBytes(&ticket.remembered_transport_parameters.initial_max_stream_data_uni));
+        hmac.update(std.mem.asBytes(&ticket.remembered_transport_parameters.initial_max_streams_bidi));
+        hmac.update(std.mem.asBytes(&ticket.remembered_transport_parameters.initial_max_streams_uni));
+        hmac.update(&[_]u8{if (ticket.remembered_transport_parameters.disable_active_migration) 1 else 0});
+        hmac.update(std.mem.asBytes(&ticket.remembered_transport_parameters.active_connection_id_limit));
         hmac.final(&mac);
         return mac;
     }
@@ -160,6 +191,9 @@ pub const SessionTicket = struct {
     pq_binder: [32]u8,
     early_data_cipher: u8,
     max_early_data: u32,
+    alpn_hash: [32]u8,
+    application_policy_id: [16]u8,
+    remembered_transport_parameters: RememberedTransportParameters,
     ticket_mac: [32]u8,
 
     const Self = @This();
@@ -172,6 +206,18 @@ pub const SessionTicket = struct {
         pq_binder: [32]u8,
         max_early_data: u32,
     ) Self {
+        return createWithEarlyDataPolicy(issuer, resumption_secret, lifetime_seconds, policy, pq_binder, max_early_data, .{});
+    }
+
+    pub fn createWithEarlyDataPolicy(
+        issuer: *const TicketIssuer,
+        resumption_secret: [32]u8,
+        lifetime_seconds: i64,
+        policy: ResumptionPolicy,
+        pq_binder: [32]u8,
+        max_early_data: u32,
+        early_data_policy: EarlyDataPolicy,
+    ) Self {
         const now = Time.nowSeconds();
         var ticket = Self{
             .ticket_id = undefined,
@@ -182,7 +228,10 @@ pub const SessionTicket = struct {
             .resumption_policy = policy,
             .pq_binder = pq_binder,
             .early_data_cipher = 1, // AES-128-GCM
-            .max_early_data = if (policy.allowsEarlyData()) max_early_data else 0,
+            .max_early_data = if (policy.allowsEarlyData() and early_data_policy.allow_early_data) max_early_data else 0,
+            .alpn_hash = hashAlpn(early_data_policy.alpn),
+            .application_policy_id = early_data_policy.application_policy_id,
+            .remembered_transport_parameters = early_data_policy.transport_parameters,
             .ticket_mac = std.mem.zeroes([32]u8),
         };
         zcrypto.rand.fill(&ticket.ticket_id);
@@ -223,6 +272,14 @@ pub const SessionTicket = struct {
     pub fn matchesPostQuantumBinder(self: *const Self, binder: [32]u8) bool {
         if (!self.resumption_policy.isPostQuantum()) return false;
         return std.mem.eql(u8, &self.pq_binder, &binder);
+    }
+
+    pub fn matchesEarlyDataPolicy(self: *const Self, policy: EarlyDataPolicy) bool {
+        if (!self.resumption_policy.allowsEarlyData()) return false;
+        if (!policy.allow_early_data or self.max_early_data == 0) return false;
+        if (!std.mem.eql(u8, &self.alpn_hash, &hashAlpn(policy.alpn))) return false;
+        if (!std.mem.eql(u8, &self.application_policy_id, &policy.application_policy_id)) return false;
+        return self.remembered_transport_parameters.eql(policy.transport_parameters);
     }
 
     pub fn isAuthentic(self: *const Self, issuer: *const TicketIssuer) bool {
@@ -349,13 +406,18 @@ pub const ZeroRttSessionManager = struct {
 
     /// Create new session ticket for resumption
     pub fn createSessionTicket(self: *Self, resumption_secret: [32]u8) !SessionTicket {
-        const ticket = SessionTicket.create(
+        return self.createSessionTicketWithEarlyDataPolicy(resumption_secret, .{});
+    }
+
+    pub fn createSessionTicketWithEarlyDataPolicy(self: *Self, resumption_secret: [32]u8, early_data_policy: EarlyDataPolicy) !SessionTicket {
+        const ticket = SessionTicket.createWithEarlyDataPolicy(
             self.ticket_issuers.signer(),
             resumption_secret,
             self.ticket_lifetime,
             .classical_zero_rtt,
             std.mem.zeroes([32]u8),
             16_384,
+            early_data_policy,
         );
         try self.storeSessionTicket(ticket);
 
@@ -379,12 +441,24 @@ pub const ZeroRttSessionManager = struct {
 
     /// Validate session ticket for 0-RTT
     pub fn validateSessionTicket(self: *Self, ticket_id: [16]u8, packet_number: u64) ?SessionTicket {
+        return self.validateSessionTicketWithPolicy(ticket_id, packet_number, null);
+    }
+
+    pub fn validateSessionTicketForEarlyData(self: *Self, ticket_id: [16]u8, packet_number: u64, early_data_policy: EarlyDataPolicy) ?SessionTicket {
+        return self.validateSessionTicketWithPolicy(ticket_id, packet_number, early_data_policy);
+    }
+
+    fn validateSessionTicketWithPolicy(self: *Self, ticket_id: [16]u8, packet_number: u64, early_data_policy: ?EarlyDataPolicy) ?SessionTicket {
         const session = self.sessions.get(ticket_id) orelse return null;
 
         // Check if session is valid
         if (!session.isValid() or !session.isAuthenticInRing(&self.ticket_issuers)) {
             _ = self.sessions.swapRemove(ticket_id);
             return null;
+        }
+
+        if (early_data_policy) |policy| {
+            if (!session.matchesEarlyDataPolicy(policy)) return null;
         }
 
         // Check anti-replay
@@ -612,12 +686,79 @@ test "PQ resumption ticket rejects tampering and wrong issuer" {
     tampered_policy.resumption_policy = .hybrid_pq_early_data;
     try std.testing.expect(!tampered_policy.isAuthenticInRing(&session_mgr.ticket_issuers));
 
+    var tampered_transport = ticket;
+    tampered_transport.remembered_transport_parameters.initial_max_data += 1;
+    try std.testing.expect(!tampered_transport.isAuthenticInRing(&session_mgr.ticket_issuers));
+
     var wrong_issuers = TicketIssuerRing.initRandom();
     defer wrong_issuers.deinit();
     try std.testing.expect(!ticket.isAuthenticInRing(&wrong_issuers));
 
     ticket.ticket_mac[0] ^= 0x01;
     try std.testing.expect(!ticket.isAuthenticInRing(&session_mgr.ticket_issuers));
+}
+
+test "0-RTT early data validation is bound to ALPN application policy and transport parameters" {
+    const allocator = std.testing.allocator;
+    var session_mgr = try ZeroRttSessionManager.init(allocator);
+    defer session_mgr.deinit();
+
+    const app_policy_id: [16]u8 = @splat(0x7a);
+    const transport_params = RememberedTransportParameters{
+        .max_udp_payload_size = 1350,
+        .initial_max_data = 4 * 1024 * 1024,
+        .initial_max_stream_data_bidi_local = 256 * 1024,
+        .initial_max_stream_data_bidi_remote = 256 * 1024,
+        .initial_max_stream_data_uni = 128 * 1024,
+        .initial_max_streams_bidi = 64,
+        .initial_max_streams_uni = 32,
+        .disable_active_migration = true,
+        .active_connection_id_limit = 4,
+    };
+    const policy = EarlyDataPolicy{
+        .alpn = "h3",
+        .application_policy_id = app_policy_id,
+        .transport_parameters = transport_params,
+        .allow_early_data = true,
+    };
+
+    const resumption_secret: [32]u8 = @splat(0x33);
+    const ticket = try session_mgr.createSessionTicketWithEarlyDataPolicy(resumption_secret, policy);
+    try std.testing.expect(ticket.matchesEarlyDataPolicy(policy));
+
+    var wrong_alpn = policy;
+    wrong_alpn.alpn = "doq";
+    try std.testing.expect(session_mgr.validateSessionTicketForEarlyData(ticket.ticket_id, 99, wrong_alpn) == null);
+
+    var wrong_application_policy = policy;
+    wrong_application_policy.application_policy_id[0] ^= 0xff;
+    try std.testing.expect(session_mgr.validateSessionTicketForEarlyData(ticket.ticket_id, 99, wrong_application_policy) == null);
+
+    var wrong_transport_params = policy;
+    wrong_transport_params.transport_parameters.initial_max_data += 1;
+    try std.testing.expect(session_mgr.validateSessionTicketForEarlyData(ticket.ticket_id, 99, wrong_transport_params) == null);
+
+    try std.testing.expect(session_mgr.validateSessionTicketForEarlyData(ticket.ticket_id, 99, policy) != null);
+    try std.testing.expect(session_mgr.validateSessionTicketForEarlyData(ticket.ticket_id, 99, policy) == null);
+}
+
+test "0-RTT early data policy rejects application-disabled tickets" {
+    const allocator = std.testing.allocator;
+    var session_mgr = try ZeroRttSessionManager.init(allocator);
+    defer session_mgr.deinit();
+
+    const disabled_policy = EarlyDataPolicy{
+        .alpn = "h3",
+        .application_policy_id = @splat(0x11),
+        .transport_parameters = .{},
+        .allow_early_data = false,
+    };
+
+    const resumption_secret: [32]u8 = @splat(0x44);
+    const ticket = try session_mgr.createSessionTicketWithEarlyDataPolicy(resumption_secret, disabled_policy);
+    try std.testing.expectEqual(@as(u32, 0), ticket.max_early_data);
+    try std.testing.expect(!ticket.matchesEarlyDataPolicy(disabled_policy));
+    try std.testing.expect(session_mgr.validateSessionTicketForEarlyData(ticket.ticket_id, 1, disabled_policy) == null);
 }
 
 test "PQ resumption ticket accepts previous issuer during rotation window" {
@@ -649,6 +790,61 @@ test "PQ resumption ticket accepts previous issuer during rotation window" {
     try std.testing.expect(std.mem.eql(u8, &new_ticket.issuer_key_id, &new_material.key_id));
 }
 
+test "PQ resumption ticket rotation survives persisted issuer reconstruction" {
+    const allocator = std.testing.allocator;
+    const issuer_a = TicketIssuerMaterial.init(@splat(0x01), @splat(0x02));
+    const issuer_b = TicketIssuerMaterial.init(@splat(0x03), @splat(0x04));
+
+    var process_a = try ZeroRttSessionManager.initWithTicketIssuers(allocator, issuer_a, null);
+    defer process_a.deinit();
+
+    const hybrid_secret: [64]u8 = @splat(0xa1);
+    const pq_binder: [32]u8 = @splat(0xb2);
+    const process_a_ticket = try process_a.createPostQuantumSessionTicket(hybrid_secret, pq_binder, false);
+
+    var process_b = try ZeroRttSessionManager.initWithTicketIssuers(allocator, issuer_b, issuer_a);
+    defer process_b.deinit();
+    try process_b.storeSessionTicket(process_a_ticket);
+
+    try std.testing.expect(process_b.validatePostQuantumSessionTicket(process_a_ticket.ticket_id, 41, pq_binder, false) != null);
+
+    const process_b_ticket = try process_b.createPostQuantumSessionTicket(hybrid_secret, pq_binder, false);
+    try std.testing.expect(std.mem.eql(u8, &process_b_ticket.issuer_key_id, &issuer_b.key_id));
+    try std.testing.expect(!std.mem.eql(u8, &process_b_ticket.issuer_key_id, &issuer_a.key_id));
+}
+
+test "PQ resumption ticket rejects expired unknown and stale previous issuers" {
+    const allocator = std.testing.allocator;
+    const old_material = TicketIssuerMaterial.init(@splat(0x50), @splat(0x51));
+    const new_material = TicketIssuerMaterial.init(@splat(0x52), @splat(0x53));
+    const unknown_material = TicketIssuerMaterial.init(@splat(0x54), @splat(0x55));
+
+    var old_mgr = try ZeroRttSessionManager.initWithTicketIssuers(allocator, old_material, null);
+    defer old_mgr.deinit();
+    var current_mgr = try ZeroRttSessionManager.initWithTicketIssuers(allocator, new_material, null);
+    defer current_mgr.deinit();
+    var unknown_mgr = try ZeroRttSessionManager.initWithTicketIssuers(allocator, unknown_material, null);
+    defer unknown_mgr.deinit();
+
+    const hybrid_secret: [64]u8 = @splat(0x61);
+    const pq_binder: [32]u8 = @splat(0x62);
+
+    var expired_ticket = try current_mgr.createPostQuantumSessionTicket(hybrid_secret, pq_binder, false);
+    _ = current_mgr.sessions.swapRemove(expired_ticket.ticket_id);
+    expired_ticket.expiry_time = Time.nowSeconds() - 1;
+    expired_ticket.ticket_mac = current_mgr.ticket_issuers.signer().sign(&expired_ticket);
+    try current_mgr.storeSessionTicket(expired_ticket);
+    try std.testing.expect(current_mgr.validatePostQuantumSessionTicket(expired_ticket.ticket_id, 10, pq_binder, false) == null);
+
+    const unknown_ticket = try unknown_mgr.createPostQuantumSessionTicket(hybrid_secret, pq_binder, false);
+    try current_mgr.storeSessionTicket(unknown_ticket);
+    try std.testing.expect(current_mgr.validatePostQuantumSessionTicket(unknown_ticket.ticket_id, 11, pq_binder, false) == null);
+
+    const stale_previous_ticket = try old_mgr.createPostQuantumSessionTicket(hybrid_secret, pq_binder, false);
+    try current_mgr.storeSessionTicket(stale_previous_ticket);
+    try std.testing.expect(current_mgr.validatePostQuantumSessionTicket(stale_previous_ticket.ticket_id, 12, pq_binder, false) == null);
+}
+
 test "PQ resumption ticket policy rejects early-data mismatch" {
     const allocator = std.testing.allocator;
     var session_mgr = try ZeroRttSessionManager.init(allocator);
@@ -665,4 +861,33 @@ test "PQ resumption ticket policy rejects early-data mismatch" {
     try std.testing.expect(ticket.max_early_data > 0);
     try std.testing.expect(session_mgr.validatePostQuantumSessionTicket(ticket.ticket_id, 20, pq_binder, false) == null);
     try std.testing.expect(session_mgr.validatePostQuantumSessionTicket(ticket.ticket_id, 21, pq_binder, true) != null);
+}
+
+test "PQ early data policy rejects migration transport parameter mismatch" {
+    const allocator = std.testing.allocator;
+    var session_mgr = try ZeroRttSessionManager.init(allocator);
+    defer session_mgr.deinit();
+
+    const resumption_secret: [32]u8 = @splat(0x81);
+    const migration_disabled = RememberedTransportParameters{
+        .disable_active_migration = true,
+        .active_connection_id_limit = 2,
+    };
+    const policy = EarlyDataPolicy{
+        .alpn = "h3",
+        .application_policy_id = @splat(0x82),
+        .transport_parameters = migration_disabled,
+        .allow_early_data = true,
+    };
+    const ticket = try session_mgr.createSessionTicketWithEarlyDataPolicy(resumption_secret, policy);
+
+    var migration_enabled_policy = policy;
+    migration_enabled_policy.transport_parameters.disable_active_migration = false;
+    try std.testing.expect(session_mgr.validateSessionTicketForEarlyData(ticket.ticket_id, 50, migration_enabled_policy) == null);
+
+    var different_cid_limit = policy;
+    different_cid_limit.transport_parameters.active_connection_id_limit += 1;
+    try std.testing.expect(session_mgr.validateSessionTicketForEarlyData(ticket.ticket_id, 50, different_cid_limit) == null);
+
+    try std.testing.expect(session_mgr.validateSessionTicketForEarlyData(ticket.ticket_id, 50, policy) != null);
 }

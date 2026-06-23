@@ -12,7 +12,7 @@
   <img src="https://img.shields.io/badge/License-Apache%202.0-blue?style=for-the-badge" alt="License">
 </p>
 
-ZQUIC is a **modular, high-performance QUIC transport stack** built entirely in Zig 0.17.0-dev. It ships with a native async runtime (no external deps), stable QUIC/HTTP3 cryptography, explicit experimental post-quantum hooks via `zcrypto`, SSH/QUIC secret injection support, and HTTP/3, DoQ, VPN, and service layers tuned for Ghost workloads.
+ZQUIC is a **modular, high-performance QUIC transport stack** built entirely in Zig 0.17.0-dev. It ships with a native async runtime, QUIC packet-protection helpers, explicit experimental post-quantum hooks via `zcrypto`, SSH/QUIC secret injection support, and HTTP/3, DoQ, VPN, and service layers tuned for Ghost workloads.
 
 > ✅ Builds cleanly with Zig 0.17.0-dev on Linux/macOS/Windows and passes the `dev/test.sh` suite.
 
@@ -23,7 +23,7 @@ ZQUIC is a **modular, high-performance QUIC transport stack** built entirely in 
 - 🧩 **Pick-your-build**: Core QUIC only for embedded targets or full HTTP/3 + services for servers
 - 🛡️ **Explicit crypto posture**: Stable X25519/AEAD defaults with opt-in experimental ML-KEM and ML-DSA-65 via `zcrypto`
 - ⚡ **Native async runtime**: Poll-based event loop, timer wheel, and connection pool in-tree
-- 🌐 **Complete stack**: QUIC core, HTTP/3 server, DNS-over-QUIC, Ghost services, and VPN layers
+- 🌐 **Layered stack**: QUIC core, HTTP/3 server, DNS-over-QUIC, Ghost services, and VPN layers
 - 📊 **Operational insight**: Built-in monitoring hooks and Prometheus-friendly metrics emitters
 - 📦 **Clean tooling**: Straightforward `zig build` targets plus `dev/` scripts for local workflows
 
@@ -91,9 +91,9 @@ const ciphertext = try ctx.encrypt(plaintext, packet_number, allocator);
 - **Full QUIC v1 compliance**: connection management, streams, flow control
 - **BBR/CUBIC congestion control**: crypto-optimized for trading workloads
 - **Connection pooling**: high-performance multiplexing for crypto protocols
-- **HTTP/3 server**: production-ready with advanced middleware
+- **HTTP/3 server**: hardened server surface with routing, middleware, shutdown, and backpressure coverage
 - **Consistent middleware execution**: router fallback invokes global middleware (logging, static assets, auth) even when no route matches, so 404s still pass through your filters.
-- **QUIC-over-UDP VPN (experimental)**: `docs/features/quic_vpn.md` + new demos show how to tunnel mesh traffic as a concept alternative to Tailscale/NetBird.
+- **QUIC-over-UDP VPN (experimental)**: `docs/features/quic-vpn.md` + new demos show how to tunnel mesh traffic as a concept alternative to Tailscale/NetBird.
 - **Zero-copy packet processing**: optimized for 100K+ TPS
 - **IPv6-first networking**: dual-stack with modern internet protocols
 
@@ -114,7 +114,7 @@ const ciphertext = try ctx.encrypt(plaintext, packet_number, allocator);
 ### ⚡ **Performance & Reliability**
 - **100K+ transactions/second** transport capability
 - **<1ms latency** for critical path operations with Zero-RTT
-- **Sub-10ms** connection establishment with hybrid PQ-TLS
+- Hybrid PQ-TLS preview paths for opt-in experiments and review fixtures
 - **Zero-copy operations** throughout the entire stack
 - **Deterministic memory management** with predictable allocation patterns
 - **Advanced congestion control** optimized for high-throughput networking
@@ -123,10 +123,14 @@ const ciphertext = try ctx.encrypt(plaintext, packet_number, allocator);
 
 - **`docs/getting-started/quick-start.md`** – bootstrap instructions
 - **`docs/getting-started/build-config.md`** – flag reference kept in sync with `build.zig`
-- **`docs/architecture/overview.md`** – async runtime + protocol layering notes
+- **`docs/README.md`** – diagram-rich documentation map and navigation
+- **`docs/architecture/overview.md`** – protocol layering and component responsibilities
+- **`docs/architecture/state-machines.md`** – connection, stream, key phase, shutdown, and PQ reuse state diagrams
+- **`docs/architecture/flow-control-recovery.md`** – stream backpressure, packet recovery, and loss timer diagrams
 - **`docs/architecture/async-runtime.md`** – explains the in-tree async runtime that replaced zsync
-- **`docs/examples/`** – walkthroughs mirroring the binaries prepared by `zig build`
-- **`docs/features/README.md` & `docs/features/quic_vpn.md`** – catalogue of major modules plus the experimental QUIC VPN deep dive
+- **`docs/getting-started/examples.md`** – walkthroughs mirroring the binaries prepared by `zig build`
+- **`docs/features/overview.md` & `docs/features/quic-vpn.md`** – catalogue of major modules plus the experimental QUIC VPN deep dive
+- **`docs/operations/deployment.md`** – deployment profiles, validation pipeline, observability, and incident response
 - **`docs/integrations/prometheus.md`** – how to attach the exporter and what metrics to expect
 - **`docs/integrations/zcrypto.md`** – tuning notes for PQ TLS + VPN helpers
 - **`examples/*.zig`** – runnable samples that match the documentation
@@ -175,14 +179,14 @@ Prefer individual commands? Run `/opt/zig-dev/zig build integration-tests` for h
 
 The `dev/` scripts default to `/opt/zig-dev/zig` and accept `ZIG=/path/to/zig` overrides.
 
-## 🎯 Production Readiness Status
+## 🎯 Release Readiness Status
 
 
-### ✅ Production Checklist
+### ✅ Release Checklist
 
 | Component | Status | Notes |
 |-----------|--------|-------|
-| Core QUIC | ✅ | Streams, flow control, congestion modules covered by unit tests |
+| Core QUIC | ✅ | Streams, flow control, recovery, congestion modules covered by unit tests |
 | Post-Quantum Crypto | ⚠️ Experimental | Hybrid ML-KEM-768/1024 + X25519 via `zcrypto` (requires `-Dpost-quantum=true -Dexperimental-crypto=true`) |
 | HTTP/3 & DoQ | ✅ | Examples compile by default, exercised via `dev/smoke_test.sh` |
 | Async Runtime | ✅ | Native event loop + timer wheel; no external dependencies |

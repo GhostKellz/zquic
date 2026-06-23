@@ -186,7 +186,7 @@ pub const PacketSpace = struct {
         ack_delay: u64,
         now: u64,
     ) Error.ZquicError!AckResult {
-        _ = ack_delay; // TODO: Use for RTT calculation
+        _ = ack_delay; // Applied by LossRecovery when updating RTT.
         if (self.state != .active) return Error.ZquicError.InvalidState;
 
         var result = AckResult{};

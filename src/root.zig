@@ -1,8 +1,8 @@
 //! ZQUIC — High-Performance QUIC/HTTP3 Library for Zig
 //!
-//! A modular, production-ready QUIC (RFC 9000) and HTTP/3 (RFC 9114) implementation
-//! written in pure Zig. Designed for flexibility from minimal embedded clients to
-//! full-featured enterprise servers with post-quantum cryptography.
+//! A modular QUIC (RFC 9000) and HTTP/3 (RFC 9114) implementation written in
+//! pure Zig. Designed for flexibility from minimal embedded clients to
+//! full-featured server runtimes with opt-in post-quantum experiments.
 //!
 //! ## Quick Start
 //!
@@ -147,11 +147,13 @@ pub const EnhancedCrypto = core.EnhancedCrypto;
 
 /// TLS 1.3 handshake state machine for QUIC.
 ///
-/// Manages the cryptographic handshake process including:
+/// Models the cryptographic handshake process including:
 /// - ClientHello/ServerHello exchange
 /// - Key schedule computation
-/// - Certificate validation
+/// - Certificate message storage in experimental paths
 /// - 0-RTT early data handling
+///
+/// Production-complete certificate validation is not provided by this surface.
 pub const Handshake = core.Handshake;
 
 /// Cryptographic key management and rotation.

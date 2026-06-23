@@ -1,0 +1,21 @@
+{
+  "name": "client-one-rtt-short-header",
+  "role": "client",
+  "quic_version": null,
+  "alpn": "h3",
+  "cipher_suite": "TLS_AES_128_GCM_SHA256",
+  "feature_flags": [],
+  "packet_space": "application",
+  "packet_type": "one_rtt",
+  "expected_result": "accept",
+  "destination_connection_id": "0102030405060708",
+  "source_connection_id": null,
+  "packet_number": 3,
+  "packet_number_length": 4,
+  "header_length": 9,
+  "frame_summary": [
+    "STREAM id=0 offset=12 length=12 fin=true"
+  ],
+  "packet_hex": "430102030405060708000000034f4e455f5254545f30303031"
+}
+

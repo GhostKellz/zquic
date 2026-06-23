@@ -1,0 +1,22 @@
+{
+  "name": "server-handshake-minimal",
+  "role": "server",
+  "quic_version": 1,
+  "alpn": "h3",
+  "cipher_suite": "TLS_AES_128_GCM_SHA256",
+  "feature_flags": [],
+  "packet_space": "handshake",
+  "packet_type": "handshake",
+  "expected_result": "accept",
+  "destination_connection_id": "a1a2a3a4a5a6a7a8",
+  "source_connection_id": "0102030405060708",
+  "packet_number": 1,
+  "packet_number_length": 2,
+  "header_length": 23,
+  "frame_summary": [
+    "CRYPTO offset=0 length=24",
+    "ACK largest=0 delay=0"
+  ],
+  "packet_hex": "e10000000108a1a2a3a4a5a6a7a8080102030405060708000148414e445348414b455f54524143455f30303031"
+}
+

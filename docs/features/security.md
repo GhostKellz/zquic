@@ -23,9 +23,22 @@ All data encryption uses authenticated encryption with associated data (AEAD):
 ## TLS 1.3 Implementation
 
 ### Certificate Verification
-- Full certificate chain parsing and storage
-- CertificateVerify signature validation (RSA-PSS, ECDSA, Ed25519)
-- Finished message HMAC verification using transcript hash
+- Caller-supplied raw Ed25519 public-key certificates can be verified with
+  validity bounds by the experimental TLS helper, and raw Ed25519
+  CertificateVerify checks are bound to the TLS 1.3 transcript input.
+- TLS ciphertext record framing is parsed through `zcrypto.tls.record`.
+- DER/X.509 validation is available only through the delegated
+  `verifyX509CertificateWithRoots()` boundary, which uses `zcrypto.tls.config`
+  and explicit caller-supplied trust anchors. Local DER verification still
+  fails closed with `NotSupported`.
+- Production-complete TLS is **not currently provided** by zquic. Full
+  record-layer handshake orchestration, complete chain policy, revocation
+  checks, QUIC transport-parameter extension wiring, and external interop
+  vectors remain future work.
+- `src/crypto/comprehensive_tls.zig` keeps simplified CertificateVerify paths
+  disabled by default with `allow_simplified_verification = false`.
+- Finished message HMAC helpers exist in the experimental scaffold, but the
+  full TLS transcript is not yet wired through the core QUIC connection path.
 
 ### Session Security
 - Session ticket MAC verification
@@ -66,8 +79,8 @@ Note: `X-XSS-Protection` is intentionally omitted as it's deprecated and can cau
 
 ### Dependency Management
 Dependencies are fetched from pinned URLs with integrity hashes:
-- `zcrypto`: Cryptographic primitives
-- `zsync`: Synchronization utilities
+- `zcrypto v1.0.6`: Cryptographic primitives
+- `zsync v0.8.4`: Present in the package graph for zcrypto async helpers; zquic keeps zcrypto `async=false` by default.
 
 ### Compile-Time Safety
 - `allow_simplified_verification = false` in production
@@ -81,7 +94,9 @@ Dependencies are fetched from pinned URLs with integrity hashes:
 - [ ] Enable HSTS only over HTTPS connections
 - [ ] Configure appropriate CSP policy for your application
 - [ ] Review rate limit settings for your traffic patterns
-- [ ] Ensure certificate verification is enabled
+- [ ] Terminate TLS with a production verifier or provide an application-owned
+      certificate validation boundary; do not rely on zquic's experimental TLS
+      scaffold for certificate verification yet.
 
 ### Ongoing
 - [ ] Monitor for failed authentication attempts

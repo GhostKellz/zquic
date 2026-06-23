@@ -1,3 +1,162 @@
+## [0.9.15] - Unreleased
+
+### Added
+- Updated the zcrypto dependency to `v1.0.6` and recorded the accompanying
+  `zsync v0.8.4` package pin while keeping zcrypto async helpers disabled for
+  zquic builds.
+- Stable zcrypto API tests now guard the v1.0.6 root exports, `CryptoError`
+  alias, direct `sym` `SymError![]u8` decrypt contract, AEAD wrapper tamper
+  failures, and `Aes256GcmKey`, `ChaCha20Poly1305Key`, and `HmacKey` wrappers.
+- QUIC interop plan covering quiche, ngtcp2, MsQuic, aioquic, Zig QUIC
+  project discovery, packet-trace fixtures, and HTTP/3/QPACK/DoQ cases.
+- Optional `dev/interop_smoke.sh` harness for external-client and
+  external-server checks that skips clearly when tools or endpoints are absent.
+- Deterministic packet trace fixtures for Initial, Handshake, 0-RTT, and 1-RTT
+  header replay through the packet parser.
+- Core QUIC transport parameter encode/decode coverage for data limits, stream
+  limits, idle timeout, active connection ID limit, migration disablement, ACK
+  delay exponent, and preferred-address rejection posture.
+- Public core transport-parameter helpers are now exported via `zquic.core`,
+  including peer-role validation for original destination, initial source, retry
+  source, migration, and active connection ID limit constraints.
+- Version-negotiation packet parsing/serialization tests and optional external
+  client harness hooks for unsupported-version checks.
+- QUIC packet helpers now expose supported-version checks, Version Negotiation
+  response serialization/parsing, Retry packet parsing/connection-ID validation,
+  and stateless reset token matching.
+- Retry packet, stateless reset token, CONNECTION_CLOSE, and draining tests plus
+  optional external harness hooks for transport close-path interop evidence.
+- The interop harness now has a focused `--transport-close` mode and
+  `ZQUIC_INTEROP_REQUIRE_TRANSPORT_CLOSE=1` gate so release runs can fail when
+  no external stateless-reset, Retry, CONNECTION_CLOSE, or draining command
+  actually executed.
+- Retry integrity tag derivation now uses the RFC 9001 QUIC v1 AES-128-GCM
+  key/nonce over the Retry pseudo-packet, with a pinned local vector under
+  `tests/fixtures/interop/retry-integrity.json`.
+- HTTP/3 interop-style coverage for SETTINGS, request/response lifecycle,
+  GOAWAY, cancellation frames, malformed frame rejection, error mapping, and
+  optional external harness hooks.
+- HTTP/3 frame exports now include `FrameHeader`, `SettingsFrame`,
+  `GoawayFrame`, and `CancelPushFrame` with round-trip and malformed-input
+  coverage.
+- QPACK interop fixtures for static-equivalent literal headers, duplicate
+  pseudo-header rejection, malformed blocks, header count limits, and
+  dynamic-table-disabled posture.
+- DoQ interop fixtures and stream helpers for RFC 9250 two-byte length framing,
+  pipelined query buffers, NXDOMAIN/SERVFAIL mapping, and timeout policy.
+- DoQ now exports stream length-prefix helpers and pending-query lifecycle
+  helpers for timeout, cancellation, and deterministic cleanup coverage.
+- QUIC interop evidence matrix documenting exact in-tree coverage, target
+  files, and remaining external-stack gaps for v0.9.15 release validation.
+- RFC 9001 crypto audit mapping packet protection, TLS handshake, key update,
+  Retry, 0-RTT, and certificate-validation gaps to concrete source files.
+- Key phase and key-update lifecycle tests for overlapping update rejection,
+  old-phase discard, rollback rejection, packet-number continuity, and
+  wrong-key decrypt failures.
+- Transport parameter handshake validation for peer role, remembered original
+  destination connection ID, initial/retry source connection IDs, migration
+  disablement policy, and invalid active connection ID limits.
+- Certificate validation posture docs that explicitly separate experimental
+  certificate storage/signature helpers from production TLS chain, hostname,
+  trust-anchor, revocation, and CertificateVerify validation.
+- Comprehensive TLS scaffold quarantine with explicit maturity markers,
+  fail-closed DER/X.509 verification, and a bounded caller-supplied raw
+  Ed25519 public-key certificate verification path.
+- Comprehensive TLS now exposes explicit maturity constants, QUIC ALPN/cipher
+  suite validators, raw Ed25519 public-key certificate construction, and
+  fail-closed DER verification behavior.
+- Comprehensive TLS now parses TLS ciphertext record framing through
+  `zcrypto.tls.record`, exposes a delegated X.509 verification helper backed by
+  `zcrypto.tls.config` with explicit trust anchors, and fails closed when trust
+  anchors or DER inputs are invalid.
+- Comprehensive TLS EncryptedExtensions processing now requires and records
+  `h3` ALPN, decodes and retains QUIC transport parameters, and raw Ed25519
+  CertificateVerify processing verifies the TLS 1.3 transcript-bound input
+  instead of accepting length-only scaffold checks.
+- Core connections can now validate decoded peer transport parameters against
+  the QUIC handshake context and retain an owned negotiated snapshot, keeping
+  connection-level policy independent from TLS parser buffer lifetimes.
+- TLS fixtures now pin a minimal TLS 1.3 handshake record and a deterministic
+  raw Ed25519 CertificateVerify transcript input under `tests/fixtures/tls/`.
+- Negative QUIC-TLS tests for transcript mismatch, wrong ALPN, unsupported
+  cipher suites, bad transport parameters, rejected packet-protection keys, and
+  rejected handshake messages that must not mutate the transcript.
+- 0-RTT early-data acceptance now binds tickets to authenticated remembered
+  transport parameters, ALPN, and application policy before anti-replay accepts
+  the packet number.
+- Session tickets now authenticate ALPN, application policy ID, remembered
+  transport parameters, PQ binder material, issuer key ID, and ticket policy in
+  the ticket MAC.
+- Prometheus telemetry hooks for handshake failures, key updates, rejected
+  0-RTT, bad transport parameters, Retry events, and stateless reset events.
+- Core connection helpers for queuing and draining stream events once, allowing
+  protocol integrations to consume the real QUIC stream table without entering
+  the long-running connection loop.
+- Advanced HTTP/3 server stream acceptance now drains pending core stream
+  events, tracks accepted streams by stream ID, prunes closed streams, rejects
+  new work during shutdown, and enforces per-connection stream limits.
+- Advanced HTTP/3 graceful shutdown now stops new connection/stream acceptance,
+  emits GOAWAY to active streams, drains closed work, sends transport
+  CONNECTION_CLOSE on drain or timeout, and releases tracked connection context
+  state predictably.
+- Phase 4 overload coverage now exercises per-connection HTTP/3 stream limits,
+  oversized request-body cleanup, send-window backpressure, receive-window
+  recovery after slow readers drain data, and blocked flow-control windows.
+- UDP operation coverage now includes deterministic packet-batch capacity,
+  IPv4/IPv6 metadata preservation, packet-info fallback state, and explicit
+  platform capability posture for batching, ECN, buffer sizing, and portable
+  fallbacks without requiring live socket permissions.
+- UDP socket wrappers now retain packet-info fallback state and expose
+  `platformCapabilities()` plus bounded `PacketBatch` append/capacity helpers.
+- Load-balancer and backend-pool stress coverage now exercises stale idle
+  connection eviction, unhealthy backend avoidance, weighted priority routing,
+  load-balancer stats, and add/remove churn cleanup.
+- HTTP/3 hardening coverage now exercises body-limit cleanup, response frame
+  streaming on the request stream, middleware behavior, 404/405 routing, and
+  concurrent stream isolation.
+- DoQ lifecycle hardening now includes explicit pending-query queue,
+  cancellation, timeout cleanup, resolver SERVFAIL mapping, malformed
+  compression rejection, and oversized-message cleanup coverage.
+- Prometheus metrics now expose stable `zquic_*` families for HTTP/3 streams,
+  queue depth, status families, DoQ response codes, QUIC packet loss, and
+  retransmits in addition to existing connection and crypto lifecycle counters.
+- Docker validation variants are available through `dev/docker_validate.sh` for
+  release, valgrind, optional interop, and shell workflows, with root-owned
+  output cleanup documented in `docker/README.md`.
+- Docker interop validation now forwards `ZQUIC_INTEROP_*`, `*_INTEROP_CMD`,
+  and external client command variables into the container, including the
+  transport-close require gate.
+- Documentation was reorganized around a single `docs/README.md` index with
+  lowercase descriptive filenames under `docs/` and Mermaid-rich architecture,
+  packet-flow, TLS/key lifecycle, HTTP/3/DoQ, monitoring, and release-validation
+  pages.
+- Added diagram-rich docs for state machines, flow-control/recovery, deployment
+  operations, feature routing, build-flag gating, and root API flow to match the
+  professional zcrypto documentation structure.
+- Phase 5 PQ preview gates now include transport-parameter-bound interop trace
+  fixtures, persisted issuer rotation tests, explicit expired/unknown/stale
+  issuer rejection coverage, and PQ pool reuse lifecycle checks.
+- Added `docs/security/pq-review.md` and expanded zcrypto integration docs with
+  operational PQ ticket issuer management rules for generation, storage,
+  rotation, retention, incident invalidation, and secret-safe logging.
+
+### Fixed
+- Linux UDP `EPERM` socket failures are normalized into permission errors so
+  socket-dependent tests can skip cleanly in restricted environments instead of
+  printing `unexpected errno: 1` traces.
+- Stale Zig-dev API calls in the advanced HTTP/3 server proxy, pooling,
+  metrics, routing, and teardown paths were updated while bringing the server
+  into the active test graph.
+- Long-header parsing now distinguishes unsupported QUIC versions from malformed
+  packets while preserving Version Negotiation parsing for version `0`.
+- SETTINGS and QPACK parsing now fail closed on truncated setting values and
+  duplicate pseudo-headers instead of accepting partial or ambiguous input.
+- TLS handshake processing now validates the expected message for the current
+  state before mutating state or transcript buffers, so rejected messages do not
+  poison Finished verification.
+- Enhanced TLS AEAD decrypt callsites now handle zcrypto v1.0.6 direct
+  `sym` decrypt helpers as `SymError![]u8` instead of optional plaintext.
+
 ## [0.9.14] - 2026-06-21
 
 ### Added

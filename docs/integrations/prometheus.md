@@ -1,6 +1,6 @@
 # Prometheus Integration
 
-ZQUIC 0.9.14 ships with a native Prometheus exporter (`src/monitoring/prometheus_exporter.zig`). Attach it to HTTP/3 servers, DoQ servers, or the QUIC VPN router to expose metrics for your scrape jobs.
+ZQUIC 0.9.15 ships with a native Prometheus exporter (`src/monitoring/prometheus_exporter.zig`). Attach it to HTTP/3 servers, DoQ servers, or the QUIC VPN router to expose metrics for your scrape jobs.
 
 ## Quick Start
 ```zig
@@ -32,10 +32,22 @@ const payload = try metrics.render(allocator);
 | `zquic_http3_request_duration_us_count` | counter | Count of observed HTTP/3 request latency samples |
 | `zquic_http3_bytes_{received,sent}_total` | counter | Payload ingress/egress bytes |
 | `zquic_http3_connections_active` | gauge | Currently registered QUIC conns |
+| `zquic_http3_streams_active` | gauge | Active HTTP/3 streams |
+| `zquic_http3_queue_depth` | gauge | HTTP/3 queued work items |
+| `zquic_http3_status_{2xx,3xx,4xx,5xx}_total` | counter | HTTP/3 response status families |
 | `zquic_doq_queries_total` | counter | Total DoQ queries processed |
 | `zquic_doq_failures_total` | counter | Handler/parse failures |
 | `zquic_doq_bytes_{received,sent}_total` | counter | DNS payload accounting |
 | `zquic_doq_connections_active` | gauge | Active DoQ sessions |
+| `zquic_doq_response_{noerror,nxdomain,servfail}_total` | counter | DoQ response code families |
+| `zquic_quic_packet_loss_total` | counter | QUIC packets declared lost |
+| `zquic_quic_retransmits_total` | counter | QUIC packet retransmissions |
+| `zquic_handshake_failures_total` | counter | QUIC/TLS handshake failures |
+| `zquic_key_updates_total` | counter | QUIC packet-protection key updates |
+| `zquic_zero_rtt_rejected_total` | counter | Rejected 0-RTT attempts |
+| `zquic_bad_transport_parameters_total` | counter | Rejected transport parameter sets |
+| `zquic_retry_events_total` | counter | Retry events |
+| `zquic_stateless_reset_events_total` | counter | Stateless reset events |
 | `zquic_vpn_packets_forwarded_total` | counter | Packets forwarded through `PacketRouter` |
 | `zquic_vpn_bytes_forwarded_total` | counter | Byte-level VPN throughput |
 | `zquic_vpn_{routes,interfaces,nat}_active` | gauge | Routing table state |

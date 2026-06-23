@@ -1,6 +1,6 @@
 # Resolved Advisories
 
-No resolved security advisories are currently tracked for `zquic v0.9.14`.
+No resolved security advisories are currently tracked for `zquic v0.9.15`.
 
 When a dependency or code update clears an advisory, record:
 

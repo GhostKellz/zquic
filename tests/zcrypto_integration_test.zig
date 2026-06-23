@@ -7,18 +7,16 @@
 //!
 //! ## Testing Strategy
 //!
-//! 1. **Stable Core Primitives (std.crypto)**:
-//!    AES-GCM and ChaCha20-Poly1305 tests use std.crypto directly.
-//!    This validates that zcrypto's internal use of std.crypto matches behavior.
-//!
-//! 2. **ZCrypto-Specific APIs**:
+//! 1. **Stable ZCrypto APIs**:
 //!    - `zcrypto.hash` (Sha256, Blake3) - streaming hash wrappers
 //!    - `zcrypto.kex` (X25519) - key exchange primitives
 //!    - `zcrypto.kdf` (hkdfSha256) - key derivation
 //!    - `zcrypto.rand` (fill) - random number generation
 //!    - `zcrypto.util` - secure memory operations
+//!    - `zcrypto.sym` / `zcrypto.auth` - stable wrappers covered by
+//!      `tests/zcrypto_stable_test.zig`
 //!
-//! 3. **Post-Quantum**: All PQ tests run since this file is only compiled
+//! 2. **Post-Quantum**: All PQ tests run since this file is only compiled
 //!    when PQ is enabled by the build system.
 
 const std = @import("std");
@@ -62,11 +60,10 @@ test "zcrypto hash: Blake3 streaming" {
 }
 
 // ============================================================================
-// SYMMETRIC ENCRYPTION TESTS (std.crypto baseline)
+// STDLIB SYMMETRIC REFERENCE TESTS
 // ============================================================================
 
-test "std.crypto: AES-256-GCM baseline" {
-    // Uses std.crypto directly - zcrypto wraps this internally
+test "stdlib reference: AES-256-GCM round trip" {
     const key: [32]u8 = blk: {
         var bytes = std.mem.zeroes([32]u8);
         @memset(bytes[0..], 0x42);
@@ -93,7 +90,7 @@ test "std.crypto: AES-256-GCM baseline" {
     try std.testing.expectEqualStrings(plaintext, &decrypted);
 }
 
-test "std.crypto: ChaCha20-Poly1305 baseline" {
+test "stdlib reference: ChaCha20-Poly1305 round trip" {
     const key: [32]u8 = blk: {
         var bytes = std.mem.zeroes([32]u8);
         @memset(bytes[0..], 0x42);
@@ -727,12 +724,14 @@ fn serializeInteropTraceBundle(allocator: std.mem.Allocator, client: PQHandshake
     return try buffer.toOwnedSlice(allocator);
 }
 
-fn parseInteropTraceBundle(bundle: []const u8) !struct {
+const ParsedInteropTraceBundle = struct {
     client: PQHandshakeTranscript,
     server: PQHandshakeTranscript,
     client_hash: [32]u8,
     server_hash: [32]u8,
-} {
+};
+
+fn parseInteropTraceBundle(bundle: []const u8) !ParsedInteropTraceBundle {
     var offset: usize = 0;
     if (bundle.len < interop_magic.len + 2) return error.InvalidTrace;
     if (!std.mem.eql(u8, bundle[offset..][0..interop_magic.len], interop_magic)) return error.InvalidTrace;
@@ -759,6 +758,43 @@ fn parseInteropTraceBundle(bundle: []const u8) !struct {
         .server = server,
         .client_hash = client_hash,
         .server_hash = server_hash,
+    };
+}
+
+fn serializeInteropTraceBundleWithTransport(
+    allocator: std.mem.Allocator,
+    client: PQHandshakeTranscript,
+    server: PQHandshakeTranscript,
+    transport_parameters: []const u8,
+) ![]u8 {
+    const base = try serializeInteropTraceBundle(allocator, client, server);
+    defer allocator.free(base);
+    const tp_hash = zcrypto.hash.sha256(transport_parameters);
+
+    var buffer: std.ArrayList(u8) = .empty;
+    errdefer buffer.deinit(allocator);
+    try appendSliceField(&buffer, allocator, base);
+    try appendSliceField(&buffer, allocator, transport_parameters);
+    try buffer.appendSlice(allocator, &tp_hash);
+    return try buffer.toOwnedSlice(allocator);
+}
+
+fn parseInteropTraceBundleWithTransport(bundle: []const u8) !struct {
+    base: ParsedInteropTraceBundle,
+    transport_parameters: []const u8,
+    transport_hash: [32]u8,
+} {
+    var offset: usize = 0;
+    const base_bundle = try readSlice(bundle, &offset);
+    const transport_parameters = try readSlice(bundle, &offset);
+    if (offset + 32 != bundle.len) return error.InvalidTrace;
+    const transport_hash: [32]u8 = bundle[offset..][0..32].*;
+    if (!std.mem.eql(u8, &transport_hash, &zcrypto.hash.sha256(transport_parameters))) return error.InvalidTrace;
+
+    return .{
+        .base = try parseInteropTraceBundle(base_bundle),
+        .transport_parameters = transport_parameters,
+        .transport_hash = transport_hash,
     };
 }
 
@@ -847,4 +883,44 @@ test "PQC interop trace: bundled multi-suite replay and tamper rejection" {
         tampered[tampered.len - 5] ^= 0x80;
         try std.testing.expectError(error.InvalidTrace, parseInteropTraceBundle(tampered));
     }
+}
+
+test "PQC interop trace: transport parameter replay and mutation rejection" {
+    const allocator = std.testing.allocator;
+    const kem_pk = fixedBytes(zcrypto.post_quantum.pq.ml_kem.ML_KEM_768.PUBLIC_KEY_SIZE, 0x91);
+    const x25519_pk = fixedBytes(32, 0x92);
+    const ciphertext = fixedBytes(zcrypto.post_quantum.pq.ml_kem.ML_KEM_768.CIPHERTEXT_SIZE, 0x93);
+    const secret = fixedBytes(32, 0x94);
+
+    const client = PQHandshakeTranscript{
+        .cipher_suite = .ml_kem_768_x25519_sha256,
+        .role = .client,
+        .kem_public_key = &kem_pk,
+        .classical_public_key = &x25519_pk,
+        .kem_ciphertext = &ciphertext,
+        .experimental_crypto = true,
+    };
+    var server = client;
+    server.role = .server;
+
+    const transport_parameters = [_]u8{
+        0x04, 0x02, 0x40, 0x64, // initial_max_data
+        0x0c, 0x00, // disable_active_migration
+        0x0e, 0x01, 0x02, // active_connection_id_limit
+    };
+
+    const bundle = try serializeInteropTraceBundleWithTransport(allocator, client, server, &transport_parameters);
+    defer allocator.free(bundle);
+
+    const parsed = try parseInteropTraceBundleWithTransport(bundle);
+    try std.testing.expectEqualSlices(u8, &transport_parameters, parsed.transport_parameters);
+    try std.testing.expect(try PQHandshakeTranscript.secretsMatch(parsed.base.client, parsed.base.server, &secret, &secret));
+
+    const replayed = try parseInteropTraceBundleWithTransport(bundle);
+    try std.testing.expectEqualSlices(u8, &parsed.transport_hash, &replayed.transport_hash);
+
+    var tampered = try allocator.dupe(u8, bundle);
+    defer allocator.free(tampered);
+    tampered[tampered.len - 33] ^= 0x01;
+    try std.testing.expectError(error.InvalidTrace, parseInteropTraceBundleWithTransport(tampered));
 }

@@ -1,0 +1,9 @@
+{
+  "name": "pipelined-queries",
+  "description": "Two length-prefixed DNS query messages in one stream buffer.",
+  "expected_result": "accept",
+  "stream_hex": "001c20010100000100000000000005616c70686104746573740000010001001b2002010000010000000000000462657461047465737400001c0001",
+  "expected_message_ids": [8193, 8194],
+  "expected_question_names": ["alpha.test", "beta.test"]
+}
+

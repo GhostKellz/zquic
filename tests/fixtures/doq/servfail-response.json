@@ -1,0 +1,9 @@
+{
+  "name": "servfail-response",
+  "description": "SERVFAIL response mapping keeps the query ID and question.",
+  "expected_result": "rcode",
+  "stream_hex": "0021cafe80020001000000000000076661696c696e67076578616d706c650000010001",
+  "expected_message_ids": [51966],
+  "expected_question_names": ["failing.example"],
+  "expected_rcode": 2
+}

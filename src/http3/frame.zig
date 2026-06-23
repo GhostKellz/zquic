@@ -163,20 +163,19 @@ pub const SettingsFrame = struct {
 
     pub fn parse(data: []const u8, allocator: std.mem.Allocator) Error.ZquicError!Self {
         var settings = SettingsFrame.init(allocator);
+        errdefer settings.deinit(allocator);
         var offset: usize = 0;
 
         while (offset < data.len) {
             // Parse setting identifier
             const id_result = parseVarintFrom(data, offset) orelse {
-                // Incomplete - stop parsing, return what we have
-                break;
+                return Error.ZquicError.Http3Error;
             };
             offset += id_result.consumed;
 
             // Parse setting value
             const value_result = parseVarintFrom(data, offset) orelse {
-                // Incomplete - stop parsing, return what we have
-                break;
+                return Error.ZquicError.Http3Error;
             };
             offset += value_result.consumed;
 
@@ -184,6 +183,54 @@ pub const SettingsFrame = struct {
         }
 
         return settings;
+    }
+};
+
+/// HTTP/3 CANCEL_PUSH frame.
+pub const CancelPushFrame = struct {
+    push_id: u64,
+
+    pub fn init(push_id: u64) CancelPushFrame {
+        return .{ .push_id = push_id };
+    }
+
+    pub fn serialize(self: CancelPushFrame, writer: anytype) !void {
+        const header = FrameHeader{
+            .frame_type = .cancel_push,
+            .length = varintLength(self.push_id),
+        };
+        try header.serialize(writer);
+        try writeVarint(writer, self.push_id);
+    }
+
+    pub fn parse(data: []const u8) Error.ZquicError!CancelPushFrame {
+        const result = parseVarintFrom(data, 0) orelse return Error.ZquicError.Http3Error;
+        if (result.consumed != data.len) return Error.ZquicError.Http3Error;
+        return .{ .push_id = result.value };
+    }
+};
+
+/// HTTP/3 GOAWAY frame.
+pub const GoawayFrame = struct {
+    stream_or_push_id: u64,
+
+    pub fn init(stream_or_push_id: u64) GoawayFrame {
+        return .{ .stream_or_push_id = stream_or_push_id };
+    }
+
+    pub fn serialize(self: GoawayFrame, writer: anytype) !void {
+        const header = FrameHeader{
+            .frame_type = .goaway,
+            .length = varintLength(self.stream_or_push_id),
+        };
+        try header.serialize(writer);
+        try writeVarint(writer, self.stream_or_push_id);
+    }
+
+    pub fn parse(data: []const u8) Error.ZquicError!GoawayFrame {
+        const result = parseVarintFrom(data, 0) orelse return Error.ZquicError.Http3Error;
+        if (result.consumed != data.len) return Error.ZquicError.Http3Error;
+        return .{ .stream_or_push_id = result.value };
     }
 };
 
@@ -411,6 +458,46 @@ test "settings frame parse roundtrip" {
     try std.testing.expect(parsed.settings.items[0].value == 1234);
     try std.testing.expect(parsed.settings.items[1].id == 6);
     try std.testing.expect(parsed.settings.items[1].value == 4096);
+}
+
+test "settings frame rejects truncated setting value" {
+    try std.testing.expectError(error.Http3Error, SettingsFrame.parse(&[_]u8{ 0x01, 0x40 }, std.testing.allocator));
+}
+
+test "goaway frame parse roundtrip" {
+    const goaway = GoawayFrame.init(64);
+
+    var buf: [16]u8 = undefined;
+    var writer = Io.Writer.fixed(&buf);
+    try goaway.serialize(&writer);
+
+    const written = Io.Writer.buffered(&writer);
+    const header_parse = try FrameHeader.parse(written);
+    try std.testing.expectEqual(FrameType.goaway, header_parse.header.frame_type);
+
+    const payload_start = header_parse.consumed;
+    const payload_end = payload_start + @as(usize, @intCast(header_parse.header.length));
+    const parsed = try GoawayFrame.parse(written[payload_start..payload_end]);
+    try std.testing.expectEqual(@as(u64, 64), parsed.stream_or_push_id);
+}
+
+test "cancel push frame parse roundtrip and malformed rejection" {
+    const cancel = CancelPushFrame.init(7);
+
+    var buf: [16]u8 = undefined;
+    var writer = Io.Writer.fixed(&buf);
+    try cancel.serialize(&writer);
+
+    const written = Io.Writer.buffered(&writer);
+    const header_parse = try FrameHeader.parse(written);
+    try std.testing.expectEqual(FrameType.cancel_push, header_parse.header.frame_type);
+
+    const payload_start = header_parse.consumed;
+    const payload_end = payload_start + @as(usize, @intCast(header_parse.header.length));
+    const parsed = try CancelPushFrame.parse(written[payload_start..payload_end]);
+    try std.testing.expectEqual(@as(u64, 7), parsed.push_id);
+
+    try std.testing.expectError(error.Http3Error, CancelPushFrame.parse(&[_]u8{ 0x07, 0x00 }));
 }
 
 test "frame parser incremental data frame" {

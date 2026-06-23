@@ -8,6 +8,22 @@ const Error = zquic.Error;
 const NextFn = *const fn (*Http3.Request, *Http3.Response) Error.ZquicError!void;
 const MiddlewareLog = std.ArrayListUnmanaged(u8);
 
+const QpackFixtureHeader = struct {
+    name: []const u8,
+    value: []const u8,
+};
+
+const QpackFixture = struct {
+    name: []const u8,
+    description: []const u8,
+    expected_result: []const u8,
+    dynamic_table: []const u8,
+    max_header_count: ?usize = null,
+    max_header_block_size: ?usize = null,
+    encoded_hex: []const u8,
+    expected_headers: []const QpackFixtureHeader = &.{},
+};
+
 const MiddlewareTest = struct {
     fn attachLog(request: *Http3.Request, log: *MiddlewareLog) void {
         request.context.user_data = log;
@@ -31,6 +47,43 @@ fn buildHeaderFields(allocator: std.mem.Allocator, headers: []const struct { nam
         list[i] = try Http3.HeaderField.init(allocator, headers[i].name, headers[i].value);
     }
     return list;
+}
+
+fn replayQpackFixture(comptime fixture_json: []const u8) !void {
+    const parsed = try std.json.parseFromSlice(QpackFixture, std.testing.allocator, fixture_json, .{});
+    defer parsed.deinit();
+    const fixture = parsed.value;
+
+    try std.testing.expect(std.mem.eql(u8, fixture.dynamic_table, "disabled"));
+    try std.testing.expectEqual(@as(usize, 0), fixture.encoded_hex.len % 2);
+
+    var encoded_buffer: [4096]u8 = undefined;
+    const encoded = try std.fmt.hexToBytes(&encoded_buffer, fixture.encoded_hex);
+
+    var decoder = Http3.QpackDecoder.init(std.testing.allocator, 0);
+    defer decoder.deinit(std.testing.allocator);
+    if (fixture.max_header_count) |max| decoder.max_header_count = max;
+    if (fixture.max_header_block_size) |max| decoder.max_header_block_size = max;
+
+    if (std.mem.eql(u8, fixture.expected_result, "accept")) {
+        const decoded = try decoder.decode(encoded, std.testing.allocator);
+        defer {
+            for (decoded) |*field| field.deinit();
+            std.testing.allocator.free(decoded);
+        }
+
+        try std.testing.expectEqual(fixture.expected_headers.len, decoded.len);
+        for (fixture.expected_headers, 0..) |expected, index| {
+            try std.testing.expectEqualStrings(expected.name, decoded[index].name);
+            try std.testing.expectEqualStrings(expected.value, decoded[index].value);
+        }
+    } else if (std.mem.eql(u8, fixture.expected_result, "reject")) {
+        try std.testing.expectError(Error.ZquicError.HeaderError, decoder.decode(encoded, std.testing.allocator));
+    } else if (std.mem.eql(u8, fixture.expected_result, "reject_invalid_data")) {
+        try std.testing.expectError(Error.ZquicError.InvalidData, decoder.decode(encoded, std.testing.allocator));
+    } else {
+        return Error.ZquicError.InvalidArgument;
+    }
 }
 
 test "integration: http3 server routes request to handler" {
@@ -542,4 +595,132 @@ test "integration: concurrent request streams stay isolated" {
 
     try std.testing.expectEqualStrings("stream=44", res_a.getBody());
     try std.testing.expectEqualStrings("stream=48", res_b.getBody());
+}
+
+test "interop: http3 settings fixture parses exact values" {
+    var settings = Http3.SettingsFrame.init(std.testing.allocator);
+    defer settings.deinit(std.testing.allocator);
+
+    try settings.addSetting(std.testing.allocator, 0x01, 0);
+    try settings.addSetting(std.testing.allocator, 0x06, 4096);
+
+    var buffer: [64]u8 = undefined;
+    var writer = std.Io.Writer.fixed(&buffer);
+    try settings.serialize(&writer, std.testing.allocator);
+
+    const written = std.Io.Writer.buffered(&writer);
+    const header = try Http3.FrameHeader.parse(written);
+    try std.testing.expectEqual(Http3.FrameType.settings, header.header.frame_type);
+
+    const payload_start = header.consumed;
+    const payload_end = payload_start + @as(usize, @intCast(header.header.length));
+    var parsed = try Http3.SettingsFrame.parse(written[payload_start..payload_end], std.testing.allocator);
+    defer parsed.deinit(std.testing.allocator);
+
+    try std.testing.expectEqual(@as(usize, 2), parsed.settings.items.len);
+    try std.testing.expectEqual(@as(u64, 0x01), parsed.settings.items[0].id);
+    try std.testing.expectEqual(@as(u64, 0), parsed.settings.items[0].value);
+    try std.testing.expectEqual(@as(u64, 0x06), parsed.settings.items[1].id);
+    try std.testing.expectEqual(@as(u64, 4096), parsed.settings.items[1].value);
+}
+
+test "interop: http3 goaway and cancellation frames parse" {
+    var goaway_buffer: [16]u8 = undefined;
+    var goaway_writer = std.Io.Writer.fixed(&goaway_buffer);
+    try Http3.GoawayFrame.init(100).serialize(&goaway_writer);
+
+    const goaway_bytes = std.Io.Writer.buffered(&goaway_writer);
+    const goaway_header = try Http3.FrameHeader.parse(goaway_bytes);
+    try std.testing.expectEqual(Http3.FrameType.goaway, goaway_header.header.frame_type);
+    const goaway_payload_start = goaway_header.consumed;
+    const goaway_payload_end = goaway_payload_start + @as(usize, @intCast(goaway_header.header.length));
+    const goaway = try Http3.GoawayFrame.parse(goaway_bytes[goaway_payload_start..goaway_payload_end]);
+    try std.testing.expectEqual(@as(u64, 100), goaway.stream_or_push_id);
+
+    var cancel_buffer: [16]u8 = undefined;
+    var cancel_writer = std.Io.Writer.fixed(&cancel_buffer);
+    try Http3.CancelPushFrame.init(3).serialize(&cancel_writer);
+
+    const cancel_bytes = std.Io.Writer.buffered(&cancel_writer);
+    const cancel_header = try Http3.FrameHeader.parse(cancel_bytes);
+    try std.testing.expectEqual(Http3.FrameType.cancel_push, cancel_header.header.frame_type);
+    const cancel_payload_start = cancel_header.consumed;
+    const cancel_payload_end = cancel_payload_start + @as(usize, @intCast(cancel_header.header.length));
+    const cancel = try Http3.CancelPushFrame.parse(cancel_bytes[cancel_payload_start..cancel_payload_end]);
+    try std.testing.expectEqual(@as(u64, 3), cancel.push_id);
+}
+
+test "interop: http3 malformed frame rejection" {
+    try std.testing.expectError(error.Http3Error, Http3.FrameHeader.parse(&[_]u8{0x40}));
+    try std.testing.expectError(error.Http3Error, Http3.FrameHeader.parse(&[_]u8{ 0x21, 0x00 }));
+    try std.testing.expectError(error.Http3Error, Http3.SettingsFrame.parse(&[_]u8{ 0x01, 0x40 }, std.testing.allocator));
+    try std.testing.expectError(error.Http3Error, Http3.GoawayFrame.parse(&[_]u8{}));
+    try std.testing.expectError(error.Http3Error, Http3.CancelPushFrame.parse(&[_]u8{ 0x03, 0x00 }));
+}
+
+test "interop: http3 request response lifecycle and error mapping" {
+    var debug_allocator: std.heap.DebugAllocator(.{}) = .init;
+    defer _ = debug_allocator.deinit();
+    const allocator = debug_allocator.allocator();
+
+    var server = try Http3.Http3Server.init(allocator, .{});
+    defer server.deinit();
+
+    const handlers = struct {
+        fn ok(_: *Http3.Request, res: *Http3.Response) Error.ZquicError!void {
+            try res.text("interop-ok");
+        }
+
+        fn fail(_: *Http3.Request, _: *Http3.Response) Error.ZquicError!void {
+            return Error.ZquicError.ProtocolViolation;
+        }
+    };
+
+    try server.get("/interop", handlers.ok);
+    try server.get("/fail", handlers.fail);
+
+    var ok_request = Http3.Request.init(allocator, 64, "conn-h3-interop");
+    defer ok_request.deinit();
+    const ok_headers = try buildHeaderFields(allocator, &.{
+        .{ .name = ":method", .value = "GET" },
+        .{ .name = ":path", .value = "/interop" },
+        .{ .name = ":authority", .value = "localhost" },
+    });
+    defer {
+        for (ok_headers) |*field| field.deinit();
+        allocator.free(ok_headers);
+    }
+    try ok_request.parseFromHeaders(ok_headers);
+
+    var ok_response = Http3.Response.init(allocator, ok_request.context.stream_id);
+    defer ok_response.deinit();
+    try server.router.handleRequest(&ok_request, &ok_response);
+    try std.testing.expectEqual(Http3.StatusCode.ok, ok_response.status);
+    try std.testing.expectEqualStrings("interop-ok", ok_response.getBody());
+
+    var fail_request = Http3.Request.init(allocator, 68, "conn-h3-interop");
+    defer fail_request.deinit();
+    const fail_headers = try buildHeaderFields(allocator, &.{
+        .{ .name = ":method", .value = "GET" },
+        .{ .name = ":path", .value = "/fail" },
+        .{ .name = ":authority", .value = "localhost" },
+    });
+    defer {
+        for (fail_headers) |*field| field.deinit();
+        allocator.free(fail_headers);
+    }
+    try fail_request.parseFromHeaders(fail_headers);
+
+    var fail_response = Http3.Response.init(allocator, fail_request.context.stream_id);
+    defer fail_response.deinit();
+    try server.router.handleRequest(&fail_request, &fail_response);
+    try std.testing.expectEqual(Http3.StatusCode.internal_server_error, fail_response.status);
+}
+
+test "interop: qpack fixtures replay" {
+    try replayQpackFixture(@embedFile("fixtures/qpack/static-table-literals.json"));
+    try replayQpackFixture(@embedFile("fixtures/qpack/duplicate-pseudo-header.json"));
+    try replayQpackFixture(@embedFile("fixtures/qpack/malformed-block.json"));
+    try replayQpackFixture(@embedFile("fixtures/qpack/header-list-size-limit.json"));
+    try replayQpackFixture(@embedFile("fixtures/qpack/dynamic-table-disabled.json"));
 }

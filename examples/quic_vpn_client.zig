@@ -11,9 +11,6 @@ comptime {
     if (!@hasDecl(zquic, "vpn") or !@hasDecl(zquic.vpn, "PacketRouter")) {
         @compileError("Build with -Dvpn=true to run the QUIC VPN demos.");
     }
-    if (!@hasDecl(zquic, "monitoring") or !@hasDecl(zquic.monitoring, "PrometheusMetrics")) {
-        @compileError("Build with -Dmonitoring=true to expose Prometheus metrics.");
-    }
 }
 
 pub fn main() !void {
@@ -27,8 +24,10 @@ pub fn main() !void {
     });
     defer router.deinit();
 
-    var metrics = zquic.monitoring.PrometheusMetrics.init(allocator);
-    router.attachPrometheus(&metrics);
+    var metrics = if (@hasDecl(zquic.monitoring, "PrometheusMetrics")) zquic.monitoring.PrometheusMetrics.init(allocator) else {};
+    if (@hasDecl(zquic.monitoring, "PrometheusMetrics")) {
+        router.attachPrometheus(&metrics);
+    }
 
     const client_iface = try NetAddress.resolveIp("10.0.5.2", 0);
     try router.addInterface("ghostmesh-client0", client_iface, 1350);
@@ -43,7 +42,11 @@ pub fn main() !void {
     const remote = try NetAddress.resolveIp("192.0.2.99", 443);
     _ = try router.forwardPacket(payload, local, remote);
 
-    const metrics_blob = try metrics.render(allocator);
-    defer allocator.free(metrics_blob);
-    std.debug.print("Client metrics snapshot:\n{s}\n", .{metrics_blob});
+    if (@hasDecl(zquic.monitoring, "PrometheusMetrics")) {
+        const metrics_blob = try metrics.render(allocator);
+        defer allocator.free(metrics_blob);
+        std.debug.print("Client metrics snapshot:\n{s}\n", .{metrics_blob});
+    } else {
+        std.debug.print("Client demo forwarded one packet; rebuild with -Dmonitoring=true for Prometheus output.\n", .{});
+    }
 }

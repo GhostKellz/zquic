@@ -247,6 +247,15 @@ pub const MultiplexedConnection = struct {
             ticket.matchesPostQuantumBinder(self.computePostQuantumBinder());
     }
 
+    pub fn canReuseForPostQuantumPool(self: *const Self, issuers: *const TicketIssuerRing, allow_early_data: bool, require_migration: bool) bool {
+        if (!self.isPostQuantumCapable()) return false;
+        if (self.pq_pool_state != .established) return false;
+        if (require_migration and !self.supports_migration) return false;
+        if (!allow_early_data and self.zero_rtt_context != null) return false;
+        const ticket = self.pq_resumption_ticket orelse return false;
+        return self.validatePostQuantumResumptionTicket(issuers, ticket, allow_early_data);
+    }
+
     fn computePostQuantumBinder(self: *const Self) [32]u8 {
         var input: [64]u8 = undefined;
         std.mem.writeInt(u64, input[0..8], self.id, .big);
@@ -457,7 +466,7 @@ pub const CryptoConnectionMultiplexer = struct {
         // Check protocol-specific pool first
         const protocol_pool = self.protocol_pools.getPtr(protocol).?;
         for (protocol_pool.items) |conn| {
-            if (self.config.enable_post_quantum and !conn.isPostQuantumCapable()) continue;
+            if (self.config.enable_post_quantum and !conn.canReuseForPostQuantumPool(&self.pq_ticket_issuers, self.config.allow_zero_rtt_with_post_quantum, self.config.enable_connection_migration)) continue;
             if (conn.canAcceptRequest(protocol, priority)) {
                 const score = conn.getEfficiencyScore();
                 if (score > best_score) {
@@ -471,7 +480,7 @@ pub const CryptoConnectionMultiplexer = struct {
         if (best_connection == null) {
             const priority_queue = self.priority_queues.getPtr(priority).?;
             for (priority_queue.items) |conn| {
-                if (self.config.enable_post_quantum and !conn.isPostQuantumCapable()) continue;
+                if (self.config.enable_post_quantum and !conn.canReuseForPostQuantumPool(&self.pq_ticket_issuers, self.config.allow_zero_rtt_with_post_quantum, self.config.enable_connection_migration)) continue;
                 if (conn.canAcceptRequest(protocol, priority)) {
                     const score = conn.getEfficiencyScore();
                     if (score > best_score) {
@@ -735,6 +744,7 @@ test "crypto multiplexer creates PQ-capable pooled connections" {
     var mux = CryptoConnectionMultiplexer.init(allocator, .{
         .enable_post_quantum = true,
         .enable_zero_rtt = true,
+        .enable_connection_migration = false,
     });
     defer mux.deinit();
 
@@ -761,6 +771,7 @@ test "crypto multiplexer rejects forged PQ resumption tickets" {
     var mux = CryptoConnectionMultiplexer.init(allocator, .{
         .enable_post_quantum = true,
         .enable_zero_rtt = true,
+        .enable_connection_migration = false,
     });
     defer mux.deinit();
 
@@ -795,6 +806,7 @@ test "crypto multiplexer supports configured PQ ticket issuer rotation" {
     var old_mux = CryptoConnectionMultiplexer.init(allocator, .{
         .enable_post_quantum = true,
         .enable_zero_rtt = true,
+        .enable_connection_migration = false,
         .pq_ticket_issuer = old_material,
     });
     defer old_mux.deinit();
@@ -806,6 +818,7 @@ test "crypto multiplexer supports configured PQ ticket issuer rotation" {
     var rotated_mux = CryptoConnectionMultiplexer.init(allocator, .{
         .enable_post_quantum = true,
         .enable_zero_rtt = true,
+        .enable_connection_migration = false,
         .pq_ticket_issuer = new_material,
         .pq_previous_ticket_issuer = old_material,
     });
@@ -816,4 +829,80 @@ test "crypto multiplexer supports configured PQ ticket issuer rotation" {
     const new_conn = try rotated_mux.acquireConnection(.http3, .normal, .defi_api);
     defer rotated_mux.releaseConnection(new_conn);
     try std.testing.expect(std.mem.eql(u8, &new_conn.pq_resumption_ticket.?.issuer_key_id, &new_material.key_id));
+}
+
+test "crypto multiplexer enforces PQ pool lifecycle before reuse" {
+    const allocator = std.testing.allocator;
+    var mux = CryptoConnectionMultiplexer.init(allocator, .{
+        .enable_post_quantum = true,
+        .enable_zero_rtt = true,
+        .enable_connection_migration = false,
+    });
+    defer mux.deinit();
+
+    const conn = try mux.acquireConnection(.http3, .normal, .defi_api);
+    defer mux.releaseConnection(conn);
+
+    try std.testing.expect(conn.canReuseForPostQuantumPool(&mux.pq_ticket_issuers, false, false));
+
+    conn.pq_pool_state = .handshake_pending;
+    try std.testing.expect(!conn.canReuseForPostQuantumPool(&mux.pq_ticket_issuers, false, false));
+    conn.pq_pool_state = .established;
+
+    const saved_ticket = conn.pq_resumption_ticket.?;
+    conn.pq_resumption_ticket = null;
+    try std.testing.expect(!conn.canReuseForPostQuantumPool(&mux.pq_ticket_issuers, false, false));
+    conn.pq_resumption_ticket = saved_ticket;
+
+    try std.testing.expect(!conn.canReuseForPostQuantumPool(&mux.pq_ticket_issuers, false, true));
+}
+
+test "crypto multiplexer suppresses PQ 0-RTT unless policy allows" {
+    const allocator = std.testing.allocator;
+    var default_mux = CryptoConnectionMultiplexer.init(allocator, .{
+        .enable_post_quantum = true,
+        .enable_zero_rtt = true,
+        .enable_connection_migration = false,
+    });
+    defer default_mux.deinit();
+
+    const default_conn = try default_mux.acquireConnection(.http3, .normal, .defi_api);
+    defer default_mux.releaseConnection(default_conn);
+    try std.testing.expect(default_conn.zero_rtt_context == null);
+    try std.testing.expect(default_conn.pq_resumption_ticket.?.resumption_policy == .hybrid_pq_no_early_data);
+
+    var early_mux = CryptoConnectionMultiplexer.init(allocator, .{
+        .enable_post_quantum = true,
+        .enable_zero_rtt = true,
+        .allow_zero_rtt_with_post_quantum = true,
+        .enable_connection_migration = false,
+    });
+    defer early_mux.deinit();
+
+    const early_conn = try early_mux.acquireConnection(.http3, .normal, .defi_api);
+    defer early_mux.releaseConnection(early_conn);
+    try std.testing.expect(early_conn.zero_rtt_context != null);
+    try std.testing.expect(early_conn.pq_resumption_ticket.?.resumption_policy == .hybrid_pq_early_data);
+    try std.testing.expect(early_conn.canReuseForPostQuantumPool(&early_mux.pq_ticket_issuers, true, false));
+    try std.testing.expect(!early_conn.canReuseForPostQuantumPool(&early_mux.pq_ticket_issuers, false, false));
+}
+
+test "crypto multiplexer rejects PQ reuse after key policy mismatch" {
+    const allocator = std.testing.allocator;
+    var mux = CryptoConnectionMultiplexer.init(allocator, .{
+        .enable_post_quantum = true,
+        .enable_zero_rtt = true,
+        .enable_connection_migration = false,
+    });
+    defer mux.deinit();
+
+    const first = try mux.acquireConnection(.http3, .normal, .defi_api);
+    defer mux.releaseConnection(first);
+    const first_ticket = first.pq_resumption_ticket.?;
+
+    first.is_available.store(false, .monotonic);
+    const second = try mux.acquireConnection(.http3, .normal, .defi_api);
+    defer mux.releaseConnection(second);
+
+    try std.testing.expect(!second.validatePostQuantumResumptionTicket(&mux.pq_ticket_issuers, first_ticket, false));
 }

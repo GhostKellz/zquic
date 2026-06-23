@@ -1,0 +1,18 @@
+{
+  "name": "static-table-equivalent-literals",
+  "description": "Static-table-equivalent pseudo/status headers encoded as literal fields in zquic's current QPACK subset.",
+  "expected_result": "accept",
+  "dynamic_table": "disabled",
+  "encoded_hex": "02073a737461747573033230300c636f6e74656e742d747970650a746578742f706c61696e",
+  "expected_headers": [
+    {
+      "name": ":status",
+      "value": "200"
+    },
+    {
+      "name": "content-type",
+      "value": "text/plain"
+    }
+  ]
+}
+

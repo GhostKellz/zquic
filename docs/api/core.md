@@ -2,6 +2,57 @@
 
 Complete API documentation for ZQUIC core modules.
 
+## API Surface Map
+
+```mermaid
+flowchart TD
+    root["zquic root module"] --> core["Core exports"]
+    root --> protocols["Protocol exports"]
+    root --> crypto["Crypto exports"]
+    root --> ops["Operational exports"]
+    root --> gated["Feature-gated exports"]
+
+    core --> conn["Connection"]
+    core --> packet["Packet / PacketHeader"]
+    core --> stream["Stream"]
+    core --> tp["TransportParameters"]
+    core --> frames["QuicFrames"]
+
+    protocols --> http3["Http3"]
+    protocols --> doq["DoQ"]
+
+    crypto --> tls["TlsContext / Handshake"]
+    crypto --> packetcrypto["PacketCrypto"]
+    crypto --> zero["zero_rtt_resumption"]
+
+    ops --> monitoring["Monitoring"]
+    ops --> time["Time"]
+    ops --> error["Error"]
+
+    gated --> pq["PQCipherSuite / PQKeyExchange"]
+    gated --> ssh["SshQuic"]
+    gated --> services["services"]
+```
+
+## Request Path
+
+```mermaid
+sequenceDiagram
+    participant App
+    participant Conn as zquic.Connection
+    participant Core as QUIC core
+    participant H3 as HTTP/3
+    participant Handler as App handler
+
+    App->>Conn: processPacket(bytes)
+    Conn->>Core: parse packet, update stream table
+    Core-->>H3: queued stream event
+    H3->>H3: decode frames and QPACK
+    H3->>Handler: Request
+    Handler-->>H3: Response
+    H3-->>Conn: DATA/HEADERS frames
+```
+
 ## 📋 Quick Reference
 
 ```zig

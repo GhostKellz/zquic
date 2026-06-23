@@ -11,6 +11,7 @@ const Error = @import("../utils/error.zig");
 const Time = @import("../utils/time.zig");
 const Request = @import("request.zig").Request;
 const Response = @import("response.zig").Response;
+const StatusCode = @import("response.zig").StatusCode;
 const Router = @import("router.zig");
 const NextFn = Router.NextFn;
 pub const MiddlewareFn = Router.MiddlewareFn;
@@ -788,8 +789,102 @@ test "auth middleware creation" {
     try std.testing.expect(std.mem.eql(u8, auth.secret_key, "test-secret"));
 }
 
+fn testNextMarksCreated(_: *Request, response: *Response) Error.ZquicError!void {
+    response.setStatus(.created);
+}
+
+fn writeTestJwt(buffer: []u8, secret: []const u8, header_payload: []const u8) ![]const u8 {
+    var hmac = std.crypto.auth.hmac.sha2.HmacSha256.init(secret);
+    hmac.update(header_payload);
+    var sig: [32]u8 = undefined;
+    hmac.final(&sig);
+
+    var sig_buf: [std.base64.url_safe_no_pad.Encoder.calcSize(32)]u8 = undefined;
+    const encoded_sig = std.base64.url_safe_no_pad.Encoder.encode(&sig_buf, &sig);
+    return try std.fmt.bufPrint(buffer, "{s}.{s}", .{ header_payload, encoded_sig });
+}
+
+test "auth middleware rejects structure-valid token with bad signature" {
+    const secret = "test-secret";
+    const auth = AuthMiddleware.init(std.testing.allocator, secret);
+    const middleware = auth.middleware();
+
+    var request = Request.init(std.testing.allocator, 1, "client-a");
+    defer request.deinit();
+    var response = Response.init(std.testing.allocator, 1);
+    defer response.deinit();
+
+    const config = MiddlewareConfig{ .auth_secret = secret };
+    request.middleware_config = &config;
+
+    var token_buf: [256]u8 = undefined;
+    const token = try writeTestJwt(&token_buf, "wrong-secret", "aaaaaaaaaaaaaaaa.bbbbbbbbbbbbbbbb");
+    var auth_header_buf: [300]u8 = undefined;
+    const auth_header = try std.fmt.bufPrint(&auth_header_buf, "Bearer {s}", .{token});
+    try request.headers.add("authorization", auth_header);
+
+    try middleware(&request, &response, testNextMarksCreated);
+    try std.testing.expectEqual(StatusCode.unauthorized, response.status);
+    try std.testing.expect(response.headers.get("WWW-Authenticate") != null);
+}
+
+test "auth middleware accepts correctly signed token" {
+    const secret = "test-secret";
+    const auth = AuthMiddleware.init(std.testing.allocator, secret);
+    const middleware = auth.middleware();
+
+    var request = Request.init(std.testing.allocator, 1, "client-a");
+    defer request.deinit();
+    var response = Response.init(std.testing.allocator, 1);
+    defer response.deinit();
+
+    const config = MiddlewareConfig{ .auth_secret = secret };
+    request.middleware_config = &config;
+
+    var token_buf: [256]u8 = undefined;
+    const token = try writeTestJwt(&token_buf, secret, "aaaaaaaaaaaaaaaa.bbbbbbbbbbbbbbbb");
+    var auth_header_buf: [300]u8 = undefined;
+    const auth_header = try std.fmt.bufPrint(&auth_header_buf, "Bearer {s}", .{token});
+    try request.headers.add("authorization", auth_header);
+
+    try middleware(&request, &response, testNextMarksCreated);
+    try std.testing.expectEqual(StatusCode.created, response.status);
+}
+
 test "logging middleware creation" {
     const logging = LoggingMiddleware.init(std.testing.allocator, .info);
 
     try std.testing.expect(logging.log_level == .info);
+}
+
+test "static path rejects traversal and encoded separator payloads" {
+    var path_buffer: [512]u8 = undefined;
+
+    try std.testing.expectError(Error.ZquicError.InvalidPath, buildStaticFilePath(&path_buffer, "/srv/www", "/../secret"));
+    try std.testing.expectError(Error.ZquicError.InvalidPath, buildStaticFilePath(&path_buffer, "/srv/www", "/%2e%2e/secret"));
+    try std.testing.expectError(Error.ZquicError.InvalidPath, buildStaticFilePath(&path_buffer, "/srv/www", "/safe%2f..%2fsecret"));
+    try std.testing.expectError(Error.ZquicError.InvalidPath, buildStaticFilePath(&path_buffer, "/srv/www", "/safe\\secret"));
+
+    const safe_path = try buildStaticFilePath(&path_buffer, "/srv/www", "/assets/app.css");
+    try std.testing.expectEqualStrings("/srv/www/assets/app.css", safe_path);
+}
+
+test "static path rejects symlink components under root" {
+    if (@import("builtin").os.tag != .linux) return error.SkipZigTest;
+
+    var root_buf: [128]u8 = undefined;
+    const root = try std.fmt.bufPrint(&root_buf, ".zig-cache/static-root-{d}", .{std.crypto.random.int(u64)});
+    try std.fs.cwd().makePath(root);
+    defer std.fs.cwd().deleteTree(root) catch {};
+
+    var link_buf: [160]u8 = undefined;
+    const link_path = try std.fmt.bufPrint(&link_buf, "{s}/escape", .{root});
+    var link_z_buf: [161]u8 = undefined;
+    const link_z = try std.fmt.bufPrintZ(&link_z_buf, "{s}", .{link_path});
+    const target_z: [:0]const u8 = "/etc/passwd";
+    const rc = std.os.linux.symlink(target_z.ptr, link_z.ptr);
+    if (std.os.linux.errno(rc) != .SUCCESS) return error.SkipZigTest;
+
+    var path_buffer: [512]u8 = undefined;
+    try std.testing.expectError(Error.ZquicError.InvalidPath, buildStaticFilePath(&path_buffer, root, "/escape"));
 }

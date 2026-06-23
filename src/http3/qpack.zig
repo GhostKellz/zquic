@@ -41,6 +41,11 @@ pub const QpackDecoder = struct {
 
         var headers = try allocator.alloc(HeaderField, header_count);
         var i: usize = 0;
+        var seen_method = false;
+        var seen_path = false;
+        var seen_scheme = false;
+        var seen_authority = false;
+        var seen_status = false;
         errdefer {
             while (i > 0) {
                 i -= 1;
@@ -61,6 +66,7 @@ pub const QpackDecoder = struct {
             cursor += value_len;
 
             try validateHeaderName(name_slice);
+            try validatePseudoHeaderUniqueness(name_slice, &seen_method, &seen_path, &seen_scheme, &seen_authority, &seen_status);
 
             headers[i] = try HeaderField.init(allocator, name_slice, value_slice);
         }
@@ -68,6 +74,26 @@ pub const QpackDecoder = struct {
         return headers;
     }
 };
+
+fn validatePseudoHeaderUniqueness(
+    name: []const u8,
+    seen_method: *bool,
+    seen_path: *bool,
+    seen_scheme: *bool,
+    seen_authority: *bool,
+    seen_status: *bool,
+) Error.ZquicError!void {
+    if (std.mem.eql(u8, name, ":method")) return markPseudoHeader(seen_method);
+    if (std.mem.eql(u8, name, ":path")) return markPseudoHeader(seen_path);
+    if (std.mem.eql(u8, name, ":scheme")) return markPseudoHeader(seen_scheme);
+    if (std.mem.eql(u8, name, ":authority")) return markPseudoHeader(seen_authority);
+    if (std.mem.eql(u8, name, ":status")) return markPseudoHeader(seen_status);
+}
+
+fn markPseudoHeader(seen: *bool) Error.ZquicError!void {
+    if (seen.*) return Error.ZquicError.HeaderError;
+    seen.* = true;
+}
 
 fn validateHeaderName(name: []const u8) Error.ZquicError!void {
     if (name.len == 0) return Error.ZquicError.HeaderError;
@@ -205,6 +231,38 @@ test "qpack rejects malformed header names and oversized counts" {
         'd',
     };
     try std.testing.expectError(Error.ZquicError.HeaderError, decoder.decode(&too_many, allocator));
+}
+
+test "qpack rejects duplicate pseudo headers" {
+    const allocator = std.testing.allocator;
+    var decoder = QpackDecoder.init(allocator, 4096);
+    defer decoder.deinit(allocator);
+
+    var duplicate_path = [_]u8{
+        2,
+        5,
+        ':',
+        'p',
+        'a',
+        't',
+        'h',
+        1,
+        '/',
+        5,
+        ':',
+        'p',
+        'a',
+        't',
+        'h',
+        6,
+        '/',
+        'a',
+        'g',
+        'a',
+        'i',
+        'n',
+    };
+    try std.testing.expectError(Error.ZquicError.HeaderError, decoder.decode(&duplicate_path, allocator));
 }
 
 fn writeVarint(buffer: *std.ArrayListUnmanaged(u8), allocator: std.mem.Allocator, value: usize) !void {

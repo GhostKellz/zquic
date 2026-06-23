@@ -19,6 +19,43 @@ ZQUIC ships with a small set of build flags that mirror the switches inside `bui
 
 > Tip: flags cascade. Disable `-Dservices` to shrink binaries automatically, regardless of VPN/monitoring settings.
 
+## Build Graph
+
+```mermaid
+flowchart TD
+    build["zig build"] --> options["build.zig options"]
+    options --> core["core module<br/>always built"]
+    options --> http3{"http3?"}
+    options --> doq{"doq?"}
+    options --> services{"services?"}
+    options --> vpn{"vpn?"}
+    options --> monitoring{"monitoring?"}
+    options --> pq{"post-quantum<br/>and experimental-crypto?"}
+
+    http3 -->|true| h3mod["src/http3"]
+    doq -->|true| doqmod["src/doq"]
+    services -->|true| svcmod["src/services"]
+    vpn -->|true| vpnmod["src/vpn"]
+    monitoring -->|true| monmod["src/monitoring"]
+    pq -->|both true| pqmod["src/post_quantum.zig"]
+    pq -->|otherwise| classical["classical crypto only"]
+
+    core --> zcrypto["zcrypto v1.0.6<br/>tls + hardware"]
+    pqmod --> zcrypto
+    vpnmod --> zcrypto
+```
+
+## PQ Gate
+
+```mermaid
+flowchart LR
+    pqflag["-Dpost-quantum=true"] --> both{"both flags set?"}
+    expflag["-Dexperimental-crypto=true"] --> both
+    both -->|yes| enabled["PQ modules compile"]
+    both -->|no| disabled["PQ unavailable"]
+    disabled --> default["default builds remain classical"]
+```
+
 ## Common Build Profiles
 
 ```bash

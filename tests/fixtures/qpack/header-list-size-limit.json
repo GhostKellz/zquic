@@ -1,0 +1,10 @@
+{
+  "name": "header-count-limit",
+  "description": "Header block exceeds the configured header count limit.",
+  "expected_result": "reject",
+  "dynamic_table": "disabled",
+  "max_header_count": 1,
+  "encoded_hex": "020161016201630164",
+  "expected_headers": []
+}
+

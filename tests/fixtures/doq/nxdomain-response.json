@@ -1,0 +1,9 @@
+{
+  "name": "nxdomain-response",
+  "description": "NXDOMAIN response mapping keeps the query ID and question.",
+  "expected_result": "rcode",
+  "stream_hex": "0021beef80030001000000000000076d697373696e67076578616d706c6500001c0001",
+  "expected_message_ids": [48879],
+  "expected_question_names": ["missing.example"],
+  "expected_rcode": 3
+}

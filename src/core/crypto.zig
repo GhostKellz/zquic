@@ -741,3 +741,68 @@ test "quic crypto packet roundtrip rejects tampering and undersized buffers" {
         crypto.decryptPacket(.application, 7, packet[0..packet_len], packet_len + 1, &decrypted),
     );
 }
+
+test "quic crypto rejects old and rolled back keys across packet number continuity" {
+    const allocator = std.testing.allocator;
+    const header = [_]u8{ 0x40, 0x00, 0x00, 0x00, 0x2a };
+    const old_payload = "old key phase packet payload long enough for header protection";
+    const new_payload = "new key phase packet payload long enough for header protection";
+
+    var old_crypto = QuicCrypto.init(allocator, .aes_128_gcm_sha256);
+    defer old_crypto.deinit();
+    const old_local = try testDirectionalKeys(allocator, .aes_128_gcm_sha256, 0x21, 0x31, 0x41);
+    const old_remote = try testDirectionalKeys(allocator, .aes_128_gcm_sha256, 0x21, 0x31, 0x41);
+    old_crypto.installKeys(.application, old_local, old_remote);
+
+    var old_packet: [header.len + old_payload.len + 16]u8 = undefined;
+    const old_packet_len = try old_crypto.encryptPacket(.application, 100, &header, old_payload, &old_packet);
+    var old_packet_copy = old_packet;
+    var old_decrypted: [old_payload.len]u8 = undefined;
+    const old_decrypted_len = try old_crypto.decryptPacket(
+        .application,
+        100,
+        old_packet_copy[0..old_packet_len],
+        header.len,
+        &old_decrypted,
+    );
+    try std.testing.expectEqualStrings(old_payload, old_decrypted[0..old_decrypted_len]);
+
+    var new_crypto = QuicCrypto.init(allocator, .aes_128_gcm_sha256);
+    defer new_crypto.deinit();
+    var new_local = try testDirectionalKeys(allocator, .aes_128_gcm_sha256, 0x52, 0x62, 0x72);
+    var new_remote = try testDirectionalKeys(allocator, .aes_128_gcm_sha256, 0x52, 0x62, 0x72);
+    new_local.key_phase = 1;
+    new_remote.key_phase = 1;
+    new_crypto.installKeys(.application, new_local, new_remote);
+
+    var new_packet: [header.len + new_payload.len + 16]u8 = undefined;
+    const new_packet_len = try new_crypto.encryptPacket(.application, 101, &header, new_payload, &new_packet);
+    var new_packet_copy = new_packet;
+    var new_decrypted: [new_payload.len]u8 = undefined;
+    const new_decrypted_len = try new_crypto.decryptPacket(
+        .application,
+        101,
+        new_packet_copy[0..new_packet_len],
+        header.len,
+        &new_decrypted,
+    );
+    try std.testing.expectEqualStrings(new_payload, new_decrypted[0..new_decrypted_len]);
+
+    var old_under_new = old_packet;
+    try std.testing.expectError(
+        Error.ZquicError.CryptoError,
+        new_crypto.decryptPacket(.application, 100, old_under_new[0..old_packet_len], header.len, old_decrypted[0..]),
+    );
+
+    var new_under_old = new_packet;
+    try std.testing.expectError(
+        Error.ZquicError.CryptoError,
+        old_crypto.decryptPacket(.application, 101, new_under_old[0..new_packet_len], header.len, new_decrypted[0..]),
+    );
+
+    var wrong_packet_number = new_packet;
+    try std.testing.expectError(
+        Error.ZquicError.CryptoError,
+        new_crypto.decryptPacket(.application, 100, wrong_packet_number[0..new_packet_len], header.len, new_decrypted[0..]),
+    );
+}

@@ -679,6 +679,42 @@ test "server.use registers middleware with router" {
     try std.testing.expect(std.mem.eql(u8, response.getBody(), "ok"));
 }
 
+test "server rejects oversized request body and cleans up active request" {
+    const allocator = std.testing.allocator;
+    var server = try Http3Server.init(allocator, .{
+        .max_request_body_size = 4,
+        .enable_security_headers = false,
+        .enable_cors = false,
+        .enable_compression = false,
+        .static_files_root = null,
+    });
+    defer server.deinit();
+
+    var connection = try Connection.init(allocator, .server, .{});
+    defer connection.deinit();
+
+    try connection.queueStreamEvent(.{ .new_stream = .{
+        .stream_id = 0,
+        .stream_type = .client_bidirectional,
+    } });
+    try connection.processPendingStreamEvents();
+    const stream = connection.getStream(0).?;
+
+    var context = ConnectionContext.init(allocator, &connection);
+    defer context.deinit();
+
+    const active_request = try allocator.create(ActiveRequest);
+    active_request.* = ActiveRequest.init(allocator, 0, "conn-body-limit");
+    try context.active_requests.put(allocator, 0, active_request);
+
+    try server.processDataFrame(&context, 0, "abcde");
+
+    try std.testing.expect(context.active_requests.get(0) == null);
+    try std.testing.expect(stream.write_buffer.items.len > 0);
+    try std.testing.expect(std.mem.indexOf(u8, stream.write_buffer.items, "Request body too large") != null);
+    try std.testing.expectEqual(@as(u64, 5), server.stats.bytes_received.load(.acquire));
+}
+
 test "server stats tracking" {
     var stats = SuperServerStats.init();
 

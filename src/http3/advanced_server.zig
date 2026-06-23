@@ -12,6 +12,7 @@
 //! - Adaptive load balancing algorithms
 
 const std = @import("std");
+const zcrypto = @import("zcrypto");
 const Error = @import("../utils/error.zig");
 const Connection = @import("../core/connection.zig").Connection;
 const Stream = @import("../core/stream.zig");
@@ -320,7 +321,9 @@ pub const ConnectionPool = struct {
 
     pub fn getConnection(self: *ConnectionPool) ?*Connection {
         // Try to get an available connection
-        if (self.available_connections.popOrNull()) |index| {
+        if (self.available_connections.items.len > 0) {
+            const index = self.available_connections.items[self.available_connections.items.len - 1];
+            self.available_connections.shrinkRetainingCapacity(self.available_connections.items.len - 1);
             var pooled_conn = &self.connections.items[index];
             pooled_conn.in_use = true;
             pooled_conn.last_used = Time.nowSeconds();
@@ -492,7 +495,7 @@ pub const LoadBalancer = struct {
     pub fn removeBackend(self: *LoadBalancer, host: []const u8) void {
         for (self.backends.items, 0..) |*backend, i| {
             if (std.mem.eql(u8, backend.config.host, host)) {
-                backend.deinit(self.allocator);
+                backend.deinit();
                 _ = self.backends.swapRemove(i);
 
                 // Update consistent hash ring if needed
@@ -592,7 +595,9 @@ pub const LoadBalancer = struct {
                 return &self.backends.items[index];
             },
             .random => {
-                const index = std.crypto.random.uintLessThan(usize, self.backends.items.len);
+                var random_bytes: [8]u8 = undefined;
+                zcrypto.rand.fill(&random_bytes);
+                const index = std.mem.readInt(u64, &random_bytes, .little) % self.backends.items.len;
                 return &self.backends.items[index];
             },
         }
@@ -794,6 +799,12 @@ pub const AdvancedHttp3Server = struct {
     // Health monitoring
     health_monitor: HealthMonitor,
 
+    accepting_streams: bool,
+    shutdown_in_progress: bool,
+    shutdown_started_at_us: i64,
+    shutdown_error_code: u64,
+    shutdown_reason: ?[]const u8,
+
     allocator: std.mem.Allocator,
 
     const Self = @This();
@@ -814,26 +825,31 @@ pub const AdvancedHttp3Server = struct {
             .stats = ServerStats.init(),
             .metrics_collector = MetricsCollector.init(allocator),
             .health_monitor = HealthMonitor.init(allocator),
+            .accepting_streams = true,
+            .shutdown_in_progress = false,
+            .shutdown_started_at_us = 0,
+            .shutdown_error_code = 0,
+            .shutdown_reason = null,
             .allocator = allocator,
         };
     }
 
     pub fn deinit(self: *Self) void {
         if (self.load_balancer) |*lb| {
-            lb.deinit(self.allocator);
+            lb.deinit();
         }
 
         var iterator = self.connections.iterator();
         while (iterator.next()) |entry| {
-            entry.value_ptr.*.deinit(self.allocator);
+            entry.value_ptr.*.deinit();
             self.allocator.destroy(entry.value_ptr.*);
         }
         self.connections.deinit(self.allocator);
 
-        self.router.deinit(self.allocator);
+        self.router.deinit();
         self.middleware_stack.deinit(self.allocator);
-        self.metrics_collector.deinit(self.allocator);
-        self.health_monitor.deinit(self.allocator);
+        self.metrics_collector.deinit();
+        self.health_monitor.deinit();
     }
 
     /// Add backend server for load balancing
@@ -862,6 +878,10 @@ pub const AdvancedHttp3Server = struct {
 
     /// Handle incoming connection
     pub fn handleConnection(self: *Self, connection: *Connection) !void {
+        if (!self.accepting_streams) {
+            return Error.ZquicError.ConnectionClosed;
+        }
+
         const conn_id = @intFromPtr(connection);
 
         if (self.connections.count() >= self.config.max_connections) {
@@ -880,12 +900,136 @@ pub const AdvancedHttp3Server = struct {
         try self.processConnectionStreams(context);
     }
 
+    /// Start graceful shutdown: stop accepting streams and advertise GOAWAY.
+    pub fn beginGracefulShutdown(self: *Self, error_code: u64, reason: ?[]const u8) !void {
+        if (self.shutdown_in_progress) {
+            return;
+        }
+
+        self.accepting_streams = false;
+        self.shutdown_in_progress = true;
+        self.shutdown_started_at_us = Time.nowMicros();
+        self.shutdown_error_code = error_code;
+        self.shutdown_reason = reason;
+
+        var iterator = self.connections.iterator();
+        while (iterator.next()) |entry| {
+            try self.sendGoaway(entry.value_ptr.*);
+        }
+    }
+
+    /// Progress graceful shutdown without blocking indefinitely.
+    /// Returns true once all tracked connections have been closed and released.
+    pub fn pollGracefulShutdown(self: *Self, timeout_ms: u64) !bool {
+        if (!self.shutdown_in_progress) {
+            return self.connections.count() == 0;
+        }
+
+        const now = Time.nowMicros();
+        const timed_out = timeout_ms == 0 or
+            now - self.shutdown_started_at_us >= @as(i64, @intCast(timeout_ms * std.time.us_per_ms));
+
+        var all_drained = true;
+        var iterator = self.connections.iterator();
+        while (iterator.next()) |entry| {
+            try entry.value_ptr.*.pruneClosedStreams();
+            if (entry.value_ptr.*.activeStreamCount() > 0) {
+                all_drained = false;
+            }
+        }
+
+        if (!all_drained and !timed_out) {
+            return false;
+        }
+
+        try self.closeAndReleaseConnections();
+        self.shutdown_in_progress = false;
+        return true;
+    }
+
+    fn sendGoaway(self: *Self, context: *ConnectionContext) !void {
+        _ = self;
+        if (context.goaway_sent) {
+            return;
+        }
+
+        var highest_stream_id: u64 = 0;
+        var iterator = context.active_streams.iterator();
+        while (iterator.next()) |entry| {
+            highest_stream_id = @max(highest_stream_id, entry.key_ptr.*);
+        }
+
+        const goaway = Frame.GoawayFrame.init(highest_stream_id);
+        var encoded_buf: [16]u8 = undefined;
+        var writer = std.Io.Writer.fixed(&encoded_buf);
+        try goaway.serialize(&writer);
+        const encoded = std.Io.Writer.buffered(&writer);
+
+        iterator = context.active_streams.iterator();
+        while (iterator.next()) |entry| {
+            const stream = entry.value_ptr.*;
+            _ = stream.write(encoded, false) catch |err| {
+                std.log.debug("Advanced HTTP/3: failed to write GOAWAY on stream {}: {}", .{ entry.key_ptr.*, err });
+                continue;
+            };
+        }
+
+        context.goaway_sent = true;
+        context.updateActivity();
+    }
+
+    fn closeAndReleaseConnections(self: *Self) !void {
+        var ids: std.ArrayListUnmanaged(u64) = .empty;
+        defer ids.deinit(self.allocator);
+
+        var iterator = self.connections.iterator();
+        while (iterator.next()) |entry| {
+            try ids.append(self.allocator, entry.key_ptr.*);
+        }
+
+        for (ids.items) |conn_id| {
+            if (self.connections.fetchRemove(conn_id)) |entry| {
+                const context = entry.value;
+                if (!context.connection.isTerminated() and !context.connection.isShuttingDown()) {
+                    try context.connection.initiateShutdown(self.shutdown_error_code, self.shutdown_reason);
+                }
+
+                context.deinit();
+                self.allocator.destroy(context);
+                if (self.stats.connections_active > 0) {
+                    self.stats.connections_active -= 1;
+                }
+            }
+        }
+    }
+
     /// Process streams for a connection
     fn processConnectionStreams(self: *Self, context: *ConnectionContext) !void {
+        if (!self.accepting_streams or context.connection.isTerminated() or context.connection.isShuttingDown()) {
+            return;
+        }
+
+        try context.connection.processPendingStreamEvents();
+        try context.pruneClosedStreams();
+
         const streams = try context.connection.collectOpenStreams(self.allocator);
         defer self.allocator.free(streams);
 
         for (streams) |stream| {
+            if (stream.state.load(.acquire) == .closed) {
+                continue;
+            }
+
+            if (context.containsStream(stream.id)) {
+                continue;
+            }
+
+            if (context.activeStreamCount() >= self.config.max_streams_per_connection) {
+                stream.close() catch {};
+                return Error.ZquicError.StreamLimitError;
+            }
+
+            try context.acceptStream(stream);
             try self.handleStream(context, stream);
         }
     }
@@ -895,7 +1039,7 @@ pub const AdvancedHttp3Server = struct {
         const request_start = Time.nowMicros();
 
         // Parse HTTP/3 request
-        const request = try self.parseRequest(stream);
+        var request = try self.parseRequest(stream);
         defer request.deinit();
 
         // Update activity
@@ -926,7 +1070,7 @@ pub const AdvancedHttp3Server = struct {
         self.stats.addBytesSent(response.getBodySize());
 
         // Record metrics
-        self.metrics_collector.recordRequest(request_duration, @intFromEnum(response.status));
+        self.metrics_collector.recordRequest(@intCast(@max(request_duration, 0)), @intFromEnum(response.status));
     }
 
     /// Handle proxy request
@@ -1060,6 +1204,7 @@ pub const ConnectionContext = struct {
     connection: *Connection,
     active_streams: std.AutoHashMapUnmanaged(u64, *Stream.Stream),
     last_activity: i64,
+    goaway_sent: bool,
     allocator: std.mem.Allocator,
 
     pub fn init(allocator: std.mem.Allocator, connection: *Connection) ConnectionContext {
@@ -1067,6 +1212,7 @@ pub const ConnectionContext = struct {
             .connection = connection,
             .active_streams = .empty,
             .last_activity = Time.nowSeconds(),
+            .goaway_sent = false,
             .allocator = allocator,
         };
     }
@@ -1077,6 +1223,36 @@ pub const ConnectionContext = struct {
 
     pub fn updateActivity(self: *ConnectionContext) void {
         self.last_activity = Time.nowSeconds();
+    }
+
+    pub fn containsStream(self: *const ConnectionContext, stream_id: u64) bool {
+        return self.active_streams.contains(stream_id);
+    }
+
+    pub fn activeStreamCount(self: *const ConnectionContext) u32 {
+        return @intCast(self.active_streams.count());
+    }
+
+    pub fn acceptStream(self: *ConnectionContext, stream: *Stream.Stream) !void {
+        try self.active_streams.put(self.allocator, stream.id, stream);
+        self.updateActivity();
+    }
+
+    pub fn pruneClosedStreams(self: *ConnectionContext) !void {
+        var closed_stream_ids: std.ArrayListUnmanaged(u64) = .empty;
+        defer closed_stream_ids.deinit(self.allocator);
+
+        var iterator = self.active_streams.iterator();
+        while (iterator.next()) |entry| {
+            const stream = entry.value_ptr.*;
+            if (stream.state.load(.acquire) == .closed) {
+                try closed_stream_ids.append(self.allocator, entry.key_ptr.*);
+            }
+        }
+
+        for (closed_stream_ids.items) |stream_id| {
+            _ = self.active_streams.remove(stream_id);
+        }
     }
 };
 
@@ -1245,3 +1421,246 @@ pub const HandlerFn = *const fn (request: *const Request, response: *Response) E
 pub const Middleware = struct {
     process: *const fn (request: *const Request, response: *Response) Error.ZquicError!void,
 };
+
+test "advanced server accepts core queued streams once" {
+    const allocator = std.testing.allocator;
+    var multiplexer: EnhancedUdpMultiplexer = undefined;
+    var server = try AdvancedHttp3Server.init(allocator, .{}, &multiplexer);
+    defer server.deinit();
+
+    var connection = try Connection.init(allocator, .server, .{});
+    defer connection.deinit();
+
+    try connection.queueStreamEvent(.{ .new_stream = .{
+        .stream_id = 0,
+        .stream_type = .client_bidirectional,
+    } });
+    try connection.queueStreamEvent(.{ .stream_data = .{
+        .stream_id = 0,
+        .data = "GET / HTTP/3",
+        .fin = true,
+    } });
+
+    var context = ConnectionContext.init(allocator, &connection);
+    defer context.deinit();
+
+    try server.processConnectionStreams(&context);
+    try std.testing.expect(context.containsStream(0));
+    try std.testing.expectEqual(@as(u32, 1), context.activeStreamCount());
+    try std.testing.expectEqual(@as(u64, 1), server.stats.requests_handled);
+
+    try server.processConnectionStreams(&context);
+    try std.testing.expectEqual(@as(u32, 1), context.activeStreamCount());
+    try std.testing.expectEqual(@as(u64, 1), server.stats.requests_handled);
+}
+
+test "advanced server rejects new streams after shutdown starts" {
+    const allocator = std.testing.allocator;
+    var multiplexer: EnhancedUdpMultiplexer = undefined;
+    var server = try AdvancedHttp3Server.init(allocator, .{}, &multiplexer);
+    defer server.deinit();
+
+    var connection = try Connection.init(allocator, .server, .{});
+    defer connection.deinit();
+
+    try connection.initiateShutdown(0, "test shutdown");
+    try connection.queueStreamEvent(.{ .new_stream = .{
+        .stream_id = 0,
+        .stream_type = .client_bidirectional,
+    } });
+
+    var context = ConnectionContext.init(allocator, &connection);
+    defer context.deinit();
+
+    try server.processConnectionStreams(&context);
+    try std.testing.expect(!context.containsStream(0));
+    try std.testing.expectEqual(@as(u32, 0), context.activeStreamCount());
+}
+
+test "advanced server graceful shutdown sends goaway and releases drained connections" {
+    const allocator = std.testing.allocator;
+    var multiplexer: EnhancedUdpMultiplexer = undefined;
+    var server = try AdvancedHttp3Server.init(allocator, .{}, &multiplexer);
+    defer server.deinit();
+
+    var connection = try Connection.init(allocator, .server, .{});
+    defer connection.deinit();
+
+    try connection.queueStreamEvent(.{ .new_stream = .{
+        .stream_id = 0,
+        .stream_type = .client_bidirectional,
+    } });
+    try connection.queueStreamEvent(.{ .stream_data = .{
+        .stream_id = 0,
+        .data = "GET / HTTP/3",
+        .fin = true,
+    } });
+
+    try server.handleConnection(&connection);
+    try std.testing.expectEqual(@as(u32, 1), server.stats.connections_active);
+
+    const conn_id = @intFromPtr(&connection);
+    const context = server.connections.get(conn_id).?;
+    const stream = connection.getStream(0).?;
+
+    try server.beginGracefulShutdown(0, "server shutdown");
+    try std.testing.expect(!server.accepting_streams);
+    try std.testing.expect(context.goaway_sent);
+    try std.testing.expect(stream.write_buffer.items.len > 0);
+
+    const parsed_header = try Frame.FrameHeader.parse(stream.write_buffer.items);
+    try std.testing.expectEqual(Frame.FrameType.goaway, parsed_header.header.frame_type);
+
+    try stream.close();
+    const shutdown_complete = try server.pollGracefulShutdown(10_000);
+    try std.testing.expect(shutdown_complete);
+    try std.testing.expectEqual(@as(usize, 0), server.connections.count());
+    try std.testing.expectEqual(@as(u32, 0), server.stats.connections_active);
+    try std.testing.expect(connection.isShuttingDown());
+    try std.testing.expect(connection.super_connection.outgoing_packets.items.len > 0);
+}
+
+test "advanced server graceful shutdown timeout closes active work" {
+    const allocator = std.testing.allocator;
+    var multiplexer: EnhancedUdpMultiplexer = undefined;
+    var server = try AdvancedHttp3Server.init(allocator, .{}, &multiplexer);
+    defer server.deinit();
+
+    var connection = try Connection.init(allocator, .server, .{});
+    defer connection.deinit();
+
+    try connection.queueStreamEvent(.{ .new_stream = .{
+        .stream_id = 0,
+        .stream_type = .client_bidirectional,
+    } });
+
+    try server.handleConnection(&connection);
+    try server.beginGracefulShutdown(0, "timeout");
+
+    const shutdown_complete = try server.pollGracefulShutdown(0);
+    try std.testing.expect(shutdown_complete);
+    try std.testing.expectEqual(@as(usize, 0), server.connections.count());
+    try std.testing.expect(connection.isShuttingDown());
+}
+
+test "advanced server rejects overload above per-connection stream limit" {
+    const allocator = std.testing.allocator;
+    var multiplexer: EnhancedUdpMultiplexer = undefined;
+    var server = try AdvancedHttp3Server.init(allocator, .{ .max_streams_per_connection = 1 }, &multiplexer);
+    defer server.deinit();
+
+    var connection = try Connection.init(allocator, .server, .{});
+    defer connection.deinit();
+
+    try connection.queueStreamEvent(.{ .new_stream = .{
+        .stream_id = 0,
+        .stream_type = .client_bidirectional,
+    } });
+    try connection.queueStreamEvent(.{ .stream_data = .{
+        .stream_id = 0,
+        .data = "GET /a HTTP/3",
+        .fin = true,
+    } });
+    try connection.queueStreamEvent(.{ .new_stream = .{
+        .stream_id = 4,
+        .stream_type = .client_bidirectional,
+    } });
+    try connection.queueStreamEvent(.{ .stream_data = .{
+        .stream_id = 4,
+        .data = "GET /b HTTP/3",
+        .fin = true,
+    } });
+
+    try std.testing.expectError(Error.ZquicError.StreamLimitError, server.handleConnection(&connection));
+
+    const context = server.connections.get(@intFromPtr(&connection)).?;
+    try std.testing.expect(context.containsStream(0));
+    try std.testing.expectEqual(@as(u32, 1), context.activeStreamCount());
+    try std.testing.expectEqual(Stream.StreamState.closed, connection.getStream(4).?.state.load(.acquire));
+}
+
+test "connection pool evicts stale idle entries and keeps active entries" {
+    const allocator = std.testing.allocator;
+    var pool = try ConnectionPool.init(allocator, 4);
+    defer pool.deinit();
+
+    var stale = ConnectionPool.PooledConnection.init();
+    stale.last_used = Time.nowSeconds() - 10;
+    stale.in_use = false;
+    var active = ConnectionPool.PooledConnection.init();
+    active.last_used = Time.nowSeconds() - 10;
+    active.in_use = true;
+
+    try pool.connections.append(allocator, stale);
+    try pool.connections.append(allocator, active);
+    try pool.available_connections.append(allocator, 0);
+
+    pool.cleanupExpiredConnections(1);
+
+    try std.testing.expectEqual(@as(usize, 1), pool.connections.items.len);
+    try std.testing.expect(pool.connections.items[0].in_use);
+    try std.testing.expectEqual(@as(usize, 0), pool.available_connections.items.len);
+}
+
+test "load balancer skips unhealthy backend and reports stats" {
+    const allocator = std.testing.allocator;
+    var lb = LoadBalancer.init(allocator, .least_connections);
+    defer lb.deinit();
+
+    try lb.addBackend(.{ .host = "bad.example", .port = 443, .connection_pool_size = 1 });
+    try lb.addBackend(.{ .host = "good.example", .port = 443, .connection_pool_size = 1 });
+    lb.backends.items[0].health_status.is_healthy = false;
+
+    var request = Request.init(allocator, 0, "conn-lb");
+    defer request.deinit();
+    request.path = try allocator.dupe(u8, "/");
+
+    const selected = lb.selectBackend(&request).?;
+    try std.testing.expectEqualStrings("good.example", selected.config.host);
+
+    const stats = lb.getStats();
+    try std.testing.expectEqual(@as(u32, 2), stats.total_backends);
+    try std.testing.expectEqual(@as(u32, 1), stats.healthy_backends);
+}
+
+test "weighted load balancer honors priority routing under churn" {
+    const allocator = std.testing.allocator;
+    var lb = LoadBalancer.init(allocator, .weighted_round_robin);
+    defer lb.deinit();
+
+    try lb.addBackend(.{ .host = "low.example", .port = 443, .weight = 1, .connection_pool_size = 8 });
+    try lb.addBackend(.{ .host = "high.example", .port = 443, .weight = 3, .connection_pool_size = 8 });
+
+    var request = Request.init(allocator, 0, "conn-weight");
+    defer request.deinit();
+    request.path = try allocator.dupe(u8, "/weighted");
+
+    var high_count: u32 = 0;
+    var low_count: u32 = 0;
+    for (0..8) |_| {
+        const selected = lb.selectBackend(&request).?;
+        if (std.mem.eql(u8, selected.config.host, "high.example")) {
+            high_count += 1;
+        } else if (std.mem.eql(u8, selected.config.host, "low.example")) {
+            low_count += 1;
+        }
+    }
+
+    try std.testing.expect(high_count > low_count);
+    try std.testing.expectEqual(@as(u32, 6), high_count);
+    try std.testing.expectEqual(@as(u32, 2), low_count);
+}
+
+test "load balancer add remove churn releases backend state" {
+    const allocator = std.testing.allocator;
+    var lb = LoadBalancer.init(allocator, .round_robin);
+    defer lb.deinit();
+
+    for (0..16) |i| {
+        const host = try std.fmt.allocPrint(allocator, "backend-{d}.example", .{i});
+        defer allocator.free(host);
+        try lb.addBackend(.{ .host = host, .port = 443, .connection_pool_size = 2 });
+        lb.removeBackend(host);
+        try std.testing.expectEqual(@as(usize, 0), lb.backends.items.len);
+    }
+}

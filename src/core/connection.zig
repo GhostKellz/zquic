@@ -8,6 +8,7 @@ const Error = @import("../utils/error.zig");
 const Time = @import("../utils/time.zig");
 const Packet = @import("packet.zig");
 const Stream = @import("stream.zig");
+const TransportParameters = @import("transport_parameters.zig");
 const SpinMutex = @import("../utils/sync.zig").SpinMutex;
 
 /// Connection states according to RFC 9000
@@ -97,6 +98,73 @@ pub const ConnectionStats = struct {
     crypto_operations: u64 = 0,
 };
 
+/// Owned snapshot of peer transport parameters negotiated during handshake.
+///
+/// The decoder returns slices into the encoded TLS extension; connection state
+/// keeps fixed-size copies so negotiation results remain valid after TLS parser
+/// buffers are released.
+pub const NegotiatedPeerTransportParameters = struct {
+    max_idle_timeout: u64,
+    max_udp_payload_size: u64,
+    initial_max_data: u64,
+    initial_max_stream_data_bidi_local: u64,
+    initial_max_stream_data_bidi_remote: u64,
+    initial_max_stream_data_uni: u64,
+    initial_max_streams_bidi: u64,
+    initial_max_streams_uni: u64,
+    ack_delay_exponent: u8,
+    max_ack_delay: u64,
+    disable_active_migration: bool,
+    active_connection_id_limit: u64,
+    original_destination_connection_id: [20]u8 = undefined,
+    original_destination_connection_id_len: u8 = 0,
+    initial_source_connection_id: [20]u8 = undefined,
+    initial_source_connection_id_len: u8 = 0,
+    retry_source_connection_id: [20]u8 = undefined,
+    retry_source_connection_id_len: u8 = 0,
+
+    pub fn fromDecoded(params: TransportParameters.TransportParameters) Error.ZquicError!NegotiatedPeerTransportParameters {
+        var result = NegotiatedPeerTransportParameters{
+            .max_idle_timeout = params.max_idle_timeout,
+            .max_udp_payload_size = params.max_udp_payload_size,
+            .initial_max_data = params.initial_max_data,
+            .initial_max_stream_data_bidi_local = params.initial_max_stream_data_bidi_local,
+            .initial_max_stream_data_bidi_remote = params.initial_max_stream_data_bidi_remote,
+            .initial_max_stream_data_uni = params.initial_max_stream_data_uni,
+            .initial_max_streams_bidi = params.initial_max_streams_bidi,
+            .initial_max_streams_uni = params.initial_max_streams_uni,
+            .ack_delay_exponent = params.ack_delay_exponent,
+            .max_ack_delay = params.max_ack_delay,
+            .disable_active_migration = params.disable_active_migration,
+            .active_connection_id_limit = params.active_connection_id_limit,
+        };
+
+        try copyConnectionId(&result.original_destination_connection_id, &result.original_destination_connection_id_len, params.original_destination_connection_id);
+        try copyConnectionId(&result.initial_source_connection_id, &result.initial_source_connection_id_len, params.initial_source_connection_id);
+        try copyConnectionId(&result.retry_source_connection_id, &result.retry_source_connection_id_len, params.retry_source_connection_id);
+        return result;
+    }
+
+    pub fn originalDestinationConnectionId(self: *const NegotiatedPeerTransportParameters) []const u8 {
+        return self.original_destination_connection_id[0..self.original_destination_connection_id_len];
+    }
+
+    pub fn initialSourceConnectionId(self: *const NegotiatedPeerTransportParameters) []const u8 {
+        return self.initial_source_connection_id[0..self.initial_source_connection_id_len];
+    }
+
+    pub fn retrySourceConnectionId(self: *const NegotiatedPeerTransportParameters) []const u8 {
+        return self.retry_source_connection_id[0..self.retry_source_connection_id_len];
+    }
+
+    fn copyConnectionId(dest: *[20]u8, dest_len: *u8, source: []const u8) Error.ZquicError!void {
+        if (source.len > dest.len) return Error.ZquicError.InvalidConnectionId;
+        @memset(dest, 0);
+        @memcpy(dest[0..source.len], source);
+        dest_len.* = @intCast(source.len);
+    }
+};
+
 /// High-performance QUIC connection
 pub const SuperConnection = struct {
     // Core connection data
@@ -105,6 +173,7 @@ pub const SuperConnection = struct {
     local_conn_id: Packet.ConnectionId,
     remote_conn_id: ?Packet.ConnectionId,
     params: ConnectionParams,
+    peer_transport_params: ?NegotiatedPeerTransportParameters,
     stats: ConnectionStats,
     next_stream_id: u64,
 
@@ -157,6 +226,7 @@ pub const SuperConnection = struct {
             .local_conn_id = local_conn_id,
             .remote_conn_id = null,
             .params = params,
+            .peer_transport_params = null,
             .stats = ConnectionStats{},
             .next_stream_id = initial_bidi_id, // Legacy field for backward compat
             .next_bidi_stream_id = initial_bidi_id,
@@ -192,12 +262,7 @@ pub const SuperConnection = struct {
 
         // Main connection event loop
         while (self.is_running and self.state != .closed) {
-            // Process pending events - O(n) batch processing instead of O(n²) orderedRemove
-            for (self.stream_events.items) |event| {
-                try self.handleStreamEvent(event);
-                self.stats.channel_operations += 1;
-            }
-            self.stream_events.clearRetainingCapacity();
+            try self.processPendingStreamEvents();
 
             // Process packets - O(n) batch processing instead of O(n²) orderedRemove
             for (self.incoming_packets.items) |packet| {
@@ -209,6 +274,22 @@ pub const SuperConnection = struct {
             // Small sleep to prevent busy loop
             Time.sleep(std.time.ns_per_ms);
         }
+    }
+
+    /// Queue a stream event for the core connection event loop.
+    pub fn queueStreamEvent(self: *Self, event: StreamEvent) !void {
+        try self.stream_events.append(self.allocator, event);
+    }
+
+    /// Process queued stream events once without entering the long-running loop.
+    /// Protocol integrations use this to stay tied to the real stream table while
+    /// retaining control of their own server event loops.
+    pub fn processPendingStreamEvents(self: *Self) !void {
+        for (self.stream_events.items) |event| {
+            try self.handleStreamEvent(event);
+            self.stats.channel_operations += 1;
+        }
+        self.stream_events.clearRetainingCapacity();
     }
 
     /// Handle stream events
@@ -308,6 +389,21 @@ pub const SuperConnection = struct {
     /// Get connection statistics
     pub fn getStats(self: *const Self) ConnectionStats {
         return self.stats;
+    }
+
+    /// Validate decoded peer transport parameters against the handshake context
+    /// and retain an owned snapshot for connection-level policy.
+    pub fn applyPeerTransportParameters(
+        self: *Self,
+        params: TransportParameters.TransportParameters,
+        context: TransportParameters.NegotiationContext,
+    ) Error.ZquicError!void {
+        try TransportParameters.validateForHandshake(params, context);
+        self.peer_transport_params = try NegotiatedPeerTransportParameters.fromDecoded(params);
+    }
+
+    pub fn getPeerTransportParameters(self: *const Self) ?NegotiatedPeerTransportParameters {
+        return self.peer_transport_params;
     }
 
     // =========================================================================
@@ -548,6 +644,7 @@ pub const SuperConnection = struct {
 
         // Reset statistics
         self.stats = ConnectionStats{};
+        self.peer_transport_params = null;
 
         // Generate new connection ID for privacy/security
         self.local_conn_id = try generateConnectionId();
@@ -624,6 +721,16 @@ pub const Connection = struct {
         return self.super_connection.collectOpenStreams(allocator);
     }
 
+    /// Queue a stream event for the underlying core connection event loop.
+    pub fn queueStreamEvent(self: *Self, event: StreamEvent) !void {
+        return self.super_connection.queueStreamEvent(event);
+    }
+
+    /// Process queued stream events once.
+    pub fn processPendingStreamEvents(self: *Self) !void {
+        return self.super_connection.processPendingStreamEvents();
+    }
+
     /// Get connection state
     pub fn getState(self: *const Self) ConnectionState {
         return self.super_connection.state;
@@ -632,6 +739,20 @@ pub const Connection = struct {
     /// Get connection statistics
     pub fn getStats(self: *const Self) ConnectionStats {
         return self.super_connection.getStats();
+    }
+
+    /// Apply validated peer transport parameters to the underlying connection.
+    pub fn applyPeerTransportParameters(
+        self: *Self,
+        params: TransportParameters.TransportParameters,
+        context: TransportParameters.NegotiationContext,
+    ) Error.ZquicError!void {
+        return self.super_connection.applyPeerTransportParameters(params, context);
+    }
+
+    /// Return the owned negotiated peer transport-parameter snapshot, if any.
+    pub fn getPeerTransportParameters(self: *const Self) ?NegotiatedPeerTransportParameters {
+        return self.super_connection.getPeerTransportParameters();
     }
 
     /// Check if connection is established

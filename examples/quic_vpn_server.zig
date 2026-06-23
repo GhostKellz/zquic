@@ -11,9 +11,6 @@ comptime {
     if (!@hasDecl(zquic, "vpn") or !@hasDecl(zquic.vpn, "PacketRouter")) {
         @compileError("Build with -Dvpn=true to run the QUIC VPN demos.");
     }
-    if (!@hasDecl(zquic, "monitoring") or !@hasDecl(zquic.monitoring, "PrometheusMetrics")) {
-        @compileError("Build with -Dmonitoring=true to expose Prometheus metrics.");
-    }
 }
 
 pub fn main() !void {
@@ -30,8 +27,10 @@ pub fn main() !void {
     });
     defer router.deinit();
 
-    var metrics = zquic.monitoring.PrometheusMetrics.init(allocator);
-    router.attachPrometheus(&metrics);
+    var metrics = if (@hasDecl(zquic.monitoring, "PrometheusMetrics")) zquic.monitoring.PrometheusMetrics.init(allocator) else {};
+    if (@hasDecl(zquic.monitoring, "PrometheusMetrics")) {
+        router.attachPrometheus(&metrics);
+    }
 
     const tunnel_interface = try NetAddress.resolveIp("10.9.0.1", 0);
     try router.addInterface("ghostmesh0", tunnel_interface, 1400);
@@ -50,9 +49,13 @@ pub fn main() !void {
         .{ packet.len, forwarded.source, forwarded.destination, forwarded.interface, forwarded.next_hop },
     );
 
-    const prom_snapshot = try metrics.render(allocator);
-    defer allocator.free(prom_snapshot);
-    std.debug.print("\n📈 Prometheus sample:\n{s}\n", .{prom_snapshot});
+    if (@hasDecl(zquic.monitoring, "PrometheusMetrics")) {
+        const prom_snapshot = try metrics.render(allocator);
+        defer allocator.free(prom_snapshot);
+        std.debug.print("\n📈 Prometheus sample:\n{s}\n", .{prom_snapshot});
+    } else {
+        std.debug.print("\nPrometheus sample skipped; rebuild with -Dmonitoring=true for metrics output.\n", .{});
+    }
 
     std.debug.print("\n⚠️ Reminder: QUIC VPN support is experimental and not a Tailscale replacement yet.\n", .{});
 }

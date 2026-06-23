@@ -260,12 +260,7 @@ pub const EnhancedAead = struct {
             ) catch {
                 return Error.ZquicError.CryptoError;
             };
-
-            if (result) |plaintext| {
-                return plaintext;
-            } else {
-                return Error.ZquicError.CryptoError;
-            }
+            return result;
         } else if (key.len == 32) {
             const result = symmetric.decryptAes256Gcm(
                 allocator,
@@ -277,12 +272,7 @@ pub const EnhancedAead = struct {
             ) catch {
                 return Error.ZquicError.CryptoError;
             };
-
-            if (result) |plaintext| {
-                return plaintext;
-            } else {
-                return Error.ZquicError.CryptoError;
-            }
+            return result;
         } else {
             return Error.ZquicError.CryptoError;
         }
@@ -331,12 +321,7 @@ pub const EnhancedAead = struct {
         ) catch {
             return Error.ZquicError.CryptoError;
         };
-
-        if (result) |plaintext| {
-            return plaintext;
-        } else {
-            return Error.ZquicError.CryptoError;
-        }
+        return result;
     }
 };
 

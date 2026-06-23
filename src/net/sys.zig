@@ -18,7 +18,7 @@ pub fn createDatagramSocket(local_address: *const NetAddress.Address) !Socket {
         );
         return switch (linux.errno(rc)) {
             .SUCCESS => @intCast(rc),
-            .ACCES => error.PermissionDenied,
+            .ACCES, .PERM => error.PermissionDenied,
             .AFNOSUPPORT => error.AddressFamilyNotSupported,
             .MFILE => error.ProcessFdQuotaExceeded,
             .NFILE => error.SystemFdQuotaExceeded,
@@ -37,7 +37,7 @@ pub fn bind(socket_fd: Socket, bind_addr: *const PosixAddress, bind_addr_len: po
         const rc = linux.bind(socket_fd, @ptrCast(bind_addr), bind_addr_len);
         return switch (linux.errno(rc)) {
             .SUCCESS => {},
-            .ACCES => error.AccessDenied,
+            .ACCES, .PERM => error.AccessDenied,
             .ADDRINUSE => error.AddressInUse,
             .ADDRNOTAVAIL => error.AddressNotAvailable,
             .AFNOSUPPORT => error.AddressFamilyNotSupported,
@@ -114,7 +114,7 @@ pub fn sendTo(socket_fd: Socket, data: []const u8, dest_addr_storage: *const Pos
         const rc = linux.sendto(socket_fd, data.ptr, data.len, 0, @ptrCast(dest_addr_storage), dest_addr_len);
         return switch (linux.errno(rc)) {
             .SUCCESS => rc,
-            .ACCES => error.AccessDenied,
+            .ACCES, .PERM => error.AccessDenied,
             .AGAIN => error.WouldBlock,
             .BADF => error.FileDescriptorNotASocket,
             .CONNREFUSED => error.ConnectionRefused,
@@ -138,7 +138,7 @@ pub fn send(socket_fd: Socket, data: []const u8) !usize {
         const rc = linux.sendto(socket_fd, data.ptr, data.len, 0, null, 0);
         return switch (linux.errno(rc)) {
             .SUCCESS => rc,
-            .ACCES => error.AccessDenied,
+            .ACCES, .PERM => error.AccessDenied,
             .AGAIN => error.WouldBlock,
             .BADF => error.FileDescriptorNotASocket,
             .CONNRESET => error.ConnectionResetByPeer,

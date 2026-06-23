@@ -1,0 +1,10 @@
+{
+  "name": "quic-v1-retry-integrity-local-vector",
+  "quic_version": 1,
+  "original_destination_connection_id": "8394c8f03e515708",
+  "retry_without_integrity_tag": "f000000001088394c8f03e51570808f067a5502a4262b5746f6b656e",
+  "retry_integrity_key": "be0c690b9f66575a1d766b54e368c84e",
+  "retry_integrity_nonce": "461599d35d632bf2239825bb",
+  "expected_integrity_tag": "0dd63360ee9ba7ffae76ab38f3d70dde",
+  "expected_result": "accept"
+}

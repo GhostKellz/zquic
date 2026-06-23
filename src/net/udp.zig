@@ -14,6 +14,7 @@ pub const UdpSocket = struct {
     socket_fd: posix.socket_t,
     local_address: Address,
     is_non_blocking: bool = false,
+    packet_info_enabled: bool = false,
 
     const Self = @This();
 
@@ -39,6 +40,7 @@ pub const UdpSocket = struct {
             .socket_fd = socket_fd,
             .local_address = bound_addr,
             .is_non_blocking = false,
+            .packet_info_enabled = false,
         };
     }
 
@@ -61,10 +63,9 @@ pub const UdpSocket = struct {
     }
 
     pub fn setPacketInfo(self: *Self, enabled: bool) !void {
-        _ = self;
-        _ = enabled;
         // Packet-info support is platform-specific. Keep the API stable while
         // the Linux-specific ancillary-data receive path is implemented.
+        self.packet_info_enabled = enabled;
     }
 
     /// Send data to a specific address
@@ -113,9 +114,48 @@ pub const UdpSocket = struct {
     }
 };
 
+/// UDP platform feature posture used by tests and higher-level transports.
+pub const UdpCapabilities = struct {
+    receive_batching: bool,
+    send_batching: bool,
+    packet_info: bool,
+    ecn: bool,
+    buffer_sizing: bool,
+    ipv4: bool,
+    ipv6: bool,
+    portable_fallback: bool,
+};
+
+pub fn platformCapabilities() UdpCapabilities {
+    return switch (@import("builtin").os.tag) {
+        .linux => .{
+            .receive_batching = false,
+            .send_batching = false,
+            .packet_info = false,
+            .ecn = false,
+            .buffer_sizing = true,
+            .ipv4 = true,
+            .ipv6 = true,
+            .portable_fallback = true,
+        },
+        else => .{
+            .receive_batching = false,
+            .send_batching = false,
+            .packet_info = false,
+            .ecn = false,
+            .buffer_sizing = false,
+            .ipv4 = true,
+            .ipv6 = true,
+            .portable_fallback = true,
+        },
+    };
+}
+
 /// Simple packet batch for efficient processing
 pub const PacketBatch = struct {
-    packets: [32]Packet,
+    pub const capacity = 32;
+
+    packets: [capacity]Packet,
     count: u8,
 
     pub const Packet = struct {
@@ -133,6 +173,27 @@ pub const PacketBatch = struct {
 
     pub fn clear(self: *PacketBatch) void {
         self.count = 0;
+    }
+
+    pub fn append(self: *PacketBatch, data: []u8, addr: Address, len: usize) !void {
+        if (self.count >= capacity) {
+            return error.BatchFull;
+        }
+
+        self.packets[self.count] = .{
+            .data = data,
+            .addr = addr,
+            .len = len,
+        };
+        self.count += 1;
+    }
+
+    pub fn isFull(self: *const PacketBatch) bool {
+        return self.count == capacity;
+    }
+
+    pub fn remainingCapacity(self: *const PacketBatch) u8 {
+        return capacity - self.count;
     }
 };
 
@@ -153,4 +214,54 @@ test "udp send to self" {
     const data = "test packet";
     const sent = try socket.sendTo(data, socket.local_address);
     try std.testing.expect(sent == data.len);
+}
+
+test "udp packet batch enforces capacity and preserves address metadata" {
+    var batch = PacketBatch.init();
+    const ipv4 = NetAddress.initIp4([4]u8{ 127, 0, 0, 1 }, 4433);
+    const ipv6 = NetAddress.initIp6([16]u8{ 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1 }, 4434, 0, 0);
+    var first = [_]u8{ 0xaa, 0xbb };
+    var second = [_]u8{0xcc};
+
+    try batch.append(&first, ipv4, first.len);
+    try batch.append(&second, ipv6, second.len);
+
+    try std.testing.expectEqual(@as(u8, 2), batch.count);
+    try std.testing.expectEqual(@as(usize, 2), batch.packets[0].len);
+    try std.testing.expectEqual(@as(u16, 4433), batch.packets[0].addr.getPort());
+    try std.testing.expectEqual(@as(u16, 4434), batch.packets[1].addr.getPort());
+
+    while (!batch.isFull()) {
+        try batch.append(&second, ipv4, second.len);
+    }
+    try std.testing.expectError(error.BatchFull, batch.append(&second, ipv4, second.len));
+
+    batch.clear();
+    try std.testing.expectEqual(@as(u8, 0), batch.count);
+    try std.testing.expectEqual(@as(u8, PacketBatch.capacity), batch.remainingCapacity());
+}
+
+test "udp platform capabilities document fallback posture" {
+    const caps = platformCapabilities();
+    try std.testing.expect(caps.ipv4);
+    try std.testing.expect(caps.ipv6);
+    try std.testing.expect(caps.portable_fallback);
+    try std.testing.expect(caps.receive_batching == false);
+    try std.testing.expect(caps.send_batching == false);
+    try std.testing.expect(caps.packet_info == false);
+    try std.testing.expect(caps.ecn == false);
+}
+
+test "udp packet info fallback state is deterministic without live socket" {
+    var socket = UdpSocket{
+        .socket_fd = -1,
+        .local_address = NetAddress.initIp4([4]u8{ 127, 0, 0, 1 }, 0),
+        .is_non_blocking = false,
+        .packet_info_enabled = false,
+    };
+
+    try socket.setPacketInfo(true);
+    try std.testing.expect(socket.packet_info_enabled);
+    try socket.setPacketInfo(false);
+    try std.testing.expect(!socket.packet_info_enabled);
 }

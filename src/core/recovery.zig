@@ -115,7 +115,9 @@ pub const RttStats = struct {
 
     /// Calculate Probe Timeout (PTO) duration
     pub fn calculatePto(self: Self, pto_count: u32) u64 {
-        const base_pto = self.smoothed_rtt + @max(RTT_CONSTANTS.K_GRANULARITY * self.rttvar, RTT_CONSTANTS.GRANULARITY);
+        const base_pto = self.smoothed_rtt +
+            @max(RTT_CONSTANTS.K_GRANULARITY * self.rttvar, RTT_CONSTANTS.GRANULARITY) +
+            self.max_ack_delay;
         return base_pto << @intCast(pto_count);
     }
 
@@ -290,11 +292,22 @@ pub const LossRecovery = struct {
 
     /// Calculate loss time for a packet space
     fn calculateLossTime(self: Self, space: *const PacketSpace, now: u64) ?u64 {
-        _ = now; // TODO: Use for time validation
         if (space.largest_acked_packet == null) return null;
 
         const loss_delay = self.rtt_stats.lossTimeThreshold();
-        return space.largest_acked_time + loss_delay;
+        var earliest_loss_time: ?u64 = null;
+        var iterator = space.sent_packets.valueIterator();
+        while (iterator.next()) |packet| {
+            if (!packet.ack_eliciting) continue;
+
+            const loss_time = packet.time_sent + loss_delay;
+            if (loss_time <= now) return loss_time;
+            if (earliest_loss_time == null or loss_time < earliest_loss_time.?) {
+                earliest_loss_time = loss_time;
+            }
+        }
+
+        return earliest_loss_time;
     }
 
     /// Handle loss detection timer expiry
@@ -383,13 +396,31 @@ pub const LossRecovery = struct {
         lost_packets: []const PacketNumber,
         space: *const PacketSpace,
     ) bool {
-        _ = self; // TODO: Use for PTO calculation
-        _ = lost_packets;
-        _ = space;
+        if (lost_packets.len == 0) return false;
 
-        // TODO: Implement persistent congestion detection
-        // - Check if lost packets span >= 3 * PTO duration
-        // - Requires tracking packet sent times and loss intervals
+        var earliest: ?u64 = null;
+        var latest: ?u64 = null;
+        var ack_eliciting_count: usize = 0;
+
+        for (lost_packets) |pn| {
+            const packet = space.sent_packets.get(pn) orelse continue;
+            if (!packet.ack_eliciting) continue;
+
+            ack_eliciting_count += 1;
+            earliest = if (earliest) |value| @min(value, packet.time_sent) else packet.time_sent;
+            latest = if (latest) |value| @max(value, packet.time_sent) else packet.time_sent;
+        }
+
+        if (ack_eliciting_count == 0) return false;
+
+        const span = latest.? - earliest.?;
+        const threshold = self.rtt_stats.calculatePto(0) *
+            RTT_CONSTANTS.PERSISTENT_CONGESTION_THRESHOLD;
+
+        if (span >= threshold) {
+            self.congestion_controller.onPersistentCongestion();
+            return true;
+        }
 
         return false;
     }
@@ -467,4 +498,29 @@ test "loss timeout removes lost packets and reduces congestion window" {
 
     try std.testing.expectEqual(@as(usize, 0), space.sent_packets.count());
     try std.testing.expect(recovery.getCongestionWindow() < CC_CONSTANTS.INITIAL_WINDOW);
+}
+
+test "rtt pto includes peer ack delay" {
+    var rtt_stats = RttStats.init();
+    rtt_stats.updateRtt(25_000, 125_000, 200_000);
+
+    const pto = rtt_stats.calculatePto(0);
+    try std.testing.expect(pto >= rtt_stats.smoothed_rtt + rtt_stats.max_ack_delay);
+}
+
+test "persistent congestion collapses congestion window" {
+    var space = try PacketSpace.init(std.testing.allocator, .application);
+    defer space.deinit();
+    var recovery = LossRecovery.init();
+    recovery.rtt_stats.smoothed_rtt = 10_000;
+    recovery.rtt_stats.rttvar = 1_000;
+    recovery.rtt_stats.max_ack_delay = 1_000;
+
+    try space.onPacketSent(1, 1_000, true, true, 1200);
+    try space.onPacketSent(2, 50_000, true, true, 1200);
+
+    recovery.congestion_controller.congestion_window = 20_000;
+    const lost = [_]PacketNumber{ 1, 2 };
+    try std.testing.expect(recovery.detectPersistentCongestion(&lost, &space));
+    try std.testing.expectEqual(CC_CONSTANTS.MIN_WINDOW, recovery.getCongestionWindow());
 }

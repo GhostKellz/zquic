@@ -9,6 +9,10 @@ const Error = @import("../utils/error.zig");
 pub const max_dns_message_size: usize = 65535;
 pub const max_dns_record_count: u16 = 4096;
 
+pub const StreamMessage = struct {
+    payload: []const u8,
+};
+
 /// DNS message header structure (RFC 1035)
 pub const DnsHeader = struct {
     id: u16,
@@ -305,6 +309,41 @@ pub fn createResponseForQuery(allocator: std.mem.Allocator, query: *const DnsMes
     }
 
     return response;
+}
+
+/// Encode one RFC 9250 DNS message with the two-octet stream length prefix.
+pub fn encodeLengthPrefixedMessage(allocator: std.mem.Allocator, dns_message: []const u8) ![]u8 {
+    if (dns_message.len < 12 or dns_message.len > max_dns_message_size) {
+        return Error.ZquicError.InvalidArgument;
+    }
+
+    const framed = try allocator.alloc(u8, dns_message.len + 2);
+    const len: u16 = @intCast(dns_message.len);
+    framed[0] = @intCast(len >> 8);
+    framed[1] = @intCast(len & 0xff);
+    @memcpy(framed[2..], dns_message);
+    return framed;
+}
+
+/// Parse one or more RFC 9250 length-prefixed DNS messages from a QUIC stream.
+pub fn parseLengthPrefixedMessages(allocator: std.mem.Allocator, stream_data: []const u8) ![]StreamMessage {
+    var messages: std.ArrayListUnmanaged(StreamMessage) = .empty;
+    errdefer messages.deinit(allocator);
+
+    var offset: usize = 0;
+    while (offset < stream_data.len) {
+        if (stream_data.len - offset < 2) return Error.ZquicError.InvalidData;
+        const len = (@as(usize, stream_data[offset]) << 8) | stream_data[offset + 1];
+        offset += 2;
+
+        if (len < 12 or len > max_dns_message_size) return Error.ZquicError.InvalidArgument;
+        if (offset + len > stream_data.len) return Error.ZquicError.InvalidData;
+
+        try messages.append(allocator, .{ .payload = stream_data[offset .. offset + len] });
+        offset += len;
+    }
+
+    return messages.toOwnedSlice(allocator);
 }
 
 fn validateRecordCounts(header: DnsHeader) !void {

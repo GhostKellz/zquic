@@ -1,11 +1,11 @@
 #!/bin/bash
 # Package Consumer Smoke Test
 # Verifies that zquic can be imported as a dependency
-# Run from project root after publishing a tag:
+# Local/pre-tag check from the project root:
 #   ./dev/consumer_smoke_test.sh
 #
-# Override before tagging:
-#   ZQUIC_URL=https://example.com/zquic-v0.9.14.tar.gz ./dev/consumer_smoke_test.sh
+# Post-tag/archive check:
+#   ZQUIC_URL=https://github.com/ghostkellz/zquic/archive/refs/tags/v0.9.15.tar.gz ./dev/consumer_smoke_test.sh
 
 set -e
 ZIG="${ZIG:-/opt/zig-dev/zig}"
@@ -23,7 +23,7 @@ trap "rm -rf '$TMPDIR'" EXIT
 
 echo "[1/5] Creating test project in $TMPDIR..."
 if [ -z "$ZQUIC_URL" ]; then
-    LOCAL_ARCHIVE="$TMPDIR/zquic-v0.9.14.tar.gz"
+    LOCAL_ARCHIVE="$TMPDIR/zquic-v0.9.15.tar.gz"
     PACKAGE_DIR="$TMPDIR/zquic"
     echo "  packaging current checkout: $LOCAL_ARCHIVE"
     tar \

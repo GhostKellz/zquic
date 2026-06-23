@@ -1,0 +1,9 @@
+{
+  "name": "tls13-handshake-record-minimal",
+  "record_type": "handshake",
+  "legacy_version": "0303",
+  "length": 2,
+  "payload_hex": "0102",
+  "record_hex": "16030300020102",
+  "expected_result": "accept"
+}

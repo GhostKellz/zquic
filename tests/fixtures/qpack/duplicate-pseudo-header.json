@@ -1,0 +1,9 @@
+{
+  "name": "duplicate-pseudo-header-rejected",
+  "description": "Duplicate :path pseudo-headers are rejected.",
+  "expected_result": "reject",
+  "dynamic_table": "disabled",
+  "encoded_hex": "02053a70617468012f053a70617468062f616761696e",
+  "expected_headers": []
+}
+

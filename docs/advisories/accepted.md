@@ -1,6 +1,6 @@
 # Accepted Advisories
 
-No accepted security advisories are currently tracked for `zquic v0.9.14`.
+No accepted security advisories are currently tracked for `zquic v0.9.15`.
 
 If a vulnerability is knowingly accepted for a release, record:
 

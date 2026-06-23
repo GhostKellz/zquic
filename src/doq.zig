@@ -18,8 +18,12 @@ pub const DnsResponseCode = @import("doq/message.zig").DnsResponseCode;
 pub const DnsQuestion = @import("doq/message.zig").DnsQuestion;
 pub const DnsResourceRecord = @import("doq/message.zig").DnsResourceRecord;
 pub const createResponseForQuery = @import("doq/message.zig").createResponseForQuery;
+pub const StreamMessage = @import("doq/message.zig").StreamMessage;
+pub const encodeLengthPrefixedMessage = @import("doq/message.zig").encodeLengthPrefixedMessage;
+pub const parseLengthPrefixedMessages = @import("doq/message.zig").parseLengthPrefixedMessages;
 pub const DoQServerConfig = @import("doq/server.zig").DoQServerConfig;
 pub const ServerConfig = DoQServerConfig;
+pub const queryTimedOut = @import("doq/server.zig").queryTimedOut;
 
 // DoQ specific types and utilities
 pub const QueryType = enum(u16) {

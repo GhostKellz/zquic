@@ -371,3 +371,29 @@ test "stream receive flow control rejects oversized data" {
     try stream.handleIncomingData("abcd");
     try std.testing.expectError(Error.ZquicError.FlowControlError, stream.handleIncomingData("e"));
 }
+
+test "stream send flow control blocks slow writer until window update" {
+    var stream = try SuperStream.init(std.testing.allocator, 0, .client_bidirectional);
+    defer stream.deinit();
+
+    stream.send_window.store(4, .release);
+    try std.testing.expectEqual(@as(usize, 4), try stream.write("abcd", false));
+    try std.testing.expectError(Error.ZquicError.FlowControlError, stream.write("e", false));
+
+    try stream.updateFlowControl(4);
+    try std.testing.expectEqual(@as(usize, 4), try stream.write("efgh", false));
+}
+
+test "stream receive flow control recovers after slow reader drains unread data" {
+    var stream = try SuperStream.init(std.testing.allocator, 0, .client_bidirectional);
+    defer stream.deinit();
+
+    stream.recv_window.store(4, .release);
+    try stream.handleIncomingData("abcd");
+    try std.testing.expectError(Error.ZquicError.FlowControlError, stream.handleIncomingData("e"));
+
+    var buffer: [4]u8 = undefined;
+    try std.testing.expectEqual(@as(usize, 4), try stream.read(&buffer));
+    try stream.handleIncomingData("efgh");
+    try std.testing.expectEqual(@as(usize, 4), stream.read_buffer.items.len - stream.read_start);
+}

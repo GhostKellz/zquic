@@ -1,0 +1,22 @@
+{
+  "name": "dynamic-table-disabled-literal-only",
+  "description": "Literal request pseudo-headers decode while the decoder dynamic table capacity is zero.",
+  "expected_result": "accept",
+  "dynamic_table": "disabled",
+  "encoded_hex": "03073a6d6574686f6403474554053a70617468012f0a3a617574686f72697479096c6f63616c686f7374",
+  "expected_headers": [
+    {
+      "name": ":method",
+      "value": "GET"
+    },
+    {
+      "name": ":path",
+      "value": "/"
+    },
+    {
+      "name": ":authority",
+      "value": "localhost"
+    }
+  ]
+}
+

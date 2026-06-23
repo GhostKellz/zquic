@@ -1,0 +1,25 @@
+{
+  "name": "client-zero-rtt-policy-reject-seed",
+  "role": "client",
+  "quic_version": 1,
+  "alpn": "h3",
+  "cipher_suite": "TLS_AES_128_GCM_SHA256",
+  "feature_flags": [
+    "zero-rtt-ticket-present",
+    "application-policy-reject"
+  ],
+  "packet_space": "application",
+  "packet_type": "zero_rtt",
+  "expected_result": "accept_header_only",
+  "destination_connection_id": "0102030405060708",
+  "source_connection_id": "a1a2a3a4a5a6a7a8",
+  "packet_number": 2,
+  "packet_number_length": 4,
+  "header_length": 23,
+  "frame_summary": [
+    "STREAM id=0 offset=0 length=12 fin=false",
+    "0-RTT application policy rejects payload use"
+  ],
+  "packet_hex": "d30000000108010203040506070808a1a2a3a4a5a6a7a8000000025a45524f5f5254545f30303031"
+}
+

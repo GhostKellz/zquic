@@ -1,0 +1,13 @@
+{
+  "name": "timeout-policy",
+  "description": "Query started at t=10s has timed out at t=16s with a 5s timeout.",
+  "expected_result": "timeout",
+  "stream_hex": "",
+  "expected_message_ids": [],
+  "expected_question_names": [],
+  "timeout_started_seconds": 10,
+  "timeout_now_seconds": 16,
+  "timeout_ms": 5000,
+  "expected_timeout": true
+}
+

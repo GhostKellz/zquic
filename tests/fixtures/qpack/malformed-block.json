@@ -1,0 +1,9 @@
+{
+  "name": "malformed-truncated-block",
+  "description": "Header block advertises a name length longer than the available bytes.",
+  "expected_result": "reject_invalid_data",
+  "dynamic_table": "disabled",
+  "encoded_hex": "0105686f",
+  "expected_headers": []
+}
+

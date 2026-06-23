@@ -19,6 +19,11 @@ const Connection = zquic_core.Connection.Connection;
 const Stream = zquic_core.Stream.Stream;
 const Crypto = zquic_core.Crypto;
 
+pub fn queryTimedOut(timestamp_seconds: i64, current_time_seconds: i64, timeout_ms: u32) bool {
+    const timeout_seconds: i64 = @max(1, @as(i64, @intCast((timeout_ms + 999) / 1000)));
+    return current_time_seconds - timestamp_seconds > timeout_seconds;
+}
+
 /// DoQ server configuration
 pub const DoQServerConfig = struct {
     /// Listen address
@@ -281,6 +286,43 @@ pub const DoQServer = struct {
         return stats;
     }
 
+    pub fn queuePendingQuery(self: *DoQServer, query_id: u16, query_data: []const u8, response_callback: *const fn ([]u8) void, timestamp: i64) !void {
+        try self.pending_queries.append(self.allocator, .{
+            .query_id = query_id,
+            .query_data = try self.allocator.dupe(u8, query_data),
+            .response_callback = response_callback,
+            .timestamp = timestamp,
+        });
+    }
+
+    pub fn cancelPendingQuery(self: *DoQServer, query_id: u16) bool {
+        var i: usize = 0;
+        while (i < self.pending_queries.items.len) : (i += 1) {
+            if (self.pending_queries.items[i].query_id == query_id) {
+                const removed = self.pending_queries.orderedRemove(i);
+                self.allocator.free(removed.query_data);
+                self.stats.queries_failed += 1;
+                return true;
+            }
+        }
+        return false;
+    }
+
+    pub fn cleanupTimedOutQueries(self: *DoQServer, current_time_seconds: i64) void {
+        var i: usize = 0;
+        while (i < self.pending_queries.items.len) {
+            const query = self.pending_queries.items[i];
+            if (queryTimedOut(query.timestamp, current_time_seconds, self.config.query_timeout_ms)) {
+                const expired_query = self.pending_queries.orderedRemove(i);
+                self.allocator.free(expired_query.query_data);
+                self.stats.queries_failed += 1;
+                std.log.debug("DoQ: Query {} timed out", .{expired_query.query_id});
+            } else {
+                i += 1;
+            }
+        }
+    }
+
     fn loadCertificates(self: *DoQServer) !void {
         // Load TLS certificates for post-quantum crypto
         // Use posix to check if certificate files exist
@@ -325,23 +367,7 @@ pub const DoQServer = struct {
     }
 
     fn processQueries(self: *DoQServer) !void {
-        const current_time = Time.nowSeconds();
-
-        // Clean up expired queries (older than 30 seconds)
-        var i: usize = 0;
-        while (i < self.pending_queries.items.len) {
-            const query = self.pending_queries.items[i];
-            if (current_time - query.timestamp > 30) {
-                // Remove expired query
-                const expired_query = self.pending_queries.orderedRemove(i);
-                self.allocator.free(expired_query.query_data);
-
-                self.stats.queries_failed += 1;
-                std.log.warn("DoQ: Query {} timed out", .{expired_query.query_id});
-            } else {
-                i += 1;
-            }
-        }
+        self.cleanupTimedOutQueries(Time.nowSeconds());
     }
 };
 

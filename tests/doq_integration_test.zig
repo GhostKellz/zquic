@@ -6,6 +6,20 @@ const zquic = @import("zquic");
 const DoQ = zquic.DoQ;
 const Error = zquic.Error;
 
+const DoqFixture = struct {
+    name: []const u8,
+    description: []const u8,
+    expected_result: []const u8,
+    stream_hex: []const u8,
+    expected_message_ids: []const u16 = &.{},
+    expected_question_names: []const []const u8 = &.{},
+    expected_rcode: ?u8 = null,
+    timeout_started_seconds: ?i64 = null,
+    timeout_now_seconds: ?i64 = null,
+    timeout_ms: ?u32 = null,
+    expected_timeout: ?bool = null,
+};
+
 fn makeQuery(allocator: std.mem.Allocator, id: u16, name: []const u8, qtype: DoQ.DnsRecordType) !DoQ.DnsMessage {
     var message = DoQ.DnsMessage.init(allocator);
     message.header = DoQ.DnsHeader{
@@ -23,6 +37,45 @@ fn makeQuery(allocator: std.mem.Allocator, id: u16, name: []const u8, qtype: DoQ
         .qclass = 1,
     };
     return message;
+}
+
+fn replayDoqFixture(comptime fixture_json: []const u8) !void {
+    const parsed = try std.json.parseFromSlice(DoqFixture, std.testing.allocator, fixture_json, .{});
+    defer parsed.deinit();
+    const fixture = parsed.value;
+
+    if (std.mem.eql(u8, fixture.expected_result, "timeout")) {
+        const timed_out = DoQ.queryTimedOut(
+            fixture.timeout_started_seconds.?,
+            fixture.timeout_now_seconds.?,
+            fixture.timeout_ms.?,
+        );
+        try std.testing.expectEqual(fixture.expected_timeout.?, timed_out);
+        return;
+    }
+
+    try std.testing.expectEqual(@as(usize, 0), fixture.stream_hex.len % 2);
+    var stream_buffer: [512]u8 = undefined;
+    const stream_bytes = try std.fmt.hexToBytes(&stream_buffer, fixture.stream_hex);
+
+    const stream_messages = try DoQ.parseLengthPrefixedMessages(std.testing.allocator, stream_bytes);
+    defer std.testing.allocator.free(stream_messages);
+
+    try std.testing.expectEqual(fixture.expected_message_ids.len, stream_messages.len);
+
+    for (stream_messages, 0..) |stream_message, index| {
+        var message = try DoQ.DnsMessage.parseFromStream(std.testing.allocator, stream_message.payload);
+        defer message.deinit();
+
+        try std.testing.expectEqual(fixture.expected_message_ids[index], message.header.id);
+        try std.testing.expect(message.questions.len > 0);
+        try std.testing.expectEqualStrings(fixture.expected_question_names[index], message.questions[0].name);
+
+        if (std.mem.eql(u8, fixture.expected_result, "rcode")) {
+            try std.testing.expect(fixture.expected_rcode != null);
+            try std.testing.expectEqual(@as(u8, fixture.expected_rcode.?), @as(u8, @intFromEnum(message.responseCode())));
+        }
+    }
 }
 
 fn writeTempCertFiles(allocator: std.mem.Allocator) !struct { cert: [:0]const u8, key: [:0]const u8, tmp: std.testing.TmpDir } {
@@ -167,6 +220,75 @@ test "doq server initializes and exposes stats" {
     try std.testing.expect(stats.active_connections == 0);
 }
 
+test "doq server cancels and times out pending queries" {
+    var debug_allocator: std.heap.DebugAllocator(.{}) = .init;
+    defer _ = debug_allocator.deinit();
+    const allocator = debug_allocator.allocator();
+
+    var temp = try writeTempCertFiles(allocator);
+    defer {
+        allocator.free(temp.cert);
+        allocator.free(temp.key);
+        temp.tmp.cleanup();
+    }
+
+    const callback = struct {
+        fn ignore(_: []u8) void {}
+    }.ignore;
+
+    var server = try DoQ.DoqServer.init(allocator, .{
+        .address = "127.0.0.1",
+        .port = 853,
+        .cert_path = temp.cert,
+        .key_path = temp.key,
+        .query_timeout_ms = 5000,
+    });
+    defer server.deinit();
+
+    try server.queuePendingQuery(1, "cancel-me", callback, 10);
+    try std.testing.expect(server.cancelPendingQuery(1));
+    try std.testing.expect(!server.cancelPendingQuery(1));
+    try std.testing.expectEqual(@as(usize, 0), server.pending_queries.items.len);
+    try std.testing.expectEqual(@as(u64, 1), server.stats.queries_failed);
+
+    try server.queuePendingQuery(2, "still-live", callback, 15);
+    try server.queuePendingQuery(3, "expired", callback, 10);
+    server.cleanupTimedOutQueries(16);
+
+    try std.testing.expectEqual(@as(usize, 1), server.pending_queries.items.len);
+    try std.testing.expectEqual(@as(u16, 2), server.pending_queries.items[0].query_id);
+    try std.testing.expectEqual(@as(u64, 2), server.stats.queries_failed);
+}
+
+test "doq server deinit releases oversized pending message cleanup" {
+    var debug_allocator: std.heap.DebugAllocator(.{}) = .init;
+    const allocator = debug_allocator.allocator();
+
+    var temp = try writeTempCertFiles(allocator);
+
+    const callback = struct {
+        fn ignore(_: []u8) void {}
+    }.ignore;
+
+    var server = try DoQ.DoqServer.init(allocator, .{
+        .address = "127.0.0.1",
+        .port = 853,
+        .cert_path = temp.cert,
+        .key_path = temp.key,
+    });
+
+    const oversized = try allocator.alloc(u8, DoQ.Message.max_dns_message_size);
+    @memset(oversized, 0xaa);
+    try server.queuePendingQuery(99, oversized, callback, 10);
+    server.deinit();
+    allocator.free(oversized);
+    allocator.free(temp.cert);
+    allocator.free(temp.key);
+    temp.tmp.cleanup();
+
+    try std.testing.expectEqual(.ok, debug_allocator.deinit());
+}
+
 test "doq dns message serialize roundtrip" {
     const allocator = std.testing.allocator;
 
@@ -211,4 +333,23 @@ test "doq dns message serialize roundtrip" {
     try std.testing.expectEqualStrings("zquic.dev", parsed.questions[0].name);
     try std.testing.expect(parsed.answers.len == 1);
     try std.testing.expect(parsed.answers[0].rdlength == ipv6_bytes.len);
+}
+
+test "interop: doq length-prefixed stream fixtures replay" {
+    try replayDoqFixture(@embedFile("fixtures/doq/length-framed-query.json"));
+    try replayDoqFixture(@embedFile("fixtures/doq/pipelined-queries.json"));
+    try replayDoqFixture(@embedFile("fixtures/doq/nxdomain-response.json"));
+    try replayDoqFixture(@embedFile("fixtures/doq/servfail-response.json"));
+    try replayDoqFixture(@embedFile("fixtures/doq/timeout-policy.json"));
+}
+
+test "interop: doq rejects malformed length-prefixed streams" {
+    const truncated_length = [_]u8{0x00};
+    try std.testing.expectError(Error.ZquicError.InvalidData, DoQ.parseLengthPrefixedMessages(std.testing.allocator, &truncated_length));
+
+    const truncated_payload = [_]u8{ 0x00, 0x0c, 0x12, 0x34 };
+    try std.testing.expectError(Error.ZquicError.InvalidData, DoQ.parseLengthPrefixedMessages(std.testing.allocator, &truncated_payload));
+
+    const too_short_dns_message = [_]u8{ 0x00, 0x01, 0x00 };
+    try std.testing.expectError(Error.ZquicError.InvalidArgument, DoQ.parseLengthPrefixedMessages(std.testing.allocator, &too_short_dns_message));
 }

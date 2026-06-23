@@ -1,12 +1,14 @@
 # zcrypto Integration Guide
 
-ZQUIC uses [`zcrypto v1.0.5`](https://github.com/ghostkellz/zcrypto) for cryptographic operations. This document covers the current stable API contract and build configuration.
+ZQUIC uses [`zcrypto v1.0.6`](https://github.com/ghostkellz/zcrypto) for cryptographic operations. This document covers the current stable API contract and build configuration.
 
-## v1.0.5 Contract
+## v1.0.6 Contract
 
 The default zquic build consumes the stable `zcrypto` surface only. Experimental
 post-quantum code is compiled only when both zquic flags are enabled:
 `-Dpost-quantum=true -Dexperimental-crypto=true`.
+`zcrypto` also pins `zsync v0.8.4`, but zquic forwards `async=false` and does
+not consume zcrypto's zsync-backed async wrappers.
 
 zquic expects these `zcrypto` build features:
 
@@ -29,15 +31,25 @@ These modules are always available and form the stable API:
 
 | Module | Purpose |
 |--------|---------|
+| `zcrypto.core` | Stable error and core type definitions |
+| `zcrypto.CryptoError` | Alias for `zcrypto.core.CryptoError` |
 | `zcrypto.hash` | SHA-256, SHA-384, SHA-512, HMAC |
 | `zcrypto.blake3` | Blake3 hashing (separate module) |
-| `zcrypto.sym` | AES-GCM, ChaCha20-Poly1305 |
+| `zcrypto.sym` | AES-GCM, ChaCha20-Poly1305, `SymError`, and key wrappers |
+| `zcrypto.auth` | HMAC helpers and `HmacKey` |
 | `zcrypto.asym` | Ed25519 signatures |
 | `zcrypto.kdf` | HKDF-SHA256, HKDF-SHA512, hkdfExpandLabel |
 | `zcrypto.rand` | Cryptographically secure random bytes |
 | `zcrypto.util` | Secure memory, constant-time compare |
 | `zcrypto.kex` | X25519 key exchange |
 | `zcrypto.quic_crypto` | QUIC packet encryption (RFC 9001) |
+| `zcrypto.quic` | QUIC packet crypto convenience surface |
+| `zcrypto.key_rotation` | Key rotation helpers |
+
+Direct stable `zcrypto.sym` AEAD decrypt helpers return `zcrypto.sym.SymError![]u8`.
+Authentication failures are reported as `zcrypto.sym.SymError.DecryptionFailed`.
+TLS wrapper callsites may still expose compatibility behavior, but direct
+`sym` decrypt calls should not be treated as optional plaintext.
 
 ## Build Flags
 
@@ -129,6 +141,18 @@ zcrypto.util.secureZero(&sensitive);
 const equal = zcrypto.util.constantTimeCompare(&a, &b);
 ```
 
+### Stable key wrappers
+```zig
+var aes_key = zcrypto.sym.Aes256GcmKey.random();
+defer aes_key.zeroize();
+
+var chacha_key = zcrypto.sym.ChaCha20Poly1305Key.random();
+defer chacha_key.zeroize();
+
+var hmac_key = try zcrypto.auth.HmacKey.fromBytes(allocator, "deployment-key");
+defer hmac_key.deinit();
+```
+
 ## Experimental Features (PQ Crypto)
 
 Post-quantum modules require `-Dpost-quantum=true -Dexperimental-crypto=true`:
@@ -142,7 +166,7 @@ Post-quantum modules require `-Dpost-quantum=true -Dexperimental-crypto=true`:
 2. The ZQUIC PQ integration (`src/crypto/pq_quic.zig`, `src/crypto/hybrid_pq_tls.zig`) is **experimental scaffolding**
 3. Do not rely on the PQ path for production cryptographic security until explicitly marked stable
 4. The hybrid classical+PQ key exchange uses real X25519 and ML-KEM-768 primitives, but the overall integration is still under development
-5. RSA and SLH-DSA are not part of the zquic v0.9.14 crypto contract
+5. RSA and SLH-DSA are not part of the zquic v0.9.15 crypto contract
 
 ### ZQUIC PQ Implementation Status
 
@@ -205,6 +229,26 @@ New tickets are signed with the active issuer. The previous issuer is
 validation-only and should be retained no longer than the maximum ticket
 lifetime. Remove it after the rotation window closes.
 
+Operational rules:
+
+- Generate `key_id` as a non-secret identifier and `mac_key` from a
+  cryptographically secure random source.
+- Store issuer material in a secret manager or equivalent deployment secret
+  store, not in source control, metrics, tracing, or debug logs.
+- Persist active issuer material only when tickets must survive process
+  restarts; otherwise use the process-local random default.
+- Rotate by installing a new active issuer and moving the old active issuer to
+  `pq_previous_ticket_issuer`.
+- Retain the previous issuer for no longer than the maximum ticket lifetime,
+  then remove it so stale tickets fail closed.
+- For incident invalidation, remove previous material immediately and replace
+  the active issuer before issuing new tickets.
+- Logs may include issuer key IDs for diagnosis. They must not include MAC
+  keys, resumption secrets, PQ binders, ticket MACs, or full serialized tickets.
+
+The Phase 5 review checklist for these rules lives in
+[`docs/security/pq-review.md`](../security/pq-review.md).
+
 ## TLS Configuration
 
 For QUIC connections, configure the TLS profile:
@@ -228,6 +272,8 @@ Key changes in the current stable zcrypto API:
 | `zcrypto.rand.fillBytes()` | `zcrypto.rand.fill()` |
 | No SHA-384 | `zcrypto.hash.Sha384` available |
 | `zcrypto.hash.Blake3` | `zcrypto.blake3.Blake3` |
+| Optional direct `sym` decrypt result | `zcrypto.sym.SymError![]u8` |
+| Raw `[32]u8` key only | `Aes256GcmKey`, `ChaCha20Poly1305Key`, `HmacKey` wrappers |
 
 ### ML-KEM API changes
 

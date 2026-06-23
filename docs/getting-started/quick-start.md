@@ -166,13 +166,13 @@ Post-quantum cryptography requires explicit build flags:
 zig build -Dpost-quantum=true -Dexperimental-crypto=true
 ```
 
-When enabled, ML-KEM-768 + X25519 hybrid key exchange is available. See [zcrypto Integration](../integrations/zcrypto.md) and [Feature Overview](../features/README.md) for the current experimental PQ posture.
+When enabled, ML-KEM-768 + X25519 hybrid key exchange is available. See [zcrypto Integration](../integrations/zcrypto.md) and [Feature Overview](../features/overview.md) for the current experimental PQ posture.
 
 ## Next Steps
 
 - **[Build Configuration](build-config.md)** - Customize your build
 - **[API Reference](../api/core.md)** - Explore the full API
-- **[Feature Overview](../features/README.md)** - Current module and feature map
+- **[Feature Overview](../features/overview.md)** - Current module and feature map
 - **[Future Features](../future-features.md)** - Scoped work deferred from the current release line
 
 ## Troubleshooting

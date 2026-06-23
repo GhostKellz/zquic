@@ -1,30 +1,73 @@
-//! Comprehensive TLS 1.3 implementation for QUIC with ZCrypto integration
+//! Experimental TLS 1.3 scaffold for QUIC with ZCrypto integration
 //!
-//! Features:
-//! - Full RFC 8446 TLS 1.3 compliance
-//! - ZCrypto integration for all cryptographic operations
-//! - 0-RTT support with session resumption
-//! - Connection migration with key updates
-//! - Post-quantum cryptography support
-//! - Advanced cipher suite negotiation
-//! - Comprehensive certificate chain validation
-//!
-//! SECURITY NOTE: Some verification paths are still simplified.
-//! Set allow_simplified_verification = false for production builds.
+//! This module is intentionally not exported as a production TLS stack. It
+//! contains useful bounded pieces: traffic-key derivation, key update helpers,
+//! session-ticket helpers, and caller-supplied raw public-key certificate
+//! verification. DER/X.509 parsing, chain building, trust stores, hostname
+//! validation, and full TLS transcript interop remain unsupported.
 
 const std = @import("std");
 const Error = @import("../utils/error.zig");
 const Time = @import("../utils/time.zig");
+const CoreTransportParameters = @import("../core/transport_parameters.zig");
 const zcrypto = @import("zcrypto");
 
-/// Security configuration: Set to false for production builds
-/// When false, simplified verification paths will return errors instead of succeeding
+/// Security configuration for legacy scaffold paths.
+/// This must remain false; simplified verification paths fail closed.
 pub const allow_simplified_verification = false;
+
+pub const maturity_status = "experimental-scaffold";
+pub const supports_production_tls = false;
+pub const supports_x509_certificate_validation = false;
+pub const supports_delegated_x509_validation = true;
+pub const supports_raw_public_key_verification = true;
+pub const default_quic_alpn = "h3";
+
+pub const TlsCiphertextRecord = zcrypto.tls.record.TlsCiphertext;
+
+pub fn parseTlsCiphertextRecord(
+    allocator: std.mem.Allocator,
+    bytes: []const u8,
+) Error.ZquicError!TlsCiphertextRecord {
+    return zcrypto.tls.record.TlsCiphertext.fromBytes(allocator, bytes) catch Error.ZquicError.CryptoError;
+}
+
+pub fn verifyX509CertificateWithRoots(
+    allocator: std.mem.Allocator,
+    cert_der: []const u8,
+    hostname: ?[]const u8,
+    root_ca_der: []const []const u8,
+) Error.ZquicError!bool {
+    if (root_ca_der.len == 0) return Error.ZquicError.CertificateError;
+
+    var roots = allocator.alloc(zcrypto.tls.config.Certificate, root_ca_der.len) catch return Error.ZquicError.OutOfMemory;
+    defer allocator.free(roots);
+
+    var initialized: usize = 0;
+
+    for (root_ca_der, 0..) |der, i| {
+        roots[i] = zcrypto.tls.config.Certificate.fromDer(allocator, der) catch {
+            for (roots[0..initialized]) |root| {
+                root.deinit(allocator);
+            }
+            return Error.ZquicError.CertificateError;
+        };
+        initialized += 1;
+    }
+    defer {
+        for (roots[0..initialized]) |root| {
+            root.deinit(allocator);
+        }
+    }
+
+    const config = zcrypto.tls.config.TlsConfig.init(allocator).withRootCAs(roots);
+    return config.verifyCertificate(cert_der, hostname) catch Error.ZquicError.CertificateError;
+}
 
 /// TLS 1.3 version constant
 pub const TLS_VERSION_1_3: u16 = 0x0304;
 
-/// Comprehensive TLS 1.3 cipher suites with ZCrypto support
+/// TLS 1.3 cipher-suite identifiers used by the experimental scaffold.
 pub const CipherSuite = enum(u16) {
     // Standard TLS 1.3 cipher suites
     tls_aes_128_gcm_sha256 = 0x1301,
@@ -60,7 +103,26 @@ pub const CipherSuite = enum(u16) {
             else => false,
         };
     }
+
+    pub fn isQuicTls13(self: CipherSuite) bool {
+        return switch (self) {
+            .tls_aes_128_gcm_sha256,
+            .tls_aes_256_gcm_sha384,
+            .tls_chacha20_poly1305_sha256,
+            => true,
+            else => false,
+        };
+    }
 };
+
+pub fn validateQuicCipherSuite(cipher_suite: CipherSuite) Error.ZquicError!void {
+    if (!cipher_suite.isQuicTls13()) return Error.ZquicError.UnsupportedAlgorithm;
+}
+
+pub fn validateQuicAlpn(expected: []const u8, offered: []const u8) Error.ZquicError!void {
+    if (expected.len == 0 or offered.len == 0) return Error.ZquicError.ProtocolViolation;
+    if (!std.mem.eql(u8, expected, offered)) return Error.ZquicError.ProtocolViolation;
+}
 
 /// Hash algorithms supported by TLS 1.3
 pub const HashAlgorithm = enum {
@@ -106,6 +168,11 @@ pub const SignatureAlgorithm = enum(u16) {
             else => false,
         };
     }
+};
+
+pub const CertificateEncoding = enum {
+    der_unparsed,
+    raw_public_key,
 };
 
 /// Key exchange algorithms
@@ -375,8 +442,13 @@ pub const CryptoKeys = struct {
     }
 };
 
-/// Certificate with validation support
+/// Experimental certificate container.
+///
+/// This stores DER bytes and exposes limited signature helper checks. It does
+/// not parse X.509, build chains, validate hostnames, load trust anchors, or
+/// provide production TLS certificate verification.
 pub const Certificate = struct {
+    encoding: CertificateEncoding,
     data: []const u8,
     signature_algorithm: SignatureAlgorithm,
     public_key: []const u8,
@@ -391,10 +463,11 @@ pub const Certificate = struct {
     const Self = @This();
 
     pub fn init(allocator: std.mem.Allocator, der_data: []const u8) !Self {
-        // Parse DER-encoded certificate (simplified)
-        // In production, would use a proper ASN.1 parser
+        // DER parsing is intentionally not implemented here. Keep this as a
+        // storage container until a real ASN.1/X.509 parser is wired in.
 
         return Self{
+            .encoding = .der_unparsed,
             .data = try allocator.dupe(u8, der_data),
             .signature_algorithm = .ed25519, // Default
             .public_key = &[_]u8{}, // Would extract from certificate
@@ -407,8 +480,38 @@ pub const Certificate = struct {
         };
     }
 
+    pub fn initRawEd25519PublicKey(
+        allocator: std.mem.Allocator,
+        public_key: []const u8,
+        subject: []const u8,
+        issuer: []const u8,
+        not_before: i64,
+        not_after: i64,
+    ) !Self {
+        if (public_key.len != 32) return Error.ZquicError.InvalidArgument;
+        if (not_after < not_before) return Error.ZquicError.InvalidArgument;
+
+        return Self{
+            .encoding = .raw_public_key,
+            .data = try allocator.dupe(u8, public_key),
+            .signature_algorithm = .ed25519,
+            .public_key = try allocator.dupe(u8, public_key),
+            .subject = try allocator.dupe(u8, subject),
+            .issuer = try allocator.dupe(u8, issuer),
+            .not_before = not_before,
+            .not_after = not_after,
+            .extensions = .empty,
+            .allocator = allocator,
+        };
+    }
+
     pub fn deinit(self: *Self) void {
         self.allocator.free(self.data);
+        if (self.encoding == .raw_public_key) {
+            self.allocator.free(self.public_key);
+            self.allocator.free(self.subject);
+            self.allocator.free(self.issuer);
+        }
 
         var iterator = self.extensions.iterator();
         while (iterator.next()) |entry| {
@@ -419,6 +522,9 @@ pub const Certificate = struct {
     }
 
     pub fn verify(self: *const Self, signature: []const u8, message: []const u8) !bool {
+        if (self.encoding == .der_unparsed) {
+            return Error.ZquicError.NotSupported;
+        }
         switch (self.signature_algorithm) {
             .ed25519 => {
                 // Use zcrypto.asym stable API for Ed25519 verification
@@ -451,6 +557,17 @@ pub const Certificate = struct {
 
     pub fn isValidAt(self: *const Self, timestamp: i64) bool {
         return timestamp >= self.not_before and timestamp <= self.not_after;
+    }
+
+    pub fn verifyRawPublicKeyAt(
+        self: *const Self,
+        signature: []const u8,
+        message: []const u8,
+        timestamp: i64,
+    ) !bool {
+        if (self.encoding != .raw_public_key) return Error.ZquicError.NotSupported;
+        if (!self.isValidAt(timestamp)) return false;
+        return try self.verify(signature, message);
     }
 };
 
@@ -502,7 +619,10 @@ pub const SessionTicket = struct {
     }
 };
 
-/// Comprehensive TLS 1.3 context
+/// Experimental TLS 1.3 context.
+///
+/// This is a development surface for bounded helpers, not a production TLS
+/// state machine.
 pub const ComprehensiveTlsContext = struct {
     // Basic state
     state: HandshakeState,
@@ -514,6 +634,8 @@ pub const ComprehensiveTlsContext = struct {
     // Transport parameters
     transport_params: TransportParameters,
     peer_transport_params: ?TransportParameters,
+    peer_quic_transport_params: ?CoreTransportParameters.TransportParameters,
+    peer_quic_transport_parameter_bytes: ?[]u8,
 
     // Cryptographic keys
     initial_keys: ?CryptoKeys,
@@ -532,6 +654,7 @@ pub const ComprehensiveTlsContext = struct {
     // 0-RTT support
     max_early_data_size: u32,
     early_data_accepted: bool,
+    negotiated_alpn: ?[]const u8,
 
     // Handshake transcript
     handshake_transcript: std.ArrayListUnmanaged(u8),
@@ -561,6 +684,8 @@ pub const ComprehensiveTlsContext = struct {
             .key_exchange_algorithm = .x25519,
             .transport_params = TransportParameters.init(),
             .peer_transport_params = null,
+            .peer_quic_transport_params = null,
+            .peer_quic_transport_parameter_bytes = null,
             .initial_keys = null,
             .handshake_keys = null,
             .application_keys = null,
@@ -571,6 +696,7 @@ pub const ComprehensiveTlsContext = struct {
             .resumption_secret = null,
             .max_early_data_size = 0,
             .early_data_accepted = false,
+            .negotiated_alpn = null,
             .handshake_transcript = .empty,
             .private_key = null,
             .public_key = null,
@@ -589,6 +715,9 @@ pub const ComprehensiveTlsContext = struct {
         self.transport_params.deinit(self.allocator);
         if (self.peer_transport_params) |*params| {
             params.deinit(self.allocator);
+        }
+        if (self.peer_quic_transport_parameter_bytes) |bytes| {
+            self.allocator.free(bytes);
         }
 
         // Clean up cryptographic keys
@@ -611,6 +740,9 @@ pub const ComprehensiveTlsContext = struct {
         // Clean up session ticket
         if (self.session_ticket) |*ticket| {
             ticket.deinit();
+        }
+        if (self.negotiated_alpn) |alpn| {
+            self.allocator.free(alpn);
         }
 
         // Clean up sensitive key material
@@ -720,12 +852,21 @@ pub const ComprehensiveTlsContext = struct {
 
     /// Process handshake message
     pub fn processHandshakeMessage(self: *Self, message_type: u8, message: []const u8) !void {
-        // Add to handshake transcript
-        // Update handshake transcript
+        try self.validateExpectedHandshakeMessage(message_type);
+
+        const previous_state = self.state;
+        errdefer self.state = previous_state;
+
+        try self.processHandshakeMessageUnchecked(message_type, message);
+
+        // Update transcript only after the message is accepted. Rejected
+        // handshake input must not poison Finished verification state.
         try self.handshake_transcript.append(self.allocator, message_type);
         try self.handshake_transcript.writer(self.allocator).writeInt(u24, @intCast(message.len), .big);
         try self.handshake_transcript.appendSlice(self.allocator, message);
+    }
 
+    fn processHandshakeMessageUnchecked(self: *Self, message_type: u8, message: []const u8) !void {
         switch (message_type) {
             1 => try self.processClientHello(message), // ClientHello
             2 => try self.processServerHello(message), // ServerHello
@@ -735,6 +876,19 @@ pub const ComprehensiveTlsContext = struct {
             20 => try self.processFinished(message), // Finished
             else => return Error.ZquicError.UnsupportedMessage,
         }
+    }
+
+    fn validateExpectedHandshakeMessage(self: *const Self, message_type: u8) Error.ZquicError!void {
+        const expected: u8 = switch (self.state) {
+            .wait_client_hello => 1,
+            .initial, .wait_server_hello => if (self.is_server) 1 else 2,
+            .wait_encrypted_extensions => 8,
+            .wait_certificate => 11,
+            .wait_certificate_verify => 15,
+            .wait_finished => 20,
+            else => return Error.ZquicError.ProtocolViolation,
+        };
+        if (message_type != expected) return Error.ZquicError.ProtocolViolation;
     }
 
     /// Process ClientHello message
@@ -767,14 +921,77 @@ pub const ComprehensiveTlsContext = struct {
 
     /// Process EncryptedExtensions message
     fn processEncryptedExtensions(self: *Self, message: []const u8) !void {
-        _ = message;
-
         if (self.is_server) {
             return Error.ZquicError.UnexpectedMessage;
         }
 
-        // Parse transport parameters from EncryptedExtensions
+        try self.processEncryptedExtensionsList(message);
         self.state = .wait_certificate;
+    }
+
+    fn processEncryptedExtensionsList(self: *Self, message: []const u8) !void {
+        if (message.len < 2) return Error.ZquicError.CryptoError;
+        const extensions_len = (@as(u16, message[0]) << 8) | @as(u16, message[1]);
+        if (extensions_len != message.len - 2) return Error.ZquicError.CryptoError;
+
+        var offset: usize = 2;
+        var saw_alpn = false;
+        var saw_quic_transport_parameters = false;
+        while (offset < message.len) {
+            if (offset + 4 > message.len) return Error.ZquicError.CryptoError;
+            const extension_type = (@as(u16, message[offset]) << 8) | @as(u16, message[offset + 1]);
+            const extension_len = (@as(u16, message[offset + 2]) << 8) | @as(u16, message[offset + 3]);
+            offset += 4;
+            if (offset + extension_len > message.len) return Error.ZquicError.CryptoError;
+            const extension_data = message[offset .. offset + extension_len];
+            offset += extension_len;
+
+            switch (extension_type) {
+                @intFromEnum(TlsExtensionType.application_layer_protocol_negotiation) => {
+                    const alpn = try parseSingleAlpnProtocol(extension_data);
+                    try validateQuicAlpn(default_quic_alpn, alpn);
+                    if (self.negotiated_alpn) |old| self.allocator.free(old);
+                    self.negotiated_alpn = try self.allocator.dupe(u8, alpn);
+                    saw_alpn = true;
+                },
+                @intFromEnum(TlsExtensionType.quic_transport_parameters) => {
+                    if (extension_data.len == 0) return Error.ZquicError.CryptoError;
+                    const owned = self.allocator.dupe(u8, extension_data) catch return Error.ZquicError.OutOfMemory;
+                    errdefer self.allocator.free(owned);
+                    const params = try CoreTransportParameters.decode(owned);
+
+                    if (self.peer_quic_transport_parameter_bytes) |old| self.allocator.free(old);
+                    self.peer_quic_transport_parameter_bytes = owned;
+                    self.peer_quic_transport_params = params;
+                    saw_quic_transport_parameters = true;
+                },
+                else => {},
+            }
+        }
+
+        if (!saw_alpn) return Error.ZquicError.ProtocolViolation;
+        if (!saw_quic_transport_parameters) return Error.ZquicError.ProtocolViolation;
+    }
+
+    pub fn validatePeerQuicTransportParameters(
+        self: *const Self,
+        context: CoreTransportParameters.NegotiationContext,
+    ) Error.ZquicError!CoreTransportParameters.TransportParameters {
+        const params = self.peer_quic_transport_params orelse return Error.ZquicError.ProtocolViolation;
+        try CoreTransportParameters.validateForHandshake(params, context);
+        return params;
+    }
+
+    fn parseSingleAlpnProtocol(data: []const u8) Error.ZquicError![]const u8 {
+        if (data.len < 3) return Error.ZquicError.CryptoError;
+        const list_len = (@as(u16, data[0]) << 8) | @as(u16, data[1]);
+        if (list_len != data.len - 2) return Error.ZquicError.CryptoError;
+
+        const protocol_len = data[2];
+        if (protocol_len == 0 or 3 + protocol_len != data.len) {
+            return Error.ZquicError.ProtocolViolation;
+        }
+        return data[3 .. 3 + protocol_len];
     }
 
     /// Process Certificate message
@@ -792,9 +1009,8 @@ pub const ComprehensiveTlsContext = struct {
 
         // Store certificate chain for verification
         if (self.peer_certificate_chain.items.len > 0) {
-            // Clear existing chain
-            for (self.peer_certificate_chain.items) |cert| {
-                self.allocator.free(cert);
+            for (self.peer_certificate_chain.items) |*cert| {
+                cert.deinit();
             }
             self.peer_certificate_chain.clearRetainingCapacity();
         }
@@ -811,9 +1027,8 @@ pub const ComprehensiveTlsContext = struct {
                 return Error.ZquicError.CertificateError;
             }
 
-            // Store certificate
-            const cert_data = try self.allocator.dupe(u8, message[offset .. offset + cert_len]);
-            try self.peer_certificate_chain.append(self.allocator, cert_data);
+            const cert = try Certificate.init(self.allocator, message[offset .. offset + cert_len]);
+            try self.peer_certificate_chain.append(self.allocator, cert);
             offset += cert_len;
 
             // Skip extensions (2 bytes length + data)
@@ -827,6 +1042,41 @@ pub const ComprehensiveTlsContext = struct {
         }
 
         self.state = .wait_certificate_verify;
+    }
+
+    fn buildCertificateVerifyInput(self: *const Self, buffer: []u8) Error.ZquicError![]const u8 {
+        const context = if (self.is_server)
+            "TLS 1.3, client CertificateVerify"
+        else
+            "TLS 1.3, server CertificateVerify";
+        const hash_size = self.cipher_suite.getHashAlgorithm().getHashSize();
+        const needed = 64 + context.len + 1 + hash_size;
+        if (buffer.len < needed) return Error.ZquicError.BufferTooSmall;
+
+        @memset(buffer[0..64], 0x20);
+        @memcpy(buffer[64 .. 64 + context.len], context);
+        buffer[64 + context.len] = 0x00;
+
+        const hash_offset = 65 + context.len;
+        switch (self.cipher_suite.getHashAlgorithm()) {
+            .sha256 => {
+                var transcript_hash: [32]u8 = undefined;
+                var hasher = std.crypto.hash.sha2.Sha256.init(.{});
+                hasher.update(self.handshake_transcript.items);
+                hasher.final(&transcript_hash);
+                @memcpy(buffer[hash_offset .. hash_offset + transcript_hash.len], &transcript_hash);
+            },
+            .sha384 => {
+                var transcript_hash: [48]u8 = undefined;
+                var hasher = std.crypto.hash.sha2.Sha384.init(.{});
+                hasher.update(self.handshake_transcript.items);
+                hasher.final(&transcript_hash);
+                @memcpy(buffer[hash_offset .. hash_offset + transcript_hash.len], &transcript_hash);
+            },
+            else => return Error.ZquicError.UnsupportedAlgorithm,
+        }
+
+        return buffer[0..needed];
     }
 
     /// Process CertificateVerify message
@@ -847,21 +1097,8 @@ pub const ComprehensiveTlsContext = struct {
 
         const signature = message[4 .. 4 + sig_len];
 
-        // Verify certificate signature using transcript hash
-        // Build the verification message: 64 spaces + context + 0x00 + transcript_hash
-        var verify_data: [130]u8 = undefined;
-        @memset(verify_data[0..64], 0x20); // 64 spaces
-
-        const context = if (self.is_server) "TLS 1.3, client CertificateVerify" else "TLS 1.3, server CertificateVerify";
-        @memcpy(verify_data[64 .. 64 + context.len], context);
-        verify_data[64 + context.len] = 0x00;
-
-        // Compute transcript hash
-        var transcript_hash: [32]u8 = undefined;
-        var hasher = std.crypto.hash.sha2.Sha256.init(.{});
-        hasher.update(self.handshake_transcript.items);
-        hasher.final(&transcript_hash);
-        @memcpy(verify_data[65 + context.len .. 97 + context.len], &transcript_hash);
+        var verify_data_buffer: [192]u8 = undefined;
+        const verify_data = try self.buildCertificateVerifyInput(&verify_data_buffer);
 
         // Verify signature based on algorithm
         const verified = switch (sig_alg) {
@@ -883,12 +1120,13 @@ pub const ComprehensiveTlsContext = struct {
                 if (self.peer_certificate_chain.items.len == 0) {
                     break :blk false;
                 }
-                // Extract public key from certificate (simplified)
-                // For production, would parse X.509 certificate properly
-                if (!allow_simplified_verification) {
-                    return Error.ZquicError.CryptoError;
-                }
-                break :blk signature.len == 64;
+                if (signature.len != 64) return Error.ZquicError.CryptoError;
+                const cert = &self.peer_certificate_chain.items[0];
+                if (cert.encoding != .raw_public_key) return Error.ZquicError.NotSupported;
+                break :blk cert.verifyRawPublicKeyAt(signature, verify_data, Time.nowSeconds()) catch |err| switch (err) {
+                    Error.ZquicError.NotSupported, Error.ZquicError.UnsupportedAlgorithm => return err,
+                    else => return Error.ZquicError.CryptoError,
+                };
             },
             else => false,
         };
@@ -1123,3 +1361,377 @@ pub const TlsExtensionType = enum(u16) {
     post_quantum_key_share = 0xFE00,
     hybrid_key_share = 0xFE01,
 };
+
+test "comprehensive TLS exposes experimental maturity markers" {
+    try std.testing.expectEqualStrings("experimental-scaffold", maturity_status);
+    try std.testing.expect(!supports_production_tls);
+    try std.testing.expect(!supports_x509_certificate_validation);
+    try std.testing.expect(supports_delegated_x509_validation);
+    try std.testing.expect(supports_raw_public_key_verification);
+    try std.testing.expect(!allow_simplified_verification);
+}
+
+test "TLS record parser delegates to zcrypto and fails closed on malformed records" {
+    const fixture = @embedFile("../../tests/fixtures/tls/record-handshake.json");
+    try std.testing.expect(std.mem.indexOf(u8, fixture, "\"record_hex\": \"16030300020102\"") != null);
+
+    const valid = [_]u8{
+        0x16, 0x03, 0x03, 0x00, 0x02,
+        0x01, 0x02,
+    };
+    var record = try parseTlsCiphertextRecord(std.testing.allocator, &valid);
+    defer record.deinit();
+    try std.testing.expectEqual(zcrypto.tls.record.RecordType.handshake, record.header.record_type);
+    try std.testing.expectEqual(@as(u16, 2), record.header.length);
+    try std.testing.expectEqualStrings("\x01\x02", record.encrypted_data);
+
+    const bad_version = [_]u8{ 0x16, 0x03, 0x01, 0x00, 0x00 };
+    try std.testing.expectError(Error.ZquicError.CryptoError, parseTlsCiphertextRecord(std.testing.allocator, &bad_version));
+
+    const bad_length = [_]u8{ 0x16, 0x03, 0x03, 0x00, 0x04, 0x01 };
+    try std.testing.expectError(Error.ZquicError.CryptoError, parseTlsCiphertextRecord(std.testing.allocator, &bad_length));
+}
+
+test "delegated X.509 verification fails closed without trust anchors or valid DER" {
+    try std.testing.expectError(
+        Error.ZquicError.CertificateError,
+        verifyX509CertificateWithRoots(std.testing.allocator, "not der", "example.test", &.{}),
+    );
+
+    const fake_root = [_][]const u8{"not a root"};
+    try std.testing.expectError(
+        Error.ZquicError.CertificateError,
+        verifyX509CertificateWithRoots(std.testing.allocator, "not der", "example.test", &fake_root),
+    );
+}
+
+test "raw Ed25519 certificate verifies caller supplied public key and validity" {
+    const key_pair = try std.crypto.sign.Ed25519.KeyPair.create(null);
+    const message = "certificate-bound handshake message";
+    const signature = try key_pair.sign(message, null);
+
+    const cert = try Certificate.initRawEd25519PublicKey(
+        std.testing.allocator,
+        &key_pair.public_key.bytes,
+        "example.test",
+        "example.test",
+        1_000,
+        2_000,
+    );
+    defer cert.deinit();
+
+    try std.testing.expect(try cert.verifyRawPublicKeyAt(&signature.toBytes(), message, 1_500));
+    try std.testing.expect(!try cert.verifyRawPublicKeyAt(&signature.toBytes(), message, 2_001));
+    try std.testing.expect(!try cert.verifyRawPublicKeyAt(&signature.toBytes(), "wrong message", 1_500));
+}
+
+test "DER certificate verification fails closed until X.509 parser exists" {
+    var cert = try Certificate.init(std.testing.allocator, "fake der");
+    defer cert.deinit();
+
+    const signature = std.mem.zeroes([64]u8);
+    try std.testing.expectError(
+        Error.ZquicError.NotSupported,
+        cert.verifyRawPublicKeyAt(&signature, "message", 1),
+    );
+    try std.testing.expectError(
+        Error.ZquicError.NotSupported,
+        cert.verify(&signature, "message"),
+    );
+}
+
+test "negative QUIC TLS validation rejects wrong ALPN and unsupported cipher suites" {
+    try validateQuicAlpn(default_quic_alpn, "h3");
+    try std.testing.expectError(Error.ZquicError.ProtocolViolation, validateQuicAlpn(default_quic_alpn, "hq-29"));
+    try std.testing.expectError(Error.ZquicError.ProtocolViolation, validateQuicAlpn(default_quic_alpn, ""));
+
+    try validateQuicCipherSuite(.tls_aes_128_gcm_sha256);
+    try validateQuicCipherSuite(.tls_aes_256_gcm_sha384);
+    try validateQuicCipherSuite(.tls_chacha20_poly1305_sha256);
+    try std.testing.expectError(Error.ZquicError.UnsupportedAlgorithm, validateQuicCipherSuite(.tls_aes_128_ccm_sha256));
+    try std.testing.expectError(Error.ZquicError.UnsupportedAlgorithm, validateQuicCipherSuite(.tls_ml_kem_768_aes_128_gcm_sha256));
+}
+
+test "negative handshake rejects out of order messages without transcript mutation" {
+    var tls = ComprehensiveTlsContext.init(std.testing.allocator, true);
+    defer tls.deinit();
+    try tls.initServer(&.{});
+
+    try std.testing.expectEqual(HandshakeState.wait_client_hello, tls.state);
+    try std.testing.expectEqual(@as(usize, 0), tls.handshake_transcript.items.len);
+    try std.testing.expectError(
+        Error.ZquicError.ProtocolViolation,
+        tls.processHandshakeMessage(@intFromEnum(TlsMessageType.server_hello), "server hello"),
+    );
+    try std.testing.expectEqual(HandshakeState.wait_client_hello, tls.state);
+    try std.testing.expectEqual(@as(usize, 0), tls.handshake_transcript.items.len);
+}
+
+test "EncryptedExtensions validates h3 ALPN, requires QUIC parameters, and records negotiated protocol" {
+    var tls = ComprehensiveTlsContext.init(std.testing.allocator, false);
+    defer tls.deinit();
+    tls.state = .wait_encrypted_extensions;
+
+    var tp_buf: [256]u8 = undefined;
+    var tp_writer = std.Io.Writer.fixed(&tp_buf);
+    try CoreTransportParameters.encode(.{}, &tp_writer);
+    const tp_bytes = std.Io.Writer.buffered(&tp_writer);
+
+    const alpn_ext = [_]u8{
+        0x00, 0x10, // application_layer_protocol_negotiation
+        0x00, 0x05, // extension data length
+        0x00, 0x03, // ALPN list length
+        0x02, 'h',
+        '3',
+    };
+    const extensions_len: u16 = @intCast(alpn_ext.len + 4 + tp_bytes.len);
+
+    var ee_buf: [512]u8 = undefined;
+    var writer = std.Io.Writer.fixed(&ee_buf);
+    try writer.writeInt(u16, extensions_len, .big);
+    try writer.writeAll(&alpn_ext);
+    try writer.writeInt(u16, @intFromEnum(TlsExtensionType.quic_transport_parameters), .big);
+    try writer.writeInt(u16, @intCast(tp_bytes.len), .big);
+    try writer.writeAll(tp_bytes);
+    const encrypted_extensions = std.Io.Writer.buffered(&writer);
+
+    try tls.processHandshakeMessage(@intFromEnum(TlsMessageType.encrypted_extensions), encrypted_extensions);
+    try std.testing.expectEqual(HandshakeState.wait_certificate, tls.state);
+    try std.testing.expectEqualStrings(default_quic_alpn, tls.negotiated_alpn.?);
+    try std.testing.expect(tls.peer_quic_transport_params != null);
+}
+
+test "EncryptedExtensions decodes and retains QUIC transport parameters" {
+    var tls = ComprehensiveTlsContext.init(std.testing.allocator, false);
+    defer tls.deinit();
+    tls.state = .wait_encrypted_extensions;
+
+    var tp_buf: [256]u8 = undefined;
+    var tp_writer = std.Io.Writer.fixed(&tp_buf);
+    const expected_params = CoreTransportParameters.TransportParameters{
+        .max_idle_timeout = 12_345,
+        .initial_max_data = 65_536,
+        .initial_max_streams_bidi = 8,
+        .active_connection_id_limit = 4,
+        .disable_active_migration = true,
+    };
+    try CoreTransportParameters.encode(expected_params, &tp_writer);
+    const tp_bytes = std.Io.Writer.buffered(&tp_writer);
+
+    const alpn_ext = [_]u8{
+        0x00, 0x10,
+        0x00, 0x05,
+        0x00, 0x03,
+        0x02, 'h',
+        '3',
+    };
+    const extensions_len: u16 = @intCast(alpn_ext.len + 4 + tp_bytes.len);
+
+    var ee_buf: [512]u8 = undefined;
+    var writer = std.Io.Writer.fixed(&ee_buf);
+    try writer.writeInt(u16, extensions_len, .big);
+    try writer.writeAll(&alpn_ext);
+    try writer.writeInt(u16, @intFromEnum(TlsExtensionType.quic_transport_parameters), .big);
+    try writer.writeInt(u16, @intCast(tp_bytes.len), .big);
+    try writer.writeAll(tp_bytes);
+    const encrypted_extensions = std.Io.Writer.buffered(&writer);
+
+    try tls.processHandshakeMessage(@intFromEnum(TlsMessageType.encrypted_extensions), encrypted_extensions);
+    try std.testing.expectEqual(HandshakeState.wait_certificate, tls.state);
+    try std.testing.expectEqualStrings(default_quic_alpn, tls.negotiated_alpn.?);
+    try std.testing.expect(tls.peer_quic_transport_parameter_bytes != null);
+    const decoded = tls.peer_quic_transport_params.?;
+    try std.testing.expectEqual(@as(u64, 12_345), decoded.max_idle_timeout);
+    try std.testing.expectEqual(@as(u64, 65_536), decoded.initial_max_data);
+    try std.testing.expectEqual(@as(u64, 8), decoded.initial_max_streams_bidi);
+    try std.testing.expectEqual(@as(u64, 4), decoded.active_connection_id_limit);
+    try std.testing.expect(decoded.disable_active_migration);
+
+    const validated = try tls.validatePeerQuicTransportParameters(.{ .peer_role = .client });
+    try std.testing.expectEqual(@as(u64, 12_345), validated.max_idle_timeout);
+}
+
+test "EncryptedExtensions rejects missing or wrong ALPN without transcript mutation" {
+    var tls = ComprehensiveTlsContext.init(std.testing.allocator, false);
+    defer tls.deinit();
+    tls.state = .wait_encrypted_extensions;
+
+    const wrong_alpn = [_]u8{
+        0x00, 0x09,
+        0x00, 0x10,
+        0x00, 0x05,
+        0x00, 0x03,
+        0x02, 'h',
+        'q',
+    };
+
+    try std.testing.expectError(
+        Error.ZquicError.ProtocolViolation,
+        tls.processHandshakeMessage(@intFromEnum(TlsMessageType.encrypted_extensions), &wrong_alpn),
+    );
+    try std.testing.expectEqual(HandshakeState.wait_encrypted_extensions, tls.state);
+    try std.testing.expectEqual(@as(usize, 0), tls.handshake_transcript.items.len);
+
+    const missing_alpn = [_]u8{ 0x00, 0x00 };
+    try std.testing.expectError(
+        Error.ZquicError.ProtocolViolation,
+        tls.processHandshakeMessage(@intFromEnum(TlsMessageType.encrypted_extensions), &missing_alpn),
+    );
+}
+
+test "EncryptedExtensions rejects missing QUIC transport parameters without transcript mutation" {
+    var tls = ComprehensiveTlsContext.init(std.testing.allocator, false);
+    defer tls.deinit();
+    tls.state = .wait_encrypted_extensions;
+
+    const alpn_only = [_]u8{
+        0x00, 0x09,
+        0x00, 0x10,
+        0x00, 0x05,
+        0x00, 0x03,
+        0x02, 'h',
+        '3',
+    };
+
+    try std.testing.expectError(
+        Error.ZquicError.ProtocolViolation,
+        tls.processHandshakeMessage(@intFromEnum(TlsMessageType.encrypted_extensions), &alpn_only),
+    );
+    try std.testing.expectEqual(HandshakeState.wait_encrypted_extensions, tls.state);
+    try std.testing.expectEqual(@as(usize, 0), tls.handshake_transcript.items.len);
+}
+
+test "negative handshake transcript mismatch rejects Finished and preserves transcript" {
+    var tls = ComprehensiveTlsContext.init(std.testing.allocator, false);
+    defer tls.deinit();
+    tls.state = .wait_finished;
+
+    var handshake_keys = try CryptoKeys.init(std.testing.allocator, .tls_aes_128_gcm_sha256);
+    const traffic_secret: [32]u8 = @splat(0x42);
+    try handshake_keys.deriveFromTrafficSecret(&traffic_secret, false);
+    tls.handshake_keys = handshake_keys;
+
+    try tls.handshake_transcript.appendSlice(std.testing.allocator, "accepted transcript");
+    const original_len = tls.handshake_transcript.items.len;
+
+    const bad_finished: [32]u8 = @splat(0x11);
+    try std.testing.expectError(
+        Error.ZquicError.CryptoError,
+        tls.processHandshakeMessage(@intFromEnum(TlsMessageType.finished), &bad_finished),
+    );
+    try std.testing.expectEqual(HandshakeState.wait_finished, tls.state);
+    try std.testing.expectEqual(original_len, tls.handshake_transcript.items.len);
+}
+
+test "negative CertificateVerify fails closed for forged raw public key signature" {
+    var tls = ComprehensiveTlsContext.init(std.testing.allocator, false);
+    defer tls.deinit();
+    tls.state = .wait_certificate_verify;
+
+    const key_pair = try std.crypto.sign.Ed25519.KeyPair.create(null);
+    const cert = try Certificate.initRawEd25519PublicKey(
+        std.testing.allocator,
+        &key_pair.public_key.bytes,
+        "example.test",
+        "example.test",
+        1_000,
+        2_000,
+    );
+    try tls.peer_certificate_chain.append(std.testing.allocator, cert);
+
+    var message: [68]u8 = undefined;
+    message[0] = 0x08;
+    message[1] = 0x07;
+    message[2] = 0;
+    message[3] = 64;
+    @memset(message[4..], 0xaa);
+
+    try std.testing.expectError(
+        Error.ZquicError.CryptoError,
+        tls.processHandshakeMessage(@intFromEnum(TlsMessageType.certificate_verify), &message),
+    );
+    try std.testing.expectEqual(HandshakeState.wait_certificate_verify, tls.state);
+}
+
+test "raw Ed25519 CertificateVerify advances handshake with transcript-bound signature" {
+    const fixture = @embedFile("../../tests/fixtures/tls/certificate-verify-ed25519.json");
+    const expected_verify_input_hex = "20202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020202020544c5320312e332c2073657276657220436572746966696361746556657269667900691e101c9e9763255a33e2da573a8a2f95d5af781589f6c30da25781187cf68d";
+    try std.testing.expect(std.mem.indexOf(u8, fixture, expected_verify_input_hex) != null);
+
+    var tls = ComprehensiveTlsContext.init(std.testing.allocator, false);
+    defer tls.deinit();
+    tls.state = .wait_certificate_verify;
+    try tls.handshake_transcript.appendSlice(std.testing.allocator, "server hello transcript");
+
+    const key_pair = try std.crypto.sign.Ed25519.KeyPair.create(null);
+    const now = Time.nowSeconds();
+    const cert = try Certificate.initRawEd25519PublicKey(
+        std.testing.allocator,
+        &key_pair.public_key.bytes,
+        "example.test",
+        "example.test",
+        now - 10,
+        now + 60,
+    );
+    try tls.peer_certificate_chain.append(std.testing.allocator, cert);
+
+    var verify_input_buffer: [192]u8 = undefined;
+    const verify_input = try tls.buildCertificateVerifyInput(&verify_input_buffer);
+    var expected_verify_input: [130]u8 = undefined;
+    _ = try std.fmt.hexToBytes(&expected_verify_input, expected_verify_input_hex);
+    try std.testing.expectEqualSlices(u8, &expected_verify_input, verify_input);
+
+    const signature = try key_pair.sign(verify_input, null);
+    const signature_bytes = signature.toBytes();
+
+    var message: [68]u8 = undefined;
+    message[0] = 0x08;
+    message[1] = 0x07;
+    message[2] = 0;
+    message[3] = 64;
+    @memcpy(message[4..], &signature_bytes);
+
+    try tls.processHandshakeMessage(@intFromEnum(TlsMessageType.certificate_verify), &message);
+    try std.testing.expectEqual(HandshakeState.wait_finished, tls.state);
+}
+
+test "negative session ticket MAC tampering fails closed" {
+    var tls = ComprehensiveTlsContext.init(std.testing.allocator, false);
+    defer tls.deinit();
+    const shared_secret: [32]u8 = @splat(0x44);
+    tls.shared_secret = try std.testing.allocator.dupe(u8, &shared_secret);
+
+    var ticket = try tls.generateSessionTicket();
+    defer ticket.deinit();
+    try std.testing.expect(try tls.validateSessionTicket(ticket));
+
+    const writable_ticket: []u8 = @constCast(ticket.ticket);
+    writable_ticket[writable_ticket.len - 1] ^= 0x01;
+    try std.testing.expect(!try tls.validateSessionTicket(ticket));
+}
+
+test "negative transport parameters reject bad handshake inputs" {
+    const original_dcid = [_]u8{ 0xde, 0xad, 0xbe, 0xef };
+    const server_initial_scid = [_]u8{ 0x10, 0x11, 0x12, 0x13 };
+
+    const bad_active_cid_limit = CoreTransportParameters.TransportParameters{
+        .original_destination_connection_id = &original_dcid,
+        .initial_source_connection_id = &server_initial_scid,
+        .active_connection_id_limit = 1,
+    };
+    try std.testing.expectError(Error.ZquicError.InvalidArgument, CoreTransportParameters.validateForHandshake(bad_active_cid_limit, .{
+        .peer_role = .server,
+        .original_destination_connection_id = &original_dcid,
+        .initial_source_connection_id = &server_initial_scid,
+    }));
+
+    const mismatched_original_dcid = CoreTransportParameters.TransportParameters{
+        .original_destination_connection_id = &[_]u8{ 0xca, 0xfe },
+        .initial_source_connection_id = &server_initial_scid,
+    };
+    try std.testing.expectError(Error.ZquicError.ProtocolViolation, CoreTransportParameters.validateForHandshake(mismatched_original_dcid, .{
+        .peer_role = .server,
+        .original_destination_connection_id = &original_dcid,
+        .initial_source_connection_id = &server_initial_scid,
+    }));
+}
