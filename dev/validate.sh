@@ -11,8 +11,6 @@ if [ -z "${ZIG:-}" ]; then
         ZIG=zig
     fi
 fi
-export ZIG_GLOBAL_CACHE_DIR="${ZIG_GLOBAL_CACHE_DIR:-/tmp/zig-global-cache}"
-
 echo "========================================"
 echo "  ZQUIC Full Validation"
 echo "========================================"
@@ -22,12 +20,9 @@ echo ""
 
 run_step() {
     local label="$1"
-    local cache_name="$2"
-    shift 2
+    shift
 
-    export ZIG_LOCAL_CACHE_DIR="${ZIG_LOCAL_CACHE_DIR_BASE:-/tmp}/${cache_name}"
     echo "$label"
-    echo "  cache: $ZIG_LOCAL_CACHE_DIR"
     "$@"
     echo "  Done."
     echo ""
@@ -48,14 +43,14 @@ fi
 echo "  Done."
 echo ""
 
-run_step "[2/9] Default build..." zquic-validate-default-build "$ZIG" build --summary all
-run_step "[3/9] Default tests..." zquic-validate-default-test "$ZIG" build test --summary all
-run_step "[4/9] Integration tests..." zquic-validate-integration "$ZIG" build integration-tests --summary all
-run_step "[5/9] Fuzz tests..." zquic-validate-fuzz "$ZIG" build fuzz-tests --summary all
-run_step "[6/9] Minimal build..." zquic-validate-minimal "$ZIG" build -Dhttp3=false -Ddoq=false -Dservices=false -Dvpn=false -Dexamples=false --summary all
-run_step "[7/9] Full feature build..." zquic-validate-full "$ZIG" build -Dservices=true -Dvpn=true -Dmonitoring=true --summary all
-run_step "[8/9] Experimental PQ tests..." zquic-validate-pq-test "$ZIG" build test -Dpost-quantum=true -Dexperimental-crypto=true --summary all
-run_step "[9/9] Experimental PQ build..." zquic-validate-pq-build "$ZIG" build -Dpost-quantum=true -Dexperimental-crypto=true --summary all
+run_step "[2/9] Default build..." "$ZIG" build --summary all
+run_step "[3/9] Default tests..." "$ZIG" build test --summary all
+run_step "[4/9] Integration tests..." "$ZIG" build integration-tests --summary all
+run_step "[5/9] Fuzz tests..." "$ZIG" build fuzz-tests --summary all
+run_step "[6/9] Minimal build..." "$ZIG" build -Dhttp3=false -Ddoq=false -Dservices=false -Dvpn=false -Dexamples=false --summary all
+run_step "[7/9] Full feature build..." "$ZIG" build -Dservices=true -Dvpn=true -Dmonitoring=true --summary all
+run_step "[8/9] Experimental PQ tests..." "$ZIG" build test -Dpost-quantum=true -Dexperimental-crypto=true --summary all
+run_step "[9/9] Experimental PQ build..." "$ZIG" build -Dpost-quantum=true -Dexperimental-crypto=true --summary all
 
 echo "Build summary:"
 echo "  Binaries:"

@@ -36,6 +36,7 @@ pub const Time = @import("utils/time.zig");
 // Crypto and TLS 1.3 support
 pub const Crypto = @import("crypto/tls.zig");
 pub const EnhancedCrypto = @import("crypto/enhanced_tls.zig");
+pub const ComprehensiveTls = @import("crypto/comprehensive_tls.zig");
 pub const Handshake = @import("crypto/handshake.zig");
 pub const Keys = @import("crypto/keys.zig");
 pub const SshQuic = @import("crypto/ssh_quic.zig");
@@ -52,6 +53,7 @@ pub const ConnectionState = enum {
 
 /// Network layer
 pub const Udp = @import("net/udp.zig");
+pub const UdpSocket = Udp.UdpSocket;
 pub const UdpMultiplexer = @import("net/multiplexer.zig");
 pub const Socket = @import("net/socket.zig");
 pub const IPv6 = @import("net/ipv6.zig");

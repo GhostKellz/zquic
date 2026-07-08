@@ -1,0 +1,122 @@
+#!/usr/bin/env python3
+"""Minimal aioquic-backed HTTP/3 client for zquic interop smoke tests."""
+
+import argparse
+import asyncio
+import ssl
+import sys
+from urllib.parse import urlparse
+
+from aioquic.asyncio.client import connect
+from aioquic.asyncio.protocol import QuicConnectionProtocol
+from aioquic.h3.connection import H3_ALPN, H3Connection
+from aioquic.h3.events import DataReceived, HeadersReceived
+from aioquic.quic.configuration import QuicConfiguration
+
+
+class HttpClientProtocol(QuicConnectionProtocol):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.http = H3Connection(self._quic)
+        self.events: asyncio.Queue = asyncio.Queue()
+
+    def quic_event_received(self, event) -> None:
+        for http_event in self.http.handle_event(event):
+            self.events.put_nowait(http_event)
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description="Run one HTTP/3 GET through aioquic and fail on non-2xx/3xx responses.",
+    )
+    parser.add_argument("--insecure", action="store_true", help="disable certificate verification")
+    parser.add_argument("--timeout", type=float, default=10.0, help="overall request timeout in seconds")
+    parser.add_argument("url", help="https URL to fetch")
+    return parser.parse_args()
+
+
+async def request(args: argparse.Namespace) -> int:
+    loop = asyncio.get_running_loop()
+
+    def handle_asyncio_exception(loop, context):
+        exc = context.get("exception")
+        if isinstance(exc, ConnectionError):
+            return
+        loop.default_exception_handler(context)
+
+    loop.set_exception_handler(handle_asyncio_exception)
+
+    parsed = urlparse(args.url)
+    if parsed.scheme != "https" or not parsed.hostname:
+        print("aioquic-client: URL must be an https URL with a host", file=sys.stderr)
+        return 2
+
+    port = parsed.port or 443
+    path = parsed.path or "/"
+    if parsed.query:
+        path = f"{path}?{parsed.query}"
+
+    configuration = QuicConfiguration(is_client=True, alpn_protocols=H3_ALPN)
+    if args.insecure:
+        configuration.verify_mode = ssl.CERT_NONE
+
+    async with connect(
+        parsed.hostname,
+        port,
+        configuration=configuration,
+        create_protocol=HttpClientProtocol,
+        wait_connected=True,
+    ) as protocol:
+        stream_id = protocol._quic.get_next_available_stream_id()
+        authority = parsed.netloc
+        headers = [
+            (b":method", b"GET"),
+            (b":scheme", b"https"),
+            (b":authority", authority.encode("ascii")),
+            (b":path", path.encode("ascii")),
+            (b"user-agent", b"zquic-aioquic-client"),
+        ]
+        protocol.http.send_headers(stream_id=stream_id, headers=headers, end_stream=True)
+        protocol.transmit()
+
+        body = bytearray()
+        status = None
+        finished = asyncio.Event()
+
+        while not finished.is_set():
+            http_event = await asyncio.wait_for(protocol.events.get(), timeout=args.timeout)
+            if isinstance(http_event, HeadersReceived):
+                for name, value in http_event.headers:
+                    if name == b":status":
+                        status = int(value)
+            elif isinstance(http_event, DataReceived):
+                body.extend(http_event.data)
+                if http_event.stream_ended:
+                    finished.set()
+
+        if status is None:
+            print("aioquic-client: response did not include :status", file=sys.stderr)
+            return 1
+
+        sys.stdout.buffer.write(body)
+        if body:
+            sys.stdout.buffer.write(b"\n")
+        print(f"aioquic-client: status={status}", file=sys.stderr)
+        return 0 if 200 <= status < 400 else 1
+
+
+def main() -> int:
+    args = parse_args()
+    try:
+        return asyncio.run(asyncio.wait_for(request(args), timeout=args.timeout))
+    except asyncio.TimeoutError:
+        print("aioquic-client: request timed out", file=sys.stderr)
+        return 1
+    except Exception as exc:
+        detail = str(exc) or exc.__class__.__name__
+        print(f"aioquic-client: {detail}", file=sys.stderr)
+        return 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

@@ -16,7 +16,7 @@ echo "Date: $(date -Iseconds)"
 echo "Platform: $(uname -s) $(uname -m)"
 echo ""
 
-RESULTS_DIR="/tmp/zquic_perf_$(date +%Y%m%d_%H%M%S)"
+RESULTS_DIR="zig-out/perf/zquic_perf_$(date +%Y%m%d_%H%M%S)"
 mkdir -p "$RESULTS_DIR"
 echo "Results directory: $RESULTS_DIR"
 echo ""

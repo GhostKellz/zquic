@@ -210,6 +210,8 @@ pub const TlsContext = struct {
                 if (!self.is_server) {
                     // Generate ClientHello
                     const client_hello = "ClientHello with QUIC transport parameters";
+                    if (self.client_hello) |data| self.allocator.free(data);
+                    self.client_hello = try self.allocator.dupe(u8, client_hello);
                     self.state = .wait_server_hello;
                     return try allocator.dupe(u8, client_hello);
                 } else {
@@ -220,6 +222,8 @@ pub const TlsContext = struct {
                 if (self.is_server) {
                     // Generate ServerHello, Certificate, CertificateVerify, Finished
                     const server_hello = "ServerHello with QUIC transport parameters and Certificate";
+                    if (self.server_hello) |data| self.allocator.free(data);
+                    self.server_hello = try self.allocator.dupe(u8, server_hello);
                     self.state = .wait_finished;
                     return try allocator.dupe(u8, server_hello);
                 } else {
@@ -230,6 +234,8 @@ pub const TlsContext = struct {
                 if (!self.is_server) {
                     // Generate Finished
                     const finished = "Finished message";
+                    if (self.finished) |data| self.allocator.free(data);
+                    self.finished = try self.allocator.dupe(u8, finished);
                     self.state = .completed;
                     try self.deriveApplicationKeys();
                     return try allocator.dupe(u8, finished);

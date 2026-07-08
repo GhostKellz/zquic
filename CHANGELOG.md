@@ -1,3 +1,122 @@
+## [0.9.16] - 2026-07-08
+
+### Changed
+- Updated package metadata to `0.9.16` and raised the minimum Zig baseline to
+  `0.17.0-dev.1257+67b05e521`.
+- Started the packet-crypto facade hardening phase so `PacketCrypto` is backed
+  by real AEAD/header-protection helpers instead of scaffold behavior.
+- `PacketCrypto` now imports available Initial, Handshake, and Application keys
+  from `EnhancedTlsContext`, keeping deterministic helper keys only as a
+  fallback before TLS key derivation has happened.
+- `HandshakeManager` can now synchronize transcript-derived Enhanced TLS packet
+  keys into `PacketCrypto`, with integration coverage for an application packet
+  protected after the local client/server handshake completes.
+- `SuperConnection` now exposes connection-facing protected payload helpers for
+  packet crypto, CRYPTO-frame handshake routing, Comprehensive TLS transport
+  parameter application, packet-number reconstruction, and TLS record-to-
+  handshake-message orchestration tests.
+- `PacketCrypto` and `SuperConnection` now include a constrained raw packet
+  path with short-header header protection, 4-byte packet numbers, owned raw
+  packet queues, and per-level CRYPTO reassembly before handshake processing.
+- Raw packet header protection now masks the actual packet-number offset, with
+  owned-queue coverage for long-header Initial and Handshake CRYPTO packets.
+- `UdpMultiplexer` now routes incoming datagrams into owned raw packet queues
+  and can flush connection-owned protected datagrams back through the socket.
+- Raw packet protection now emits and parses variable-length packet numbers
+  across 1-, 2-, 3-, and 4-byte encodings, including 0-RTT long-header coverage.
+- Comprehensive TLS now exposes an explicit certificate validation policy hook
+  that fails closed for production X.509 mode, allows bounded raw public-key
+  policy checks, and keeps test bypasses explicit.
+- Loss recovery now exposes deterministic PTO probe planning for active
+  packet-number spaces so higher layers can schedule probe packets without
+  guessing from timer state.
+- `SuperConnection` now has a bounded packet scheduler for control frames,
+  pending flow-control frames, and PTO PING probes, all emitted through the
+  protected raw packet path with owned datagram queues.
+- `SuperConnection` now tracks packet spaces for raw packet sends, records
+  received packet numbers, schedules ACK frames, processes incoming ACK frames,
+  and drains stream write buffers into protected STREAM datagrams.
+- `UdpMultiplexer` now exposes nonblocking receive-and-route support, with a
+  localhost UDP loopback test proving protected datagrams move through sockets
+  into the peer owned raw packet queue.
+- Enhanced TLS now exposes RFC 9001 QUIC v1 Initial key derivation pinned to
+  Appendix A.1 vectors for client/server Initial secrets, packet keys, IVs, and
+  header-protection keys.
+- Comprehensive TLS can now deprotect encrypted TLS 1.3 records for the
+  supported AEAD suites, verify tags before exposing plaintext, strip
+  TLSInnerPlaintext padding, and feed decrypted handshake records into the
+  existing state machine.
+- Core crypto now has offset-aware QUIC header-protection helpers pinned
+  against RFC 9001 Appendix A packet vectors for client Initial, server
+  Initial, and ChaCha20 short-header protection.
+- `SuperConnection` now rejects 0-RTT STREAM/DATAGRAM-style early data by
+  default unless `ConnectionParams.accept_early_data` is explicitly enabled.
+- Connection-path integration tests now cover application packet-key rollover:
+  old packets fail after the receiver moves to new keys, and packets work again
+  after the sender moves too.
+- Raw public-key certificate policy can require a hostname and fails closed on
+  subject mismatch or validity-window mismatch.
+- `dev/interop_smoke.sh` now exposes per-category require gates for external
+  clients, version negotiation, servers, HTTP/3, DoQ, and transport-close
+  checks so skipped groups cannot be counted as passing evidence.
+- Added `dev/cli_smoke.sh` to build and run the local `zquic`,
+  `zquic-client`, and `zquic-server` demos as a lightweight release smoke.
+- The Docker verification image is pinned to Alpine 3.24.1 and now installs
+  packaged aioquic, ngtcp2, nghttp3, and MsQuic runtime/development
+  dependencies where Alpine provides them. It now exposes a Docker-contained
+  `aioquic-client` command backed by `py3-aioquic`, plus an `interop-libs`
+  Docker validation variant that compile-links ngtcp2, ngtcp2-gnutls,
+  nghttp3, and MsQuic probes.
+- `dev/docker_validate.sh interop` now forwards all per-category
+  `ZQUIC_INTEROP_REQUIRE_*` gates into the container.
+- Added a separate Debian trixie slim `zquic-interop` Docker service for
+  heavier packaged external tooling. It installs Debian ngtcp2 client/server
+  packages and aioquic, exposes `interop-tools` and `interop-debian` validation
+  variants, and teaches the interop harness to invoke Debian's `gtlsclient`
+  with `HOST PORT URI` arguments.
+- The Debian interop image now source-builds pinned quiche and MsQuic command
+  tools and exposes `interop-source-tools` for command-level smoke validation.
+  MsQuic's `quicinterop` is audited as an installed tool; target-URL client
+  smoke requires an explicit `MSQUIC_CLIENT_CMD`.
+- Added `zquic-interop-probe-server` plus the `interop-zquic-server` Docker
+  validation target. The probe accepts live UDP datagrams from quiche,
+  ngtcp2/gtlsclient, and aioquic, emits qlog-style packet traces, and sends
+  Version Negotiation for unsupported long-header versions. Full external
+  handshake/client success remains pending on the production accept/TLS path.
+- The live interop probe now installs directional RFC 9001 Initial keys,
+  parses QUIC varint Initial token/length fields, decrypts at least one
+  external client Initial in the Debian interop image, and sends an encrypted
+  Initial CONNECTION_CLOSE. The Docker gate now requires that active encrypted
+  response evidence instead of only packet observation.
+- Added `docs/interop/methodology.md` with Mermaid diagrams, evidence levels,
+  Docker architecture, and stable qlog event names for external interop work.
+  The live probe now parses decrypted Initial frames, logs CRYPTO frame
+  summaries, feeds CRYPTO bytes into the server-side handshake manager for
+  evidence, and the Docker gate requires decrypted CRYPTO by default.
+- The live probe now serializes server-side CRYPTO bytes from the handshake
+  manager into a CRYPTO frame, protects it as a server Initial packet, sends it
+  to the external peer, and the Docker gate requires `server_initial_crypto_tx`
+  by default before the final encrypted Initial CONNECTION_CLOSE evidence. The
+  current Docker evidence also shows a follow-up decrypted Initial ACK after
+  the server Initial CRYPTO transmission.
+- `SuperConnection` now has a queue-facing server Initial flight helper that
+  consumes an owned raw client Initial, processes decrypted CRYPTO through the
+  connection reassembly path, schedules pending server CRYPTO as a protected
+  Initial packet, and leaves that packet in the owned outgoing raw queue for
+  socket egress.
+- `zquic-interop-probe-server` now sends `server_initial_crypto_tx` through the
+  `SuperConnection` owned raw queue helper while preserving the existing qlog
+  evidence taxonomy.
+- `SuperConnection` now exposes a generic pending-CRYPTO scheduler for explicit
+  encryption levels. Integration coverage proves pending handshake bytes can be
+  serialized into a CRYPTO frame, protected as a Handshake packet, queued as an
+  owned raw packet, and decrypted by the peer.
+- The v0.9.16 interop docs now pin the release evidence boundary: live Docker
+  evidence covers external Initial decrypt, CRYPTO observation, protected
+  server Initial CRYPTO, and encrypted Initial CONNECTION_CLOSE; live external
+  Handshake-space completion and HTTP/3 request/response success remain future
+  gates.
+
 ## [0.9.15] - 2026-06-23
 
 ### Added

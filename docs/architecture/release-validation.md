@@ -28,7 +28,12 @@ flowchart TD
 | Full validation | `./dev/validate.sh` |
 | Docker release | `./dev/docker_validate.sh release` |
 | Docker valgrind | `./dev/docker_validate.sh valgrind` |
+| Docker interop libraries | `./dev/docker_validate.sh interop-libs` |
 | Docker interop | `./dev/docker_validate.sh interop` |
+| Docker Debian interop tools | `./dev/docker_validate.sh interop-tools` |
+| Docker source-built interop tools | `./dev/docker_validate.sh interop-source-tools` |
+| Docker Debian interop smoke | `./dev/docker_validate.sh interop-debian` |
+| Docker zquic server probe | `./dev/docker_validate.sh interop-zquic-server` |
 | Consumer smoke | `./dev/consumer_smoke_test.sh` |
 
 `./dev/docker_validate.sh interop` forwards `ZQUIC_INTEROP_*`,
@@ -36,6 +41,37 @@ flowchart TD
 `ZQUIC_INTEROP_REQUIRE_TRANSPORT_CLOSE=1` when a release gate must fail unless
 at least one stateless-reset, Retry, CONNECTION_CLOSE, or draining command runs
 against an installed external implementation.
+
+The Docker verification image is pinned to Alpine 3.24.1 and installs packaged
+`py3-aioquic`, ngtcp2, nghttp3, and MsQuic runtime/development dependencies.
+The image exposes a repo-provided `aioquic-client` command backed by Alpine's
+`py3-aioquic` package, and `./dev/docker_validate.sh interop-libs` compiles
+and links minimal probes for ngtcp2, ngtcp2-gnutls, nghttp3, and MsQuic. Alpine
+does not currently provide runnable `quiche-client`, `h3client`,
+`ngtcp2-client`, or `quicinterop` entrypoints in this image. Audit the
+container with `docker/interop-tools.sh` before counting an interop run as
+external release evidence.
+
+The heavier `zquic-interop` service uses Debian trixie slim and installs
+Debian-packaged ngtcp2 client/server tooling plus aioquic. It exposes
+`gtlsclient` for ngtcp2 client smoke checks without installing those tools on
+the host. It also source-builds pinned quiche and MsQuic command-line tools
+inside the image so `quiche-client`, `quicinterop`, and related commands can be
+audited by the interop harness. `quicinterop` is an interop matrix/tooling
+entrypoint, not a generic target-URL client; set `MSQUIC_CLIENT_CMD` to a
+concrete MsQuic client invocation before counting MsQuic client evidence.
+
+`./dev/docker_validate.sh interop-zquic-server` starts the live
+`zquic-interop-probe-server` UDP endpoint, runs quiche, ngtcp2/gtlsclient, and
+aioquic against it from the Debian image, and requires qlog-style evidence that
+zquic received external Initial datagrams, decrypted at least one Initial,
+observed a CRYPTO frame, sent protected server Initial CRYPTO from the
+connection-owned outgoing raw queue, and sent an encrypted Initial
+CONNECTION_CLOSE. It is packet-level live interop evidence, not full handshake
+or HTTP/3 success; the external clients currently time out or fail the
+handshake because the production accept loop, Handshake-space flight, ALPN, and
+application response path are still pending. See
+`docs/interop/methodology.md` for the evidence ladder and qlog event taxonomy.
 
 ## Docker Output Cleanup
 
@@ -46,10 +82,5 @@ configuration. Restore ownership from the repository root:
 sudo chown -R "$(id -u):$(id -g)" .zig-cache zig-cache zig-out 2>/dev/null || true
 ```
 
-Prefer `/tmp` cache directories for local validation when possible:
-
-```bash
-env ZIG_GLOBAL_CACHE_DIR=/tmp/zig-global-cache \
-    ZIG_LOCAL_CACHE_DIR=/tmp/zquic-zig-cache \
-    /opt/zig-dev/zig build test --summary all
-```
+Local validation should use Zig's normal repo-local `.zig-cache` and `zig-out`
+outputs.

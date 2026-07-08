@@ -32,6 +32,51 @@ pub const PacketNumberSpace = enum {
     application,
 };
 
+pub fn packetNumberSpace(packet_type: PacketType) PacketNumberSpace {
+    return switch (packet_type) {
+        .initial, .retry, .version_negotiation => .initial,
+        .handshake => .handshake,
+        .zero_rtt, .one_rtt => .application,
+    };
+}
+
+pub fn readTruncatedPacketNumber(bytes: []const u8) Error.ZquicError!u64 {
+    if (bytes.len == 0 or bytes.len > 4) return Error.ZquicError.InvalidPacket;
+
+    var value: u64 = 0;
+    for (bytes) |byte| {
+        value = (value << 8) | byte;
+    }
+    return value;
+}
+
+/// Reconstruct a full packet number from the truncated packet number bits.
+///
+/// Implements RFC 9000 Appendix A using the largest successfully processed
+/// packet number in the same packet number space.
+pub fn reconstructPacketNumber(
+    largest_processed: ?u64,
+    truncated_packet_number: u64,
+    packet_number_len: u8,
+) Error.ZquicError!u64 {
+    if (packet_number_len == 0 or packet_number_len > 4) return Error.ZquicError.InvalidPacket;
+
+    const packet_number_bits = @as(u6, @intCast(packet_number_len * 8));
+    const packet_number_window = @as(u64, 1) << packet_number_bits;
+    const packet_number_half_window = packet_number_window / 2;
+    const packet_number_mask = packet_number_window - 1;
+    const expected_packet_number = (largest_processed orelse 0) + 1;
+
+    var candidate = (expected_packet_number & ~packet_number_mask) | truncated_packet_number;
+    if (candidate + packet_number_half_window <= expected_packet_number) {
+        candidate += packet_number_window;
+    } else if (candidate > expected_packet_number + packet_number_half_window and candidate >= packet_number_window) {
+        candidate -= packet_number_window;
+    }
+
+    return candidate;
+}
+
 /// Connection ID
 pub const ConnectionId = struct {
     data: [20]u8,
@@ -543,4 +588,24 @@ test "stateless reset token matcher requires minimum packet length and token mat
 
     const too_short = [_]u8{ 0x41, 0xaa, 0xbb };
     try std.testing.expect(!StatelessReset.matches(&too_short, &expected_token));
+}
+
+test "packet number reconstruction follows expected packet number window" {
+    try std.testing.expectEqual(@as(u64, 0xabcd), try reconstructPacketNumber(null, 0xabcd, 2));
+    try std.testing.expectEqual(@as(u64, 0xabe8), try reconstructPacketNumber(0xabe7, 0xe8, 1));
+    try std.testing.expectEqual(@as(u64, 0xac12), try reconstructPacketNumber(0xabe7, 0x12, 1));
+    try std.testing.expectEqual(@as(u64, 0xabf0), try reconstructPacketNumber(0xabe7, 0xf0, 1));
+    try std.testing.expectEqual(@as(u64, 0x01000010), try reconstructPacketNumber(0x00fffff0, 0x10, 1));
+    try std.testing.expectEqual(@as(u64, 0x12345678), try reconstructPacketNumber(0x12340000, 0x5678, 2));
+    try std.testing.expectError(Error.ZquicError.InvalidPacket, reconstructPacketNumber(0, 0, 0));
+    try std.testing.expectError(Error.ZquicError.InvalidPacket, reconstructPacketNumber(0, 0, 5));
+}
+
+test "truncated packet number reader accepts one to four bytes" {
+    try std.testing.expectEqual(@as(u64, 0x12), try readTruncatedPacketNumber(&[_]u8{0x12}));
+    try std.testing.expectEqual(@as(u64, 0x1234), try readTruncatedPacketNumber(&[_]u8{ 0x12, 0x34 }));
+    try std.testing.expectEqual(@as(u64, 0x123456), try readTruncatedPacketNumber(&[_]u8{ 0x12, 0x34, 0x56 }));
+    try std.testing.expectEqual(@as(u64, 0x12345678), try readTruncatedPacketNumber(&[_]u8{ 0x12, 0x34, 0x56, 0x78 }));
+    try std.testing.expectError(Error.ZquicError.InvalidPacket, readTruncatedPacketNumber(&.{}));
+    try std.testing.expectError(Error.ZquicError.InvalidPacket, readTruncatedPacketNumber(&[_]u8{ 1, 2, 3, 4, 5 }));
 }

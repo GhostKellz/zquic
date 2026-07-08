@@ -122,6 +122,29 @@ pub const Connection = struct {
 };
 ```
 
+### Advanced Raw Packet Helpers
+
+`SuperConnection` also exposes raw-packet queue helpers used by the interop
+probe, UDP multiplexer, and packet-protection integration tests. These helpers
+operate on protected datagram bytes and explicit encryption levels, so they are
+intended for connection-loop, transport, and interop harness code rather than
+normal application request/response handling.
+
+Current advanced helpers include:
+
+- `queueIncomingRawPacket()` and `drainOutgoingRawPackets()` for owned datagram
+  queue handoff;
+- `sendProtectedRawPacket()` and `scheduleFramesAsProtectedRawPacket()` for
+  protected packet emission from serialized frame payloads;
+- `schedulePendingCryptoAsProtectedRawPacket()` for scheduling pending
+  handshake-manager CRYPTO bytes at Initial or Handshake protection levels; and
+- `processNextIncomingInitialCryptoAndScheduleServerFlight()` for the bounded
+  server Initial flight path used by the live interop probe.
+
+These APIs are useful release evidence for packet protection and socket-path
+work, but they do not replace the future production accept loop that must drive
+live Handshake-space flight and application protocol success.
+
 ### ConnectionConfig
 
 Configuration for QUIC connections.

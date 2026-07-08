@@ -111,6 +111,11 @@ pub fn build(b: *std.Build) !void {
             }),
         });
         b.installArtifact(client_exe);
+        const run_client_step = b.step("run-client", "Run the client example");
+        const run_client_cmd = b.addRunArtifact(client_exe);
+        run_client_cmd.step.dependOn(b.getInstallStep());
+        run_client_cmd.addPassthruArgs();
+        run_client_step.dependOn(&run_client_cmd.step);
 
         const server_exe = b.addExecutable(.{
             .name = "zquic-server",
@@ -124,6 +129,24 @@ pub fn build(b: *std.Build) !void {
             }),
         });
         b.installArtifact(server_exe);
+        const run_server_step = b.step("run-server", "Run the server example");
+        const run_server_cmd = b.addRunArtifact(server_exe);
+        run_server_cmd.step.dependOn(b.getInstallStep());
+        run_server_cmd.addPassthruArgs();
+        run_server_step.dependOn(&run_server_cmd.step);
+
+        const interop_probe_server_exe = b.addExecutable(.{
+            .name = "zquic-interop-probe-server",
+            .root_module = b.createModule(.{
+                .root_source_file = b.path("examples/interop_probe_server.zig"),
+                .target = target,
+                .optimize = optimize,
+                .imports = &.{
+                    .{ .name = "zquic", .module = mod },
+                },
+            }),
+        });
+        b.installArtifact(interop_probe_server_exe);
 
         // HTTP/3 server example (only if HTTP/3 is enabled)
         if (enable_http3) {
@@ -215,17 +238,6 @@ pub fn build(b: *std.Build) !void {
     const run_cmd = b.addRunArtifact(exe);
     run_step.dependOn(&run_cmd.step);
     run_cmd.step.dependOn(b.getInstallStep());
-
-    // Additional run steps for examples (only if examples are enabled)
-    if (enable_examples) {
-        // Note: Need to reference the executables created above, not dependencies
-        // This is a placeholder - would need to be implemented properly
-        // For now, commenting out to avoid build errors
-
-        // const run_client_step = b.step("run-client", "Run the client example");
-        // const run_server_step = b.step("run-server", "Run the server example");
-        // ... other run steps would go here
-    }
 
     // Allow passing arguments to the application with `zig build run -- <args>`.
     run_cmd.addPassthruArgs();

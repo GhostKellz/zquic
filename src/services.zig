@@ -132,8 +132,7 @@ pub const ServiceUtils = struct {
         _ = allocator;
         _ = service_type;
         _ = config;
-        // Implementation would register and start the service
-        return undefined;
+        return error.NotSupported;
     }
 
     /// Unregister a service

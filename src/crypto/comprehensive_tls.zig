@@ -25,12 +25,49 @@ pub const default_quic_alpn = "h3";
 
 pub const TlsCiphertextRecord = zcrypto.tls.record.TlsCiphertext;
 
+pub const CertificateValidationMode = enum {
+    production_x509,
+    raw_public_key,
+    test_insecure,
+};
+
+pub const CertificateValidationPolicy = struct {
+    mode: CertificateValidationMode = .production_x509,
+    hostname: ?[]const u8 = null,
+    validation_time: ?i64 = null,
+
+    pub fn production(hostname: []const u8) CertificateValidationPolicy {
+        return .{ .mode = .production_x509, .hostname = hostname };
+    }
+
+    pub fn rawPublicKey(validation_time: i64) CertificateValidationPolicy {
+        return .{ .mode = .raw_public_key, .validation_time = validation_time };
+    }
+
+    pub fn rawPublicKeyForHost(hostname: []const u8, validation_time: i64) CertificateValidationPolicy {
+        return .{ .mode = .raw_public_key, .hostname = hostname, .validation_time = validation_time };
+    }
+
+    pub fn testInsecure() CertificateValidationPolicy {
+        return .{ .mode = .test_insecure };
+    }
+};
+
 pub fn parseTlsCiphertextRecord(
     allocator: std.mem.Allocator,
     bytes: []const u8,
 ) Error.ZquicError!TlsCiphertextRecord {
     return zcrypto.tls.record.TlsCiphertext.fromBytes(allocator, bytes) catch Error.ZquicError.CryptoError;
 }
+
+pub const DeprotectedTlsRecord = struct {
+    record_type: zcrypto.tls.record.RecordType,
+    plaintext: []u8,
+
+    pub fn deinit(self: *DeprotectedTlsRecord, allocator: std.mem.Allocator) void {
+        allocator.free(self.plaintext);
+    }
+};
 
 pub fn verifyX509CertificateWithRoots(
     allocator: std.mem.Allocator,
@@ -603,7 +640,7 @@ pub const SessionTicket = struct {
 
     pub fn deinit(self: *Self) void {
         self.allocator.free(self.ticket);
-        std.crypto.secureZero(u8, self.resumption_secret);
+        std.crypto.secureZero(u8, @constCast(self.resumption_secret));
         self.allocator.free(self.resumption_secret);
     }
 
@@ -710,6 +747,27 @@ pub const ComprehensiveTlsContext = struct {
         };
     }
 
+    pub fn validatePeerCertificatePolicy(self: *const Self, policy: CertificateValidationPolicy) Error.ZquicError!void {
+        switch (policy.mode) {
+            .test_insecure => return,
+            .production_x509 => {
+                _ = policy.hostname orelse return Error.ZquicError.CertificateError;
+                if (self.peer_certificate_chain.items.len == 0) return Error.ZquicError.CertificateError;
+                return Error.ZquicError.NotSupported;
+            },
+            .raw_public_key => {
+                if (self.peer_certificate_chain.items.len == 0) return Error.ZquicError.CertificateError;
+                const timestamp = policy.validation_time orelse Time.nowSeconds();
+                const cert = &self.peer_certificate_chain.items[0];
+                if (cert.encoding != .raw_public_key) return Error.ZquicError.CertificateError;
+                if (policy.hostname) |hostname| {
+                    if (!std.ascii.eqlIgnoreCase(cert.subject, hostname)) return Error.ZquicError.CertificateError;
+                }
+                if (!cert.isValidAt(timestamp)) return Error.ZquicError.CertificateError;
+            },
+        }
+    }
+
     pub fn deinit(self: *Self) void {
         // Clean up transport parameters
         self.transport_params.deinit(self.allocator);
@@ -747,12 +805,12 @@ pub const ComprehensiveTlsContext = struct {
 
         // Clean up sensitive key material
         if (self.resumption_secret) |secret| {
-            std.crypto.secureZero(u8, secret);
+            std.crypto.secureZero(u8, @constCast(secret));
             self.allocator.free(secret);
         }
 
         if (self.private_key) |key| {
-            std.crypto.secureZero(u8, key);
+            std.crypto.secureZero(u8, @constCast(key));
             self.allocator.free(key);
         }
 
@@ -765,12 +823,12 @@ pub const ComprehensiveTlsContext = struct {
         }
 
         if (self.shared_secret) |secret| {
-            std.crypto.secureZero(u8, secret);
+            std.crypto.secureZero(u8, @constCast(secret));
             self.allocator.free(secret);
         }
 
         if (self.pq_private_key) |key| {
-            std.crypto.secureZero(u8, key);
+            std.crypto.secureZero(u8, @constCast(key));
             self.allocator.free(key);
         }
 
@@ -783,7 +841,7 @@ pub const ComprehensiveTlsContext = struct {
         }
 
         if (self.pq_shared_secret) |secret| {
-            std.crypto.secureZero(u8, secret);
+            std.crypto.secureZero(u8, @constCast(secret));
             self.allocator.free(secret);
         }
 
@@ -864,6 +922,157 @@ pub const ComprehensiveTlsContext = struct {
         try self.handshake_transcript.append(self.allocator, message_type);
         try self.handshake_transcript.writer(self.allocator).writeInt(u24, @intCast(message.len), .big);
         try self.handshake_transcript.appendSlice(self.allocator, message);
+    }
+
+    /// Parse a TLS ciphertext record with zcrypto's record layer and feed any
+    /// contained plaintext handshake messages into the comprehensive state
+    /// machine. This adapter is for record-orchestration tests and future live
+    /// TLS wiring; encrypted TLSInnerPlaintext deprotection remains outside this
+    /// helper.
+    pub fn processTlsCiphertextRecord(self: *Self, record_bytes: []const u8) Error.ZquicError!usize {
+        var record = try parseTlsCiphertextRecord(self.allocator, record_bytes);
+        defer record.deinit();
+
+        if (record.header.record_type != zcrypto.tls.record.RecordType.handshake) {
+            return Error.ZquicError.ProtocolViolation;
+        }
+
+        return self.processPlaintextHandshakeRecordData(record.encrypted_data);
+    }
+
+    pub fn decryptTlsCiphertextRecord(
+        self: *Self,
+        record_bytes: []const u8,
+        keys: *const CryptoKeys,
+        from_client: bool,
+        sequence_number: u64,
+    ) Error.ZquicError!DeprotectedTlsRecord {
+        if (record_bytes.len < 5) return Error.ZquicError.CryptoError;
+
+        var record = try parseTlsCiphertextRecord(self.allocator, record_bytes);
+        defer record.deinit();
+
+        if (record.header.record_type != zcrypto.tls.record.RecordType.application_data) {
+            return Error.ZquicError.ProtocolViolation;
+        }
+        if (record.encrypted_data.len < 17) return Error.ZquicError.CryptoError;
+
+        const key = if (from_client) keys.client_write_key else keys.server_write_key;
+        const iv = if (from_client) keys.client_write_iv else keys.server_write_iv;
+        if (iv.len != 12) return Error.ZquicError.CryptoError;
+
+        var nonce: [12]u8 = undefined;
+        @memcpy(&nonce, iv[0..12]);
+        var sequence_bytes: [8]u8 = undefined;
+        std.mem.writeInt(u64, &sequence_bytes, sequence_number, .big);
+        for (0..8) |i| {
+            nonce[4 + i] ^= sequence_bytes[i];
+        }
+
+        const tag_start = record.encrypted_data.len - 16;
+        const encrypted_content = record.encrypted_data[0..tag_start];
+        var tag: [16]u8 = undefined;
+        @memcpy(&tag, record.encrypted_data[tag_start..]);
+
+        const plaintext = self.allocator.alloc(u8, encrypted_content.len) catch return Error.ZquicError.OutOfMemory;
+        errdefer self.allocator.free(plaintext);
+
+        switch (keys.cipher_suite) {
+            .tls_aes_128_gcm_sha256, .tls_ml_kem_768_aes_128_gcm_sha256 => {
+                if (key.len < 16) return Error.ZquicError.CryptoError;
+                std.crypto.aead.aes_gcm.Aes128Gcm.decrypt(
+                    plaintext,
+                    encrypted_content,
+                    tag,
+                    record_bytes[0..5],
+                    nonce,
+                    key[0..16].*,
+                ) catch return Error.ZquicError.CryptoError;
+            },
+            .tls_aes_256_gcm_sha384, .tls_ml_kem_1024_aes_256_gcm_sha384 => {
+                if (key.len < 32) return Error.ZquicError.CryptoError;
+                std.crypto.aead.aes_gcm.Aes256Gcm.decrypt(
+                    plaintext,
+                    encrypted_content,
+                    tag,
+                    record_bytes[0..5],
+                    nonce,
+                    key[0..32].*,
+                ) catch return Error.ZquicError.CryptoError;
+            },
+            .tls_chacha20_poly1305_sha256, .tls_ml_kem_768_chacha20_poly1305_sha256 => {
+                if (key.len < 32) return Error.ZquicError.CryptoError;
+                std.crypto.aead.chacha_poly.ChaCha20Poly1305.decrypt(
+                    plaintext,
+                    encrypted_content,
+                    tag,
+                    record_bytes[0..5],
+                    nonce,
+                    key[0..32].*,
+                ) catch return Error.ZquicError.CryptoError;
+            },
+            else => return Error.ZquicError.UnsupportedAlgorithm,
+        }
+
+        var content_end = plaintext.len;
+        while (content_end > 0 and plaintext[content_end - 1] == 0) {
+            content_end -= 1;
+        }
+        if (content_end == 0) return Error.ZquicError.CryptoError;
+
+        const inner_type = switch (plaintext[content_end - 1]) {
+            20 => zcrypto.tls.record.RecordType.change_cipher_spec,
+            21 => zcrypto.tls.record.RecordType.alert,
+            22 => zcrypto.tls.record.RecordType.handshake,
+            23 => zcrypto.tls.record.RecordType.application_data,
+            else => return Error.ZquicError.ProtocolViolation,
+        };
+
+        const content = self.allocator.alloc(u8, content_end - 1) catch return Error.ZquicError.OutOfMemory;
+        @memcpy(content, plaintext[0 .. content_end - 1]);
+        self.allocator.free(plaintext);
+
+        return .{
+            .record_type = inner_type,
+            .plaintext = content,
+        };
+    }
+
+    pub fn processEncryptedTlsCiphertextRecord(
+        self: *Self,
+        record_bytes: []const u8,
+        keys: *const CryptoKeys,
+        from_client: bool,
+        sequence_number: u64,
+    ) Error.ZquicError!usize {
+        var record = try self.decryptTlsCiphertextRecord(record_bytes, keys, from_client, sequence_number);
+        defer record.deinit(self.allocator);
+
+        if (record.record_type != zcrypto.tls.record.RecordType.handshake) {
+            return Error.ZquicError.ProtocolViolation;
+        }
+
+        return self.processPlaintextHandshakeRecordData(record.plaintext);
+    }
+
+    fn processPlaintextHandshakeRecordData(self: *Self, data: []const u8) Error.ZquicError!usize {
+        var offset: usize = 0;
+        var processed: usize = 0;
+        while (offset < data.len) {
+            if (offset + 4 > data.len) return Error.ZquicError.CryptoError;
+            const message_type = data[offset];
+            const message_len = (@as(usize, data[offset + 1]) << 16) |
+                (@as(usize, data[offset + 2]) << 8) |
+                @as(usize, data[offset + 3]);
+            offset += 4;
+
+            if (offset + message_len > data.len) return Error.ZquicError.CryptoError;
+            try self.processHandshakeMessage(message_type, data[offset .. offset + message_len]);
+            offset += message_len;
+            processed += 1;
+        }
+
+        return processed;
     }
 
     fn processHandshakeMessageUnchecked(self: *Self, message_type: u8, message: []const u8) !void {
@@ -1392,6 +1601,184 @@ test "TLS record parser delegates to zcrypto and fails closed on malformed recor
     try std.testing.expectError(Error.ZquicError.CryptoError, parseTlsCiphertextRecord(std.testing.allocator, &bad_length));
 }
 
+test "TLS record adapter feeds plaintext handshake messages into state machine" {
+    var tls = ComprehensiveTlsContext.init(std.testing.allocator, true);
+    defer tls.deinit();
+
+    const client_hello_record = [_]u8{
+        0x16, 0x03, 0x03, 0x00, 0x04,
+        0x01, 0x00, 0x00, 0x00,
+    };
+
+    try std.testing.expectEqual(@as(usize, 1), try tls.processTlsCiphertextRecord(&client_hello_record));
+    try std.testing.expectEqual(HandshakeState.wait_server_hello, tls.state);
+    try std.testing.expectEqual(@as(usize, 4), tls.handshake_transcript.items.len);
+
+    const malformed_message = [_]u8{
+        0x16, 0x03, 0x03, 0x00, 0x04,
+        0x01, 0x00, 0x00, 0x01,
+    };
+    try std.testing.expectError(Error.ZquicError.CryptoError, tls.processTlsCiphertextRecord(&malformed_message));
+
+    const alert_record = [_]u8{
+        0x15, 0x03, 0x03, 0x00, 0x02,
+        0x02, 0x28,
+    };
+    try std.testing.expectError(Error.ZquicError.ProtocolViolation, tls.processTlsCiphertextRecord(&alert_record));
+}
+
+fn makeEncryptedTlsRecordForTest(
+    allocator: std.mem.Allocator,
+    keys: *const CryptoKeys,
+    from_client: bool,
+    sequence_number: u64,
+    inner_record_type: u8,
+    plaintext: []const u8,
+    padding_len: usize,
+) Error.ZquicError![]u8 {
+    const inner = allocator.alloc(u8, plaintext.len + 1 + padding_len) catch return Error.ZquicError.OutOfMemory;
+    defer allocator.free(inner);
+    @memcpy(inner[0..plaintext.len], plaintext);
+    inner[plaintext.len] = inner_record_type;
+    @memset(inner[plaintext.len + 1 ..], 0);
+
+    const ciphertext_len = inner.len + 16;
+    const record = allocator.alloc(u8, 5 + ciphertext_len) catch return Error.ZquicError.OutOfMemory;
+    errdefer allocator.free(record);
+
+    record[0] = @intFromEnum(zcrypto.tls.record.RecordType.application_data);
+    record[1] = 0x03;
+    record[2] = 0x03;
+    std.mem.writeInt(u16, record[3..][0..2], @intCast(ciphertext_len), .big);
+
+    const key = if (from_client) keys.client_write_key else keys.server_write_key;
+    const iv = if (from_client) keys.client_write_iv else keys.server_write_iv;
+
+    var nonce: [12]u8 = undefined;
+    @memcpy(&nonce, iv[0..12]);
+    var sequence_bytes: [8]u8 = undefined;
+    std.mem.writeInt(u64, &sequence_bytes, sequence_number, .big);
+    for (0..8) |i| {
+        nonce[4 + i] ^= sequence_bytes[i];
+    }
+
+    const encrypted_content = record[5 .. 5 + inner.len];
+    const tag_bytes = record[5 + inner.len ..][0..16];
+    var tag: [16]u8 = undefined;
+
+    switch (keys.cipher_suite) {
+        .tls_aes_128_gcm_sha256 => {
+            std.crypto.aead.aes_gcm.Aes128Gcm.encrypt(
+                encrypted_content,
+                &tag,
+                inner,
+                record[0..5],
+                nonce,
+                key[0..16].*,
+            );
+        },
+        .tls_aes_256_gcm_sha384 => {
+            std.crypto.aead.aes_gcm.Aes256Gcm.encrypt(
+                encrypted_content,
+                &tag,
+                inner,
+                record[0..5],
+                nonce,
+                key[0..32].*,
+            );
+        },
+        .tls_chacha20_poly1305_sha256 => {
+            std.crypto.aead.chacha_poly.ChaCha20Poly1305.encrypt(
+                encrypted_content,
+                &tag,
+                inner,
+                record[0..5],
+                nonce,
+                key[0..32].*,
+            );
+        },
+        else => return Error.ZquicError.UnsupportedAlgorithm,
+    }
+
+    @memcpy(tag_bytes, &tag);
+    return record;
+}
+
+test "encrypted TLS record deprotection verifies tag and strips inner padding" {
+    var tls = ComprehensiveTlsContext.init(std.testing.allocator, true);
+    defer tls.deinit();
+
+    var keys = try CryptoKeys.init(std.testing.allocator, .tls_aes_128_gcm_sha256);
+    defer keys.deinit();
+    @memset(keys.client_write_key, 0x11);
+    @memset(keys.client_write_iv, 0x22);
+
+    const handshake_message = [_]u8{ 0x01, 0x00, 0x00, 0x00 };
+    const record = try makeEncryptedTlsRecordForTest(
+        std.testing.allocator,
+        &keys,
+        true,
+        7,
+        @intFromEnum(zcrypto.tls.record.RecordType.handshake),
+        &handshake_message,
+        3,
+    );
+    defer std.testing.allocator.free(record);
+
+    var deprotected = try tls.decryptTlsCiphertextRecord(record, &keys, true, 7);
+    defer deprotected.deinit(std.testing.allocator);
+    try std.testing.expectEqual(zcrypto.tls.record.RecordType.handshake, deprotected.record_type);
+    try std.testing.expectEqualSlices(u8, &handshake_message, deprotected.plaintext);
+
+    const processed = try tls.processEncryptedTlsCiphertextRecord(record, &keys, true, 7);
+    try std.testing.expectEqual(@as(usize, 1), processed);
+    try std.testing.expectEqual(HandshakeState.wait_server_hello, tls.state);
+}
+
+test "encrypted TLS record deprotection rejects tampering and invalid inner type" {
+    var tls = ComprehensiveTlsContext.init(std.testing.allocator, true);
+    defer tls.deinit();
+
+    var keys = try CryptoKeys.init(std.testing.allocator, .tls_aes_128_gcm_sha256);
+    defer keys.deinit();
+    @memset(keys.client_write_key, 0x33);
+    @memset(keys.client_write_iv, 0x44);
+
+    const handshake_message = [_]u8{ 0x01, 0x00, 0x00, 0x00 };
+    const record = try makeEncryptedTlsRecordForTest(
+        std.testing.allocator,
+        &keys,
+        true,
+        3,
+        @intFromEnum(zcrypto.tls.record.RecordType.handshake),
+        &handshake_message,
+        0,
+    );
+    defer std.testing.allocator.free(record);
+
+    record[record.len - 1] ^= 0x01;
+    try std.testing.expectError(
+        Error.ZquicError.CryptoError,
+        tls.decryptTlsCiphertextRecord(record, &keys, true, 3),
+    );
+    record[record.len - 1] ^= 0x01;
+
+    const invalid_inner = try makeEncryptedTlsRecordForTest(
+        std.testing.allocator,
+        &keys,
+        true,
+        4,
+        0x19,
+        &handshake_message,
+        0,
+    );
+    defer std.testing.allocator.free(invalid_inner);
+    try std.testing.expectError(
+        Error.ZquicError.ProtocolViolation,
+        tls.decryptTlsCiphertextRecord(invalid_inner, &keys, true, 4),
+    );
+}
+
 test "delegated X.509 verification fails closed without trust anchors or valid DER" {
     try std.testing.expectError(
         Error.ZquicError.CertificateError,
@@ -1437,6 +1824,47 @@ test "DER certificate verification fails closed until X.509 parser exists" {
     try std.testing.expectError(
         Error.ZquicError.NotSupported,
         cert.verify(&signature, "message"),
+    );
+}
+
+test "certificate validation policy fails closed outside explicit test bypass" {
+    var tls = ComprehensiveTlsContext.init(std.testing.allocator, false);
+    defer tls.deinit();
+
+    try tls.validatePeerCertificatePolicy(.testInsecure());
+    try std.testing.expectError(
+        Error.ZquicError.CertificateError,
+        tls.validatePeerCertificatePolicy(.production("example.test")),
+    );
+    try std.testing.expectError(
+        Error.ZquicError.CertificateError,
+        tls.validatePeerCertificatePolicy(.rawPublicKey(1_500)),
+    );
+
+    const key_pair = try std.crypto.sign.Ed25519.KeyPair.create(null);
+    const raw_cert = try Certificate.initRawEd25519PublicKey(
+        std.testing.allocator,
+        &key_pair.public_key.bytes,
+        "example.test",
+        "example.test",
+        1_000,
+        2_000,
+    );
+    try tls.peer_certificate_chain.append(std.testing.allocator, raw_cert);
+
+    try tls.validatePeerCertificatePolicy(.rawPublicKey(1_500));
+    try tls.validatePeerCertificatePolicy(.rawPublicKeyForHost("EXAMPLE.TEST", 1_500));
+    try std.testing.expectError(
+        Error.ZquicError.CertificateError,
+        tls.validatePeerCertificatePolicy(.rawPublicKey(2_001)),
+    );
+    try std.testing.expectError(
+        Error.ZquicError.CertificateError,
+        tls.validatePeerCertificatePolicy(.rawPublicKeyForHost("wrong.example", 1_500)),
+    );
+    try std.testing.expectError(
+        Error.ZquicError.NotSupported,
+        tls.validatePeerCertificatePolicy(.production("example.test")),
     );
 }
 

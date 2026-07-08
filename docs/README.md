@@ -16,6 +16,7 @@ flowchart TD
     start --> ref["Reference And Integrations"]
     start --> security["Security And Advisories"]
     start --> operations["Operations"]
+    start --> project["Project Plans"]
 
     gs --> quick["quick-start.md"]
     gs --> build["build-config.md"]
@@ -35,6 +36,7 @@ flowchart TD
     features --> crypto["crypto-maturity.md"]
     features --> rfc9001["rfc9001-crypto-audit.md"]
     features --> interop["quic-interop.md"]
+    features --> interopmethod["interop/methodology.md"]
     features --> compliance["http3-doq-compliance.md"]
     features --> ssh["ssh-quic.md"]
     features --> vpn["quic-vpn.md"]
@@ -49,6 +51,8 @@ flowchart TD
     security --> advisories["advisories/*.md"]
 
     operations --> deploy["deployment.md"]
+
+    project --> release0917["release-plan-v0-9-17.md"]
 ```
 
 ## Runtime Shape
@@ -142,6 +146,7 @@ flowchart TD
 - [Crypto Maturity](features/crypto-maturity.md) - stable, draft, and experimental crypto surfaces
 - [RFC 9001 Crypto Audit](features/rfc9001-crypto-audit.md) - packet protection and TLS lifecycle audit
 - [QUIC Interop](features/quic-interop.md) - external stack plan and known gaps
+- [QUIC Interop Methodology](interop/methodology.md) - evidence levels, qlog events, and Docker probe architecture
 - [QUIC Ecosystem](features/quic-ecosystem.md) - quiche, ngtcp2, MsQuic, aioquic positioning
 - [HTTP/3 And DoQ Compliance](features/http3-doq-compliance.md) - RFC 9114/RFC 9250 notes
 - [SSH/QUIC](features/ssh-quic.md) - draft secret-injection integration
@@ -165,6 +170,10 @@ flowchart TD
 ## Operations
 
 - [Deployment Operations](operations/deployment.md) - build profiles, validation, metrics, crypto operations, and incident response
+
+## Project Plans
+
+- [v0.9.17 Release Plan](project/release-plan-v0-9-17.md) - planned Handshake-space and HTTP/3 interop evidence gates
 
 ## Build Profiles
 

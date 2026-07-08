@@ -450,10 +450,12 @@ fn createEmptyResponse(query: *const DnsMessage, allocator: std.mem.Allocator) !
 
 test "DoQ server initialization" {
     const allocator = std.testing.allocator;
+    const unused_cert_path = "doq-test-cert.pem";
+    const unused_key_path = "doq-test-key.pem";
 
     const config = DoQServerConfig{
-        .cert_path = "/tmp/test.crt",
-        .key_path = "/tmp/test.key",
+        .cert_path = unused_cert_path,
+        .key_path = unused_key_path,
     };
 
     // This will succeed with initialization

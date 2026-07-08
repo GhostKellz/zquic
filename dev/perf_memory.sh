@@ -18,12 +18,14 @@ echo ""
 
 # Run unit tests with GPA leak detection
 echo "[2/4] Running tests with memory leak detection..."
-"$ZIG" build test 2>&1 | tee /tmp/zquic_memory_test.log
+mkdir -p zig-out/logs
+MEMORY_LOG="zig-out/logs/zquic_memory_test.log"
+"$ZIG" build test 2>&1 | tee "$MEMORY_LOG"
 echo ""
 
 # Check for leak reports in test output
 echo "[3/4] Analyzing test output for memory issues..."
-if grep -i "leak" /tmp/zquic_memory_test.log; then
+if grep -i "leak" "$MEMORY_LOG"; then
     echo "WARNING: Potential memory leaks detected!"
     echo "Review the output above for details."
 else

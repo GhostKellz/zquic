@@ -10,7 +10,12 @@ UNSUPPORTED_VERSION_URL="${ZQUIC_INTEROP_UNSUPPORTED_VERSION_URL:-$TARGET_URL}"
 EXTERNAL_SERVER_URL="${ZQUIC_INTEROP_EXTERNAL_SERVER_URL:-}"
 ZQUIC_CLIENT_CMD="${ZQUIC_INTEROP_ZQUIC_CLIENT_CMD:-}"
 REQUIRE_RUN="${ZQUIC_INTEROP_REQUIRE_RUN:-0}"
+REQUIRE_CLIENTS="${ZQUIC_INTEROP_REQUIRE_CLIENTS:-0}"
+REQUIRE_VERSION_NEGOTIATION="${ZQUIC_INTEROP_REQUIRE_VERSION_NEGOTIATION:-0}"
+REQUIRE_SERVERS="${ZQUIC_INTEROP_REQUIRE_SERVERS:-0}"
 REQUIRE_TRANSPORT_CLOSE="${ZQUIC_INTEROP_REQUIRE_TRANSPORT_CLOSE:-0}"
+REQUIRE_HTTP3="${ZQUIC_INTEROP_REQUIRE_HTTP3:-0}"
+REQUIRE_DOQ="${ZQUIC_INTEROP_REQUIRE_DOQ:-0}"
 
 ran=0
 skipped=0
@@ -27,7 +32,7 @@ Environment:
   QUICHE_CLIENT_CMD                quiche client override.
   NGTCP2_H3CLIENT_CMD              ngtcp2/nghttp3 h3 client override.
   AIOQUIC_CLIENT_CMD               aioquic client override.
-  MSQUIC_CLIENT_CMD                MsQuic client override.
+  MSQUIC_CLIENT_CMD                Exact MsQuic target-url client command.
   QUICHE_VERSION_NEGOTIATION_CMD   Exact quiche unsupported-version command.
   NGTCP2_VERSION_NEGOTIATION_CMD   Exact ngtcp2 unsupported-version command.
   AIOQUIC_VERSION_NEGOTIATION_CMD  Exact aioquic unsupported-version command.
@@ -46,14 +51,33 @@ Environment:
   DOQ_RCODE_INTEROP_CMD            Exact external DoQ NXDOMAIN/SERVFAIL command.
   DOQ_TIMEOUT_INTEROP_CMD          Exact external DoQ timeout command.
   ZQUIC_INTEROP_REQUIRE_RUN=1      Fail when every case is skipped.
+  ZQUIC_INTEROP_REQUIRE_CLIENTS=1  Fail unless at least one external client
+                                   command runs.
+  ZQUIC_INTEROP_REQUIRE_VERSION_NEGOTIATION=1
+                                   Fail unless at least one unsupported-version
+                                   command runs.
+  ZQUIC_INTEROP_REQUIRE_SERVERS=1  Fail unless the zquic-as-client external
+                                   server check runs.
   ZQUIC_INTEROP_REQUIRE_TRANSPORT_CLOSE=1
                                    Fail unless at least one stateless-reset,
                                    Retry, close, or draining command runs.
+  ZQUIC_INTEROP_REQUIRE_HTTP3=1    Fail unless at least one HTTP/3 interop
+                                   command runs.
+  ZQUIC_INTEROP_REQUIRE_DOQ=1      Fail unless at least one DoQ interop command
+                                   runs.
 EOF
 }
 
 have_cmd() {
     command -v "$1" >/dev/null 2>&1
+}
+
+have_python_module() {
+    python3 - "$1" <<'PY' >/dev/null 2>&1
+import importlib.util
+import sys
+raise SystemExit(0 if importlib.util.find_spec(sys.argv[1]) else 1)
+PY
 }
 
 resolve_cmd() {
@@ -68,12 +92,31 @@ resolve_cmd() {
     local candidate
     for candidate in "$@"; do
         if have_cmd "$candidate"; then
-            printf '%s\n' "$candidate"
+            command -v "$candidate"
             return 0
         fi
     done
 
     return 1
+}
+
+url_parts() {
+    python3 - "$1" <<'PY'
+from urllib.parse import urlparse
+import sys
+
+parsed = urlparse(sys.argv[1])
+host = parsed.hostname or ""
+port = parsed.port or (443 if parsed.scheme == "https" else 80)
+path = parsed.path or "/"
+if parsed.query:
+    path = f"{path}?{parsed.query}"
+if not host:
+    raise SystemExit(1)
+print(host)
+print(port)
+print(path)
+PY
 }
 
 skip_case() {
@@ -109,31 +152,62 @@ run_shell_case() {
     fi
 }
 
+run_shell_case_reject_output() {
+    local name="$1"
+    local command_line="$2"
+    local reject_pattern="$3"
+    local output status
+
+    printf 'RUN  %-28s %s\n' "$name" "$command_line"
+    output="$(bash -lc "$command_line" 2>&1)"
+    status=$?
+    if [ -n "$output" ]; then
+        printf '%s\n' "$output"
+    fi
+    if [ "$status" -eq 0 ] && [[ "$output" != *"$reject_pattern"* ]]; then
+        ran=$((ran + 1))
+        printf 'PASS %-28s\n' "$name"
+    else
+        failed=$((failed + 1))
+        printf 'FAIL %-28s\n' "$name"
+    fi
+}
+
 list_tools() {
     local quiche_client ngtcp2_client aioquic_client msquic_client
 
     quiche_client="$(resolve_cmd "${QUICHE_CLIENT_CMD:-}" quiche-client quiche-client3 2>/dev/null || true)"
-    ngtcp2_client="$(resolve_cmd "${NGTCP2_H3CLIENT_CMD:-}" h3client nghttp3-client 2>/dev/null || true)"
+    ngtcp2_client="$(resolve_cmd "${NGTCP2_H3CLIENT_CMD:-}" h3client gtlsclient nghttp3-client 2>/dev/null || true)"
     aioquic_client="$(resolve_cmd "${AIOQUIC_CLIENT_CMD:-}" aioquic-client 2>/dev/null || true)"
-    msquic_client="$(resolve_cmd "${MSQUIC_CLIENT_CMD:-}" quicinterop 2>/dev/null || true)"
+    msquic_client="$(resolve_cmd "${MSQUIC_CLIENT_CMD:-}" 2>/dev/null || true)"
 
     printf 'quiche client:  %s\n' "${quiche_client:-missing}"
     printf 'ngtcp2 client:  %s\n' "${ngtcp2_client:-missing}"
     if [ -n "$aioquic_client" ]; then
         printf 'aioquic client: %s\n' "$aioquic_client"
-    elif have_cmd python3 && python3 -c 'import aioquic' >/dev/null 2>&1; then
+    elif have_cmd python3 && have_python_module aioquic.quic_client; then
         printf 'aioquic client: python3 -m aioquic.quic_client\n'
     else
         printf 'aioquic client: missing\n'
     fi
-    printf 'MsQuic client:  %s\n' "${msquic_client:-missing}"
+    if have_cmd quicinterop; then
+        printf 'MsQuic tool:    %s\n' "$(command -v quicinterop)"
+    else
+        printf 'MsQuic tool:    missing\n'
+    fi
+    printf 'MsQuic client:  %s\n' "${msquic_client:-set MSQUIC_CLIENT_CMD}"
 }
 
 run_external_clients() {
-    local quiche_client ngtcp2_client aioquic_client msquic_client
+    local quiche_client ngtcp2_client aioquic_client msquic_client ngtcp2_client_name
+    local before_ran="$ran"
 
     if [ -z "$TARGET_URL" ]; then
         skip_case "external clients" "set ZQUIC_INTEROP_TARGET_URL to run client checks"
+        if [ "$REQUIRE_CLIENTS" = "1" ]; then
+            failed=$((failed + 1))
+            printf 'FAIL %-28s %s\n' "external clients group" "target URL is unset"
+        fi
         return
     fi
 
@@ -144,33 +218,50 @@ run_external_clients() {
         skip_case "quiche client" "quiche-client not found"
     fi
 
-    ngtcp2_client="$(resolve_cmd "${NGTCP2_H3CLIENT_CMD:-}" h3client nghttp3-client 2>/dev/null || true)"
+    ngtcp2_client="$(resolve_cmd "${NGTCP2_H3CLIENT_CMD:-}" h3client gtlsclient nghttp3-client 2>/dev/null || true)"
     if [ -n "$ngtcp2_client" ]; then
-        run_shell_case "ngtcp2 h3client" "$ngtcp2_client --no-verify '$TARGET_URL'"
+        ngtcp2_client_name="$(basename "${ngtcp2_client%% *}")"
+        if [ "$ngtcp2_client_name" = "gtlsclient" ]; then
+            mapfile -t ngtcp2_url < <(url_parts "$TARGET_URL")
+            run_shell_case_reject_output "ngtcp2 gtlsclient" "$ngtcp2_client -q '${ngtcp2_url[0]}' '${ngtcp2_url[1]}' '$TARGET_URL'" "ERR_"
+        else
+            run_shell_case "ngtcp2 h3client" "$ngtcp2_client --no-verify '$TARGET_URL'"
+        fi
     else
-        skip_case "ngtcp2 h3client" "h3client/nghttp3-client not found"
+        skip_case "ngtcp2 h3client" "h3client/gtlsclient/nghttp3-client not found"
     fi
 
     aioquic_client="$(resolve_cmd "${AIOQUIC_CLIENT_CMD:-}" aioquic-client 2>/dev/null || true)"
     if [ -n "$aioquic_client" ]; then
         run_shell_case "aioquic client" "$aioquic_client --insecure '$TARGET_URL'"
-    elif have_cmd python3 && python3 -c 'import aioquic' >/dev/null 2>&1; then
+    elif have_cmd python3 && have_python_module aioquic.quic_client; then
         run_case "aioquic module" python3 -m aioquic.quic_client --insecure "$TARGET_URL"
     else
         skip_case "aioquic client" "aioquic command/module not found"
     fi
 
-    msquic_client="$(resolve_cmd "${MSQUIC_CLIENT_CMD:-}" quicinterop 2>/dev/null || true)"
+    msquic_client="$(resolve_cmd "${MSQUIC_CLIENT_CMD:-}" 2>/dev/null || true)"
     if [ -n "$msquic_client" ]; then
         run_shell_case "MsQuic client" "$msquic_client '$TARGET_URL'"
     else
-        skip_case "MsQuic client" "set MSQUIC_CLIENT_CMD or install quicinterop"
+        skip_case "MsQuic client" "set MSQUIC_CLIENT_CMD; quicinterop is an interop matrix tool, not a generic target-url client"
+    fi
+
+    if [ "$REQUIRE_CLIENTS" = "1" ] && [ "$ran" -eq "$before_ran" ]; then
+        failed=$((failed + 1))
+        printf 'FAIL %-28s %s\n' "external clients group" "no external client command ran"
     fi
 }
 
 run_version_negotiation_clients() {
+    local before_ran="$ran"
+
     if [ -z "$UNSUPPORTED_VERSION_URL" ]; then
         skip_case "version negotiation" "set ZQUIC_INTEROP_UNSUPPORTED_VERSION_URL to run unsupported-version checks"
+        if [ "$REQUIRE_VERSION_NEGOTIATION" = "1" ]; then
+            failed=$((failed + 1))
+            printf 'FAIL %-28s %s\n' "version negotiation group" "unsupported-version URL is unset"
+        fi
         return
     fi
 
@@ -196,6 +287,11 @@ run_version_negotiation_clients() {
         run_shell_case "MsQuic version negotiation" "$MSQUIC_VERSION_NEGOTIATION_CMD '$UNSUPPORTED_VERSION_URL'"
     else
         skip_case "MsQuic version negotiation" "set MSQUIC_VERSION_NEGOTIATION_CMD with the implementation-specific unsupported-version flags"
+    fi
+
+    if [ "$REQUIRE_VERSION_NEGOTIATION" = "1" ] && [ "$ran" -eq "$before_ran" ]; then
+        failed=$((failed + 1))
+        printf 'FAIL %-28s %s\n' "version negotiation group" "no unsupported-version command ran"
     fi
 }
 
@@ -233,6 +329,8 @@ run_transport_close_cases() {
 }
 
 run_http3_cases() {
+    local before_ran="$ran"
+
     if [ -n "${HTTP3_SETTINGS_INTEROP_CMD:-}" ]; then
         run_shell_case "http3 settings" "$HTTP3_SETTINGS_INTEROP_CMD"
     else
@@ -262,9 +360,16 @@ run_http3_cases() {
     else
         skip_case "http3 malformed frame" "set HTTP3_MALFORMED_INTEROP_CMD for the installed external implementation"
     fi
+
+    if [ "$REQUIRE_HTTP3" = "1" ] && [ "$ran" -eq "$before_ran" ]; then
+        failed=$((failed + 1))
+        printf 'FAIL %-28s %s\n' "http3 group" "no HTTP/3 interop command ran"
+    fi
 }
 
 run_doq_cases() {
+    local before_ran="$ran"
+
     if [ -n "${DOQ_LENGTH_INTEROP_CMD:-}" ]; then
         run_shell_case "doq length framing" "$DOQ_LENGTH_INTEROP_CMD"
     else
@@ -288,20 +393,40 @@ run_doq_cases() {
     else
         skip_case "doq timeout" "set DOQ_TIMEOUT_INTEROP_CMD for the installed external implementation"
     fi
+
+    if [ "$REQUIRE_DOQ" = "1" ] && [ "$ran" -eq "$before_ran" ]; then
+        failed=$((failed + 1))
+        printf 'FAIL %-28s %s\n' "doq group" "no DoQ interop command ran"
+    fi
 }
 
 run_external_servers() {
+    local before_ran="$ran"
+
     if [ -z "$EXTERNAL_SERVER_URL" ]; then
         skip_case "external servers" "set ZQUIC_INTEROP_EXTERNAL_SERVER_URL to run server checks"
+        if [ "$REQUIRE_SERVERS" = "1" ]; then
+            failed=$((failed + 1))
+            printf 'FAIL %-28s %s\n' "external servers group" "external server URL is unset"
+        fi
         return
     fi
 
     if [ -z "$ZQUIC_CLIENT_CMD" ]; then
         skip_case "zquic client" "set ZQUIC_INTEROP_ZQUIC_CLIENT_CMD until zquic has a stable network client CLI"
+        if [ "$REQUIRE_SERVERS" = "1" ]; then
+            failed=$((failed + 1))
+            printf 'FAIL %-28s %s\n' "external servers group" "zquic client command is unset"
+        fi
         return
     fi
 
     run_shell_case "zquic client" "$ZQUIC_CLIENT_CMD '$EXTERNAL_SERVER_URL'"
+
+    if [ "$REQUIRE_SERVERS" = "1" ] && [ "$ran" -eq "$before_ran" ]; then
+        failed=$((failed + 1))
+        printf 'FAIL %-28s %s\n' "external servers group" "zquic external-server command did not run"
+    fi
 }
 
 mode="all"

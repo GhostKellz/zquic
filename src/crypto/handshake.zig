@@ -5,6 +5,8 @@
 const std = @import("std");
 const Error = @import("../utils/error.zig");
 const Tls = @import("tls.zig");
+const EnhancedTls = @import("enhanced_tls.zig");
+const PacketCryptoMod = @import("../core/packet_crypto.zig");
 
 /// Handshake manager that coordinates QUIC and TLS
 pub const HandshakeManager = struct {
@@ -84,6 +86,68 @@ pub const HandshakeManager = struct {
             .completed => .application,
             .failed => .initial,
         };
+    }
+
+    /// Synchronize live handshake progress into packet protection keys.
+    ///
+    /// The current compatibility handshake is still a synthetic TLS message
+    /// flow, but this keeps packet key installation tied to the actual CRYPTO
+    /// transcript seen by the manager instead of a caller-owned side channel.
+    pub fn syncPacketCrypto(
+        self: *Self,
+        enhanced_tls_context: *EnhancedTls.EnhancedTlsContext,
+        packet_crypto: *PacketCryptoMod.PacketCrypto,
+        connection_id: []const u8,
+    ) Error.ZquicError!usize {
+        try self.deriveEnhancedPacketKeys(enhanced_tls_context, connection_id);
+        return packet_crypto.refreshKeysFromTlsContext() catch Error.ZquicError.CryptoError;
+    }
+
+    /// Derive Enhanced TLS packet keys available for the current handshake
+    /// state from the manager's stored transcript.
+    pub fn deriveEnhancedPacketKeys(
+        self: *Self,
+        enhanced_tls_context: *EnhancedTls.EnhancedTlsContext,
+        connection_id: []const u8,
+    ) Error.ZquicError!void {
+        if (enhanced_tls_context.initial_keys == null) {
+            enhanced_tls_context.initializeInitialKeys(connection_id) catch return Error.ZquicError.CryptoError;
+        }
+
+        switch (self.tls_context.state) {
+            .wait_finished, .completed => {
+                if (enhanced_tls_context.handshake_keys == null) {
+                    var handshake_secret: [48]u8 = undefined;
+                    self.deriveTranscriptSecret(connection_id, "zquic handshake traffic", &handshake_secret);
+                    enhanced_tls_context.deriveHandshakeKeys(&handshake_secret) catch return Error.ZquicError.CryptoError;
+                }
+            },
+            else => {},
+        }
+
+        if (self.tls_context.state == .completed and enhanced_tls_context.application_keys == null) {
+            var application_secret: [48]u8 = undefined;
+            self.deriveTranscriptSecret(connection_id, "zquic application traffic", &application_secret);
+            enhanced_tls_context.deriveApplicationKeys(&application_secret) catch return Error.ZquicError.CryptoError;
+        }
+    }
+
+    fn deriveTranscriptSecret(
+        self: *const Self,
+        connection_id: []const u8,
+        label: []const u8,
+        out: *[48]u8,
+    ) void {
+        var hasher = std.crypto.hash.sha2.Sha384.init(.{});
+        hasher.update("zquic handshake manager packet key bridge");
+        hasher.update(label);
+        hasher.update(connection_id);
+
+        if (self.tls_context.client_hello) |data| hasher.update(data);
+        if (self.tls_context.server_hello) |data| hasher.update(data);
+        if (self.tls_context.finished) |data| hasher.update(data);
+
+        hasher.final(out);
     }
 };
 

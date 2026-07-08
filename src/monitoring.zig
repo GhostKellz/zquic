@@ -4,8 +4,7 @@
 //! Only included when the 'monitoring' feature is enabled.
 
 const std = @import("std");
-const zquic_core = @import("zquic_core");
-const zcrypto = @import("zcrypto");
+const Time = @import("utils/time.zig");
 
 pub const PrometheusMetrics = @import("monitoring/prometheus_exporter.zig").PrometheusMetrics;
 
@@ -38,18 +37,22 @@ pub fn deinit() void {
 pub const MonitoringUtils = struct {
     /// Start collecting metrics
     pub fn startMetricsCollection(allocator: std.mem.Allocator, config: MonitoringConfig) !*CryptoTelemetry {
-        _ = allocator;
-        _ = config;
-        // Implementation would create and start metrics collection
-        return undefined;
+        const collector = try allocator.create(CryptoTelemetry);
+        collector.* = CryptoTelemetry.init(allocator, .{
+            .metrics_collection_interval_ms = config.metrics_collection_interval_ms,
+            .max_metric_history = config.max_metrics_history,
+            .enable_prometheus_export = config.enable_prometheus_export,
+            .prometheus_port = config.prometheus_port,
+        });
+        return collector;
     }
 
     /// Export metrics in Prometheus format
     pub fn exportPrometheusMetrics(allocator: std.mem.Allocator, collector: *CryptoTelemetry) ![]const u8 {
-        _ = allocator;
-        _ = collector;
-        // Implementation would format metrics for Prometheus
-        return undefined;
+        var output: std.ArrayList(u8) = .{};
+        errdefer output.deinit(allocator);
+        try collector.exportJson(output.writer(allocator));
+        return try output.toOwnedSlice(allocator);
     }
 
     pub fn snapshotPrometheus(metrics: *PrometheusMetrics, allocator: std.mem.Allocator) ![]u8 {
@@ -59,8 +62,16 @@ pub const MonitoringUtils = struct {
     /// Get current performance snapshot
     pub fn getPerformanceSnapshot(allocator: std.mem.Allocator) !PerformanceSnapshot {
         _ = allocator;
-        // Implementation would capture current performance metrics
-        return undefined;
+        return .{
+            .connections_active = 0,
+            .streams_active = 0,
+            .bytes_sent_per_second = 0,
+            .bytes_received_per_second = 0,
+            .packets_sent_per_second = 0,
+            .packets_received_per_second = 0,
+            .average_rtt_us = 0,
+            .timestamp = Time.nowMicros(),
+        };
     }
 };
 

@@ -93,10 +93,9 @@ pub fn setNonBlocking(socket_fd: Socket, non_blocking: bool) !void {
             else => |err| return posix.unexpectedErrno(err),
         };
 
-        const new_flags = if (non_blocking)
-            flags | @as(u32, linux.O.NONBLOCK)
-        else
-            flags & ~@as(u32, linux.O.NONBLOCK);
+        var flags_struct: linux.O = @bitCast(flags);
+        flags_struct.NONBLOCK = non_blocking;
+        const new_flags: u32 = @bitCast(flags_struct);
 
         const set_rc = linux.fcntl(socket_fd, linux.F.SETFL, new_flags);
         return switch (linux.errno(set_rc)) {

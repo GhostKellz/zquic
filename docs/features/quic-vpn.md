@@ -40,7 +40,7 @@ Exposed metrics include:
 - `zquic_vpn_nat_entries_active`
 
 ## Production Checklist
-- [ ] Replace the placeholder NAT mapping with a proper pool allocator.
+- [ ] Promote the current `src/vpn/router.zig` NAT `HashMap` into a bounded pool allocator with eviction policy.
 - [ ] Add ACL/policy evaluation hooks before `forwardPacket` returns.
 - [ ] Bind router decisions to QUIC connection lifecycles.
 - [ ] Integrate with actual QUIC sockets instead of the synthetic demo packets.

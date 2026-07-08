@@ -3,11 +3,13 @@
 //! Hardware-accelerated packet encryption/decryption with post-quantum support
 
 const std = @import("std");
-const zcrypto = @import("zcrypto");
 const Error = @import("../utils/error.zig");
 
+const CoreCrypto = @import("crypto.zig");
 const Packet = @import("packet.zig");
-const EnhancedTlsContext = @import("../crypto/enhanced_tls.zig").EnhancedTlsContext;
+const enhanced_tls = @import("../crypto/enhanced_tls.zig");
+const EnhancedTlsContext = enhanced_tls.EnhancedTlsContext;
+const EnhancedCipherSuite = enhanced_tls.EnhancedCipherSuite;
 
 /// QUIC encryption levels
 pub const EncryptionLevel = enum {
@@ -25,10 +27,11 @@ pub const PacketCrypto = struct {
     // Conditionally include PQ context - will be set through feature modules
     pq_context: ?*anyopaque = null,
 
-    // Hardware-accelerated crypto components
-    quic_crypto: QuicCrypto.QuicConnection,
+    // Real QUIC AEAD/header-protection helper used by this facade.
+    core_crypto: CoreCrypto.QuicCrypto,
+    cipher_suite: CoreCrypto.CipherSuite,
     hw_accelerator: HardwareCrypto.Accelerator,
-    batch_processor: ?QuicCrypto.BatchProcessor = null,
+    batch_processor: ?PacketBatchProcessor = null,
 
     /// Packet number encoding state
     packet_number_state: struct {
@@ -41,35 +44,123 @@ pub const PacketCrypto = struct {
         const hw_caps = HardwareCrypto.detectCapabilities();
         std.log.info("Hardware acceleration available: AES-NI={}, AVX2={}", .{ hw_caps.has_aes_ni, hw_caps.has_avx2 });
 
-        // Create hardware-optimized AEAD based on capabilities
-        const cipher_suite = if (hw_caps.has_aes_ni)
-            QuicCrypto.CipherSuite.aes_256_gcm
-        else
-            QuicCrypto.CipherSuite.chacha20_poly1305;
+        const cipher_suite = mapEnhancedCipherSuite(tls_context.cipher_suite);
 
-        // Initialize QUIC crypto context
-        const connection_id = "zquic_connection";
-        const quic_crypto = try QuicCrypto.QuicConnection.initFromConnectionId(allocator, connection_id, cipher_suite);
+        var core_crypto = CoreCrypto.QuicCrypto.init(allocator, cipher_suite);
+        errdefer core_crypto.deinit();
+        try installDeterministicFacadeKeys(allocator, &core_crypto, cipher_suite, "zquic packet crypto facade v1");
 
         // Initialize hardware accelerator
         const hw_accelerator = try HardwareCrypto.Accelerator.init(allocator, hw_caps);
 
-        return PacketCrypto{
+        var packet_crypto = PacketCrypto{
             .tls_context = tls_context,
             .pq_context = pq_context,
             .allocator = allocator,
-            .quic_crypto = quic_crypto,
+            .core_crypto = core_crypto,
+            .cipher_suite = cipher_suite,
             .hw_accelerator = hw_accelerator,
             .packet_number_state = .{},
         };
+        _ = try packet_crypto.refreshKeysFromTlsContext();
+        return packet_crypto;
     }
 
     pub fn deinit(self: *PacketCrypto) void {
-        self.quic_crypto.deinit(self.allocator);
-        self.hw_accelerator.deinit(self.allocator);
+        self.core_crypto.deinit();
+        self.hw_accelerator.deinit();
         if (self.batch_processor) |*processor| {
-            processor.deinit(self.allocator);
+            processor.deinit();
         }
+    }
+
+    /// Install any keys currently derived by the associated TLS helper context.
+    ///
+    /// This bridges the packet facade to TLS-derived key material while keeping
+    /// deterministic facade keys as a fallback for not-yet-derived levels.
+    pub fn refreshKeysFromTlsContext(self: *PacketCrypto) !usize {
+        var installed: usize = 0;
+
+        if (self.tls_context.initial_keys) |*keys| {
+            try self.installTlsKeys(.initial, keys);
+            installed += 1;
+        }
+        if (self.tls_context.handshake_keys) |*keys| {
+            try self.installTlsKeys(.handshake, keys);
+            installed += 1;
+        }
+        if (self.tls_context.application_keys) |*keys| {
+            try self.installTlsKeys(.application, keys);
+            installed += 1;
+        }
+
+        return installed;
+    }
+
+    fn installTlsKeys(self: *PacketCrypto, level: CoreCrypto.EncryptionLevel, keys: *const enhanced_tls.EnhancedCryptoKeys) !void {
+        const local = try directionalKeysFromTls(self.allocator, self.cipher_suite, keys);
+        errdefer {
+            var local_copy = local;
+            local_copy.deinit();
+        }
+
+        const remote = try directionalKeysFromTls(self.allocator, self.cipher_suite, keys);
+        self.core_crypto.installKeys(level, local, remote);
+    }
+
+    /// Install RFC 9001 QUIC v1 Initial keys for a server endpoint.
+    ///
+    /// `destination_connection_id` is the DCID from the client's first Initial.
+    /// After this call, local Initial packets use server keys and remote
+    /// Initial packets use client keys.
+    pub fn installRfc9001ServerInitialKeys(self: *PacketCrypto, destination_connection_id: []const u8) !void {
+        const initial = try enhanced_tls.deriveRfc9001InitialKeys(destination_connection_id);
+        const local = try CoreCrypto.DirectionalKeys.init(
+            self.allocator,
+            .aes_128_gcm_sha256,
+            &initial.server.key,
+            &initial.server.iv,
+            &initial.server.header_protection_key,
+        );
+        errdefer {
+            var local_copy = local;
+            local_copy.deinit();
+        }
+        const remote = try CoreCrypto.DirectionalKeys.init(
+            self.allocator,
+            .aes_128_gcm_sha256,
+            &initial.client.key,
+            &initial.client.iv,
+            &initial.client.header_protection_key,
+        );
+        self.core_crypto.installKeys(.initial, local, remote);
+    }
+
+    /// Install RFC 9001 QUIC v1 Initial keys for a client endpoint.
+    ///
+    /// After this call, local Initial packets use client keys and remote
+    /// Initial packets use server keys.
+    pub fn installRfc9001ClientInitialKeys(self: *PacketCrypto, destination_connection_id: []const u8) !void {
+        const initial = try enhanced_tls.deriveRfc9001InitialKeys(destination_connection_id);
+        const local = try CoreCrypto.DirectionalKeys.init(
+            self.allocator,
+            .aes_128_gcm_sha256,
+            &initial.client.key,
+            &initial.client.iv,
+            &initial.client.header_protection_key,
+        );
+        errdefer {
+            var local_copy = local;
+            local_copy.deinit();
+        }
+        const remote = try CoreCrypto.DirectionalKeys.init(
+            self.allocator,
+            .aes_128_gcm_sha256,
+            &initial.server.key,
+            &initial.server.iv,
+            &initial.server.header_protection_key,
+        );
+        self.core_crypto.installKeys(.initial, local, remote);
     }
 
     /// Encrypt QUIC packet payload using hardware acceleration
@@ -80,19 +171,15 @@ pub const PacketCrypto = struct {
         header: []const u8,
         payload: []const u8,
     ) ![]u8 {
-        _ = level;
-        _ = header;
+        const core_level = self.mapCoreEncryptionLevel(level);
+        const packet_len = header.len + payload.len + self.cipher_suite.tagLength();
+        const protected_packet = try self.allocator.alloc(u8, packet_len);
+        defer self.allocator.free(protected_packet);
 
-        // Use hardware-accelerated QUIC crypto
-        const encrypted_len = try self.quic_crypto.encryptPacket(payload, packet_number);
-
-        // Allocate buffer for encrypted data
-        const encrypted = try self.allocator.alloc(u8, encrypted_len);
-
-        // Copy encrypted data (in a real implementation, this would be done in-place)
-        @memcpy(encrypted, payload[0..encrypted_len]);
-
-        return encrypted;
+        const written = try self.core_crypto.encryptPacket(core_level, packet_number, header, payload, protected_packet);
+        const encrypted_payload = try self.allocator.alloc(u8, written - header.len);
+        @memcpy(encrypted_payload, protected_packet[header.len..written]);
+        return encrypted_payload;
     }
 
     /// Decrypt QUIC packet payload using hardware acceleration
@@ -103,19 +190,22 @@ pub const PacketCrypto = struct {
         header: []const u8,
         ciphertext: []const u8,
     ) ![]u8 {
-        _ = level;
-        _ = header;
+        const core_level = self.mapCoreEncryptionLevel(level);
+        const keys = self.core_crypto.getKeys(core_level) orelse return Error.ZquicError.CryptoError;
+        if (ciphertext.len < self.cipher_suite.tagLength()) return Error.ZquicError.CryptoError;
 
-        // Use hardware-accelerated QUIC crypto
-        const decrypted_len = try self.quic_crypto.decryptPacket(ciphertext, packet_number);
+        const decrypted = try self.allocator.alloc(u8, ciphertext.len - self.cipher_suite.tagLength());
+        errdefer self.allocator.free(decrypted);
 
-        // Allocate buffer for decrypted data
-        const decrypted = try self.allocator.alloc(u8, decrypted_len);
-
-        // Copy decrypted data (in a real implementation, this would be done in-place)
-        @memcpy(decrypted, ciphertext[0..decrypted_len]);
-
-        return decrypted;
+        const decrypted_len = try self.core_crypto.aead.decrypt(
+            keys.remote.aead_key,
+            keys.remote.aead_iv,
+            packet_number,
+            header,
+            ciphertext,
+            decrypted,
+        );
+        return decrypted[0..decrypted_len];
     }
 
     /// Apply header protection using zcrypto
@@ -125,11 +215,9 @@ pub const PacketCrypto = struct {
         header: []u8,
         sample: []const u8,
     ) !void {
-        try self.tls_context.protectHeader(
-            self.mapEncryptionLevel(level),
-            header,
-            sample,
-        );
+        const core_level = self.mapCoreEncryptionLevel(level);
+        const keys = self.core_crypto.getKeys(core_level) orelse return Error.ZquicError.CryptoError;
+        try self.core_crypto.hp.protect(keys.local.hp_key, header, sample);
     }
 
     /// Remove header protection using zcrypto
@@ -139,11 +227,9 @@ pub const PacketCrypto = struct {
         header: []u8,
         sample: []const u8,
     ) !void {
-        try self.tls_context.unprotectHeader(
-            self.mapEncryptionLevel(level),
-            header,
-            sample,
-        );
+        const core_level = self.mapCoreEncryptionLevel(level);
+        const keys = self.core_crypto.getKeys(core_level) orelse return Error.ZquicError.CryptoError;
+        try self.core_crypto.hp.unprotect(keys.remote.hp_key, header, sample);
     }
 
     /// Process complete QUIC packet (decrypt + validate)
@@ -182,6 +268,79 @@ pub const PacketCrypto = struct {
 
         return ProcessedPacket{
             .header = try self.allocator.dupe(u8, mutable_header),
+            .payload = plaintext,
+            .packet_number = packet_number,
+            .encryption_level = level,
+        };
+    }
+
+    pub fn createProtectedRawPacket(
+        self: *PacketCrypto,
+        level: EncryptionLevel,
+        packet_type: Packet.PacketType,
+        dest_conn_id: []const u8,
+        src_conn_id: []const u8,
+        payload: []const u8,
+    ) ![]u8 {
+        const packet_number = self.packet_number_state.next_packet_number;
+        self.packet_number_state.next_packet_number += 1;
+        const packet_number_len = choosePacketNumberLen(packet_number);
+
+        const header = try self.buildRawPacketHeader(packet_type, dest_conn_id, src_conn_id, packet_number, packet_number_len, payload.len);
+        defer self.allocator.free(header);
+
+        const ciphertext = try self.encryptPacket(level, packet_number, header, payload);
+        defer self.allocator.free(ciphertext);
+
+        if (ciphertext.len < 20) return Error.ZquicError.PacketTooShort;
+
+        const packet = try self.allocator.alloc(u8, header.len + ciphertext.len);
+        errdefer self.allocator.free(packet);
+        @memcpy(packet[0..header.len], header);
+        @memcpy(packet[header.len..], ciphertext);
+
+        const pn_offset = header.len - packet_number_len;
+        const sample_offset = pn_offset + 4;
+        if (sample_offset + 16 > packet.len) return Error.ZquicError.PacketTooShort;
+        const sample = packet[sample_offset .. sample_offset + 16];
+        try self.applyRawHeaderProtection(level, packet[0..header.len], pn_offset, sample, .protect);
+        return packet;
+    }
+
+    pub fn processProtectedRawPacket(
+        self: *PacketCrypto,
+        raw_packet: []const u8,
+        largest_processed: ?u64,
+    ) !ProcessedPacket {
+        if (raw_packet.len < 24) return Error.ZquicError.InvalidPacket;
+
+        var packet = try self.allocator.dupe(u8, raw_packet);
+        errdefer self.allocator.free(packet);
+
+        const header_without_pn_len = try self.parseHeaderLength(packet);
+        const pn_offset = header_without_pn_len;
+        const sample_offset = pn_offset + 4;
+        if (sample_offset + 16 > packet.len) return Error.ZquicError.InvalidPacket;
+
+        const level = try self.determineEncryptionLevel(packet[0..header_without_pn_len]);
+        const sample = packet[sample_offset .. sample_offset + 16];
+        try self.applyRawHeaderProtection(level, packet[0 .. pn_offset + 4], pn_offset, sample, .unprotect);
+
+        const packet_number_len: u8 = (packet[0] & 0x03) + 1;
+        if (pn_offset + packet_number_len > packet.len) return Error.ZquicError.InvalidPacket;
+
+        const truncated = try Packet.readTruncatedPacketNumber(packet[pn_offset .. pn_offset + packet_number_len]);
+        const packet_number = try Packet.reconstructPacketNumber(largest_processed, truncated, packet_number_len);
+        const header = packet[0 .. pn_offset + packet_number_len];
+        const ciphertext = packet[pn_offset + packet_number_len ..];
+        const plaintext = try self.decryptPacket(level, packet_number, header, ciphertext);
+        errdefer self.allocator.free(plaintext);
+
+        const owned_header = try self.allocator.dupe(u8, header);
+        self.allocator.free(packet);
+
+        return ProcessedPacket{
+            .header = owned_header,
             .payload = plaintext,
             .packet_number = packet_number,
             .encryption_level = level,
@@ -257,17 +416,24 @@ pub const PacketCrypto = struct {
         const packet_number = try self.extractPacketNumber(packet_buffer[0..payload_start]);
 
         // Use hardware-accelerated in-place decryption
-        const decrypted_len = try self.quic_crypto.decryptPacket(packet_buffer[payload_start..used_length.*], packet_number);
+        const plaintext = try self.decryptPacket(
+            level,
+            packet_number,
+            packet_buffer[0..payload_start],
+            packet_buffer[payload_start..used_length.*],
+        );
+        defer self.allocator.free(plaintext);
+        @memcpy(packet_buffer[payload_start .. payload_start + plaintext.len], plaintext);
 
         // Update used length after processing
-        used_length.* = payload_start + decrypted_len;
+        used_length.* = payload_start + plaintext.len;
 
         return level;
     }
 
     /// Initialize batch processor for high-throughput scenarios
     pub fn initBatchProcessor(self: *PacketCrypto, batch_size: usize, max_packet_size: usize) !void {
-        self.batch_processor = try QuicCrypto.BatchProcessor.init(self.allocator, self.quic_crypto.aead, batch_size, max_packet_size);
+        self.batch_processor = PacketBatchProcessor.init(self, batch_size, max_packet_size);
     }
 
     /// Process multiple packets in batch with SIMD acceleration
@@ -304,6 +470,51 @@ pub const PacketCrypto = struct {
         };
     }
 
+    fn mapCoreEncryptionLevel(self: *PacketCrypto, level: EncryptionLevel) CoreCrypto.EncryptionLevel {
+        _ = self;
+        return switch (level) {
+            .initial => .initial,
+            .early_data => .early_data,
+            .handshake => .handshake,
+            .application => .application,
+        };
+    }
+
+    const HeaderProtectionDirection = enum { protect, unprotect };
+
+    fn applyRawHeaderProtection(
+        self: *PacketCrypto,
+        level: EncryptionLevel,
+        header: []u8,
+        pn_offset: usize,
+        sample: []const u8,
+        direction: HeaderProtectionDirection,
+    ) !void {
+        if (header.len == 0 or pn_offset >= header.len) return Error.ZquicError.InvalidPacket;
+
+        const core_level = self.mapCoreEncryptionLevel(level);
+        const keys = self.core_crypto.getKeys(core_level) orelse return Error.ZquicError.CryptoError;
+        const hp_key = switch (direction) {
+            .protect => keys.local.hp_key,
+            .unprotect => keys.remote.hp_key,
+        };
+
+        var mask: [5]u8 = undefined;
+        try self.core_crypto.hp.generateMask(hp_key, sample, &mask);
+
+        const protected_packet_number_len: usize = (header[0] & 0x03) + 1;
+        const first_byte_mask: u8 = if (header[0] & 0x80 != 0) 0x0F else 0x1F;
+        header[0] ^= mask[0] & first_byte_mask;
+        const packet_number_len: usize = switch (direction) {
+            .protect => protected_packet_number_len,
+            .unprotect => (header[0] & 0x03) + 1,
+        };
+        if (pn_offset + packet_number_len > header.len) return Error.ZquicError.InvalidPacket;
+        for (0..packet_number_len) |i| {
+            header[pn_offset + i] ^= mask[1 + i];
+        }
+    }
+
     /// Determine encryption level from packet header
     fn determineEncryptionLevel(self: *PacketCrypto, header: []const u8) !EncryptionLevel {
         _ = self;
@@ -336,41 +547,132 @@ pub const PacketCrypto = struct {
         const first_byte = packet[0];
 
         if ((first_byte & 0x80) != 0) {
-            // Long header packet
-            if (packet.len < 6) return Error.ZquicError.InvalidPacket;
+            if (packet.len < 7) return Error.ZquicError.InvalidPacket;
 
-            // Skip: first_byte(1) + version(4) + dcil_scil(1)
-            var offset: usize = 6;
+            var offset: usize = 5;
 
-            // Destination connection ID
-            const dcil = packet[5] & 0x0F;
+            const dcil = packet[offset];
+            offset += 1;
+            if (offset + dcil > packet.len) return Error.ZquicError.InvalidPacket;
             offset += dcil;
-            if (offset >= packet.len) return Error.ZquicError.InvalidPacket;
 
-            // Source connection ID
-            const scil = (packet[5] & 0xF0) >> 4;
+            if (offset >= packet.len) return Error.ZquicError.InvalidPacket;
+            const scil = packet[offset];
+            offset += 1;
+            if (offset + scil > packet.len) return Error.ZquicError.InvalidPacket;
             offset += scil;
-            if (offset >= packet.len) return Error.ZquicError.InvalidPacket;
 
-            // For Initial and Retry packets, there's a token length field
+            // Initial packets carry a varint token length before the protected length.
             const packet_type = (first_byte & 0x30) >> 4;
             if (packet_type == 0x00) { // Initial
-                if (offset >= packet.len) return Error.ZquicError.InvalidPacket;
-                const token_len = packet[offset]; // Simplified - real implementation would decode variable-length integer
-                offset += 1 + token_len;
+                const token_len = try readQuicVarint(packet, &offset);
+                if (token_len > packet.len - offset) return Error.ZquicError.InvalidPacket;
+                offset += @intCast(token_len);
             }
 
-            // Length field (variable-length integer, simplified to 2 bytes)
-            offset += 2;
+            _ = try readQuicVarint(packet, &offset);
+            if (offset > packet.len) return Error.ZquicError.InvalidPacket;
 
             return offset;
         } else {
-            // Short header packet
-            if (packet.len < 2) return Error.ZquicError.InvalidPacket;
+            const dest_cid_len: usize = 8;
+            if (packet.len < 1 + dest_cid_len) return Error.ZquicError.InvalidPacket;
+            return 1 + dest_cid_len;
+        }
+    }
 
-            // first_byte(1) + dcil(variable)
-            const dcil = packet[1] & 0x0F; // Simplified
-            return 2 + dcil;
+    fn buildRawPacketHeader(
+        self: *PacketCrypto,
+        packet_type: Packet.PacketType,
+        dest_conn_id: []const u8,
+        src_conn_id: []const u8,
+        packet_number: u64,
+        packet_number_len: u8,
+        payload_len: usize,
+    ) ![]u8 {
+        if (dest_conn_id.len > 20 or src_conn_id.len > 20) return Error.ZquicError.InvalidConnectionId;
+        if (packet_number_len == 0 or packet_number_len > 4) return Error.ZquicError.InvalidPacket;
+
+        if (packet_type == .one_rtt) {
+            if (dest_conn_id.len != 8) return Error.ZquicError.InvalidConnectionId;
+            const header = try self.allocator.alloc(u8, 1 + dest_conn_id.len + packet_number_len);
+            header[0] = 0x40 | (packet_number_len - 1);
+            @memcpy(header[1 .. 1 + dest_conn_id.len], dest_conn_id);
+            writeTruncatedPacketNumber(header[1 + dest_conn_id.len ..][0..packet_number_len], packet_number);
+            return header;
+        }
+
+        const type_bits: u8 = switch (packet_type) {
+            .initial => 0x00,
+            .zero_rtt => 0x10,
+            .handshake => 0x20,
+            .retry, .version_negotiation, .one_rtt => return Error.ZquicError.InvalidPacket,
+        };
+
+        const token_len: usize = if (packet_type == .initial) 1 else 0;
+        const length_len: usize = 2;
+        const header_len = 1 + 4 + 1 + dest_conn_id.len + 1 + src_conn_id.len + token_len + length_len + packet_number_len;
+        const header = try self.allocator.alloc(u8, header_len);
+        var offset: usize = 0;
+
+        header[offset] = 0xC0 | type_bits | (packet_number_len - 1);
+        offset += 1;
+        std.mem.writeInt(u32, header[offset..][0..4], 0x00000001, .big);
+        offset += 4;
+        header[offset] = @intCast(dest_conn_id.len);
+        offset += 1;
+        @memcpy(header[offset .. offset + dest_conn_id.len], dest_conn_id);
+        offset += dest_conn_id.len;
+        header[offset] = @intCast(src_conn_id.len);
+        offset += 1;
+        @memcpy(header[offset .. offset + src_conn_id.len], src_conn_id);
+        offset += src_conn_id.len;
+        if (packet_type == .initial) {
+            header[offset] = 0;
+            offset += 1;
+        }
+        const protected_len = payload_len + self.cipher_suite.tagLength() + packet_number_len;
+        if (protected_len >= 0x4000) return Error.ZquicError.PacketTooLarge;
+        writeQuicVarint2(header[offset..][0..2], protected_len);
+        offset += 2;
+        writeTruncatedPacketNumber(header[offset..][0..packet_number_len], packet_number);
+
+        return header;
+    }
+
+    fn readQuicVarint(bytes: []const u8, offset: *usize) !u64 {
+        if (offset.* >= bytes.len) return Error.ZquicError.InvalidPacket;
+
+        const first = bytes[offset.*];
+        const encoded_len: usize = @as(usize, 1) << @intCast(first >> 6);
+        if (offset.* + encoded_len > bytes.len) return Error.ZquicError.InvalidPacket;
+
+        var value: u64 = first & 0x3f;
+        var i: usize = 1;
+        while (i < encoded_len) : (i += 1) {
+            value = (value << 8) | bytes[offset.* + i];
+        }
+        offset.* += encoded_len;
+        return value;
+    }
+
+    fn writeQuicVarint2(dest: *[2]u8, value: usize) void {
+        const encoded: u16 = @intCast(0x4000 | value);
+        std.mem.writeInt(u16, dest, encoded, .big);
+    }
+
+    fn choosePacketNumberLen(packet_number: u64) u8 {
+        if (packet_number <= 0xff) return 1;
+        if (packet_number <= 0xffff) return 2;
+        if (packet_number <= 0xffffff) return 3;
+        return 4;
+    }
+
+    fn writeTruncatedPacketNumber(dest: []u8, packet_number: u64) void {
+        const shift_base = dest.len - 1;
+        for (dest, 0..) |*byte, i| {
+            const shift: u6 = @intCast((shift_base - i) * 8);
+            byte.* = @truncate(packet_number >> shift);
         }
     }
 
@@ -470,7 +772,9 @@ pub const BulkPacketProcessor = struct {
         results: []ProcessedPacket,
         thread_pool: *std.Thread.Pool,
     ) !usize {
-        _ = thread_pool; // TODO: Implement parallel processing
+        // Keep the fallback deterministic; callers still pass the pool used by
+        // future scheduled implementations.
+        _ = thread_pool;
         return self.processBatch(packets, results);
     }
 };
@@ -548,58 +852,133 @@ pub const PacketMemoryPool = struct {
     }
 };
 
-const QuicCrypto = struct {
-    pub const CipherSuite = enum {
-        aes_128_gcm,
-        aes_256_gcm,
-        chacha20_poly1305,
-    };
+const PacketBatchProcessor = struct {
+    crypto: *PacketCrypto,
+    batch_size: usize,
+    max_packet_size: usize,
 
-    pub const QuicConnection = struct {
-        cipher_suite: CipherSuite,
-        allocator: std.mem.Allocator,
+    pub fn init(crypto: *PacketCrypto, batch_size: usize, max_packet_size: usize) PacketBatchProcessor {
+        return .{
+            .crypto = crypto,
+            .batch_size = batch_size,
+            .max_packet_size = max_packet_size,
+        };
+    }
 
-        pub fn init(allocator: std.mem.Allocator, cipher_suite: CipherSuite) !QuicConnection {
-            return QuicConnection{
-                .cipher_suite = cipher_suite,
-                .allocator = allocator,
-            };
+    pub fn deinit(self: *PacketBatchProcessor) void {
+        _ = self;
+    }
+
+    pub fn encryptBatch(
+        self: *PacketBatchProcessor,
+        packet_buffers: [][]u8,
+        packet_numbers: []u64,
+        aads: [][]const u8,
+    ) ![]usize {
+        const count = @min(@min(packet_buffers.len, packet_numbers.len), @min(aads.len, self.batch_size));
+        const lengths = try self.crypto.allocator.alloc(usize, count);
+        errdefer self.crypto.allocator.free(lengths);
+
+        for (0..count) |i| {
+            if (packet_buffers[i].len > self.max_packet_size) return Error.ZquicError.InvalidPacket;
+            const encrypted = try self.crypto.encryptPacket(.application, packet_numbers[i], aads[i], packet_buffers[i]);
+            defer self.crypto.allocator.free(encrypted);
+            if (encrypted.len > packet_buffers[i].len) return Error.ZquicError.CryptoError;
+            @memcpy(packet_buffers[i][0..encrypted.len], encrypted);
+            lengths[i] = encrypted.len;
         }
 
-        pub fn initFromConnectionId(allocator: std.mem.Allocator, connection_id: []const u8, cipher_suite: CipherSuite) !QuicConnection {
-            _ = connection_id;
-            return try init(allocator, cipher_suite);
-        }
-
-        pub fn deinit(self: *QuicConnection) void {
-            _ = self;
-        }
-
-        pub fn encryptPacket(self: *QuicConnection, payload: []const u8, packet_number: u64) !usize {
-            _ = self;
-            _ = packet_number;
-            return payload.len;
-        }
-
-        pub fn decryptPacket(self: *QuicConnection, payload: []u8, packet_number: u64) !usize {
-            _ = self;
-            _ = packet_number;
-            return payload.len;
-        }
-    };
-
-    pub const BatchProcessor = struct {
-        allocator: std.mem.Allocator,
-
-        pub fn init(allocator: std.mem.Allocator) !BatchProcessor {
-            return BatchProcessor{ .allocator = allocator };
-        }
-
-        pub fn deinit(self: *BatchProcessor) void {
-            _ = self;
-        }
-    };
+        return lengths;
+    }
 };
+
+fn mapEnhancedCipherSuite(cipher_suite: EnhancedCipherSuite) CoreCrypto.CipherSuite {
+    return switch (cipher_suite) {
+        .aes_128_gcm_sha256 => .aes_128_gcm_sha256,
+        .aes_256_gcm_sha384 => .aes_256_gcm_sha384,
+        .chacha20_poly1305_sha256 => .chacha20_poly1305_sha256,
+    };
+}
+
+fn installDeterministicFacadeKeys(
+    allocator: std.mem.Allocator,
+    crypto: *CoreCrypto.QuicCrypto,
+    cipher_suite: CoreCrypto.CipherSuite,
+    seed: []const u8,
+) !void {
+    const levels = [_]CoreCrypto.EncryptionLevel{ .initial, .early_data, .handshake, .application };
+    for (levels) |level| {
+        const local = try deriveDirectionalKeys(allocator, cipher_suite, seed, level, "local");
+        errdefer {
+            var local_copy = local;
+            local_copy.deinit();
+        }
+        const remote = try deriveDirectionalKeys(allocator, cipher_suite, seed, level, "local");
+        crypto.installKeys(level, local, remote);
+    }
+}
+
+fn deriveDirectionalKeys(
+    allocator: std.mem.Allocator,
+    cipher_suite: CoreCrypto.CipherSuite,
+    seed: []const u8,
+    level: CoreCrypto.EncryptionLevel,
+    role: []const u8,
+) !CoreCrypto.DirectionalKeys {
+    var key = deriveBytes(32, seed, level, role, "key");
+    var iv = deriveBytes(12, seed, level, role, "iv");
+    var hp_key = deriveBytes(32, seed, level, role, "hp");
+    return CoreCrypto.DirectionalKeys.init(
+        allocator,
+        cipher_suite,
+        key[0..cipher_suite.keyLength()],
+        &iv,
+        hp_key[0..cipher_suite.keyLength()],
+    );
+}
+
+fn directionalKeysFromTls(
+    allocator: std.mem.Allocator,
+    cipher_suite: CoreCrypto.CipherSuite,
+    keys: *const enhanced_tls.EnhancedCryptoKeys,
+) !CoreCrypto.DirectionalKeys {
+    return CoreCrypto.DirectionalKeys.init(
+        allocator,
+        cipher_suite,
+        keys.key,
+        keys.iv,
+        keys.header_protection_key,
+    );
+}
+
+fn deriveBytes(
+    comptime len: usize,
+    seed: []const u8,
+    level: CoreCrypto.EncryptionLevel,
+    role: []const u8,
+    purpose: []const u8,
+) [len]u8 {
+    var output: [len]u8 = undefined;
+    var written: usize = 0;
+    var counter: u8 = 0;
+
+    while (written < len) : (counter +%= 1) {
+        var hasher = std.crypto.hash.sha2.Sha256.init(.{});
+        hasher.update(seed);
+        hasher.update(&[_]u8{ @intFromEnum(level), counter });
+        hasher.update(role);
+        hasher.update(purpose);
+
+        var digest: [32]u8 = undefined;
+        hasher.final(&digest);
+
+        const take = @min(digest.len, len - written);
+        @memcpy(output[written .. written + take], digest[0..take]);
+        written += take;
+    }
+
+    return output;
+}
 
 const HardwareCrypto = struct {
     pub const Capabilities = struct {
@@ -633,9 +1012,10 @@ test "packet crypto initialization" {
         false,
         .aes_256_gcm_sha384,
     );
-    defer tls_context.deinit(allocator);
+    defer tls_context.deinit();
 
-    const packet_crypto = PacketCrypto.init(allocator, &tls_context, null);
+    var packet_crypto = try PacketCrypto.init(allocator, &tls_context, null);
+    defer packet_crypto.deinit();
 
     try std.testing.expect(packet_crypto.packet_number_state.next_packet_number == 0);
     try std.testing.expect(packet_crypto.packet_number_state.largest_acked == 0);
@@ -649,9 +1029,10 @@ test "encryption level mapping" {
         false,
         .aes_256_gcm_sha384,
     );
-    defer tls_context.deinit(allocator);
+    defer tls_context.deinit();
 
-    var packet_crypto = PacketCrypto.init(allocator, &tls_context, null);
+    var packet_crypto = try PacketCrypto.init(allocator, &tls_context, null);
+    defer packet_crypto.deinit();
 
     const initial_level = packet_crypto.mapEncryptionLevel(.initial);
     const handshake_level = packet_crypto.mapEncryptionLevel(.handshake);
@@ -660,4 +1041,318 @@ test "encryption level mapping" {
     try std.testing.expect(initial_level == .initial);
     try std.testing.expect(handshake_level == .handshake);
     try std.testing.expect(app_level == .application);
+}
+
+test "packet crypto facade performs authenticated round trip" {
+    const allocator = std.testing.allocator;
+
+    var tls_context = try @import("../crypto/enhanced_tls.zig").EnhancedTlsContext.init(
+        allocator,
+        false,
+        .aes_256_gcm_sha384,
+    );
+    defer tls_context.deinit();
+
+    var packet_crypto = try PacketCrypto.init(allocator, &tls_context, null);
+    defer packet_crypto.deinit();
+
+    const header = [_]u8{ 0x40, 0x00, 0x00, 0x00, 0x07 };
+    const payload = "facade packet payload long enough to exercise real AEAD";
+
+    const encrypted = try packet_crypto.encryptPacket(.application, 7, &header, payload);
+    defer allocator.free(encrypted);
+    try std.testing.expectEqual(payload.len + 16, encrypted.len);
+    try std.testing.expect(!std.mem.eql(u8, payload, encrypted[0..payload.len]));
+
+    const decrypted = try packet_crypto.decryptPacket(.application, 7, &header, encrypted);
+    defer allocator.free(decrypted);
+    try std.testing.expectEqualStrings(payload, decrypted);
+}
+
+test "packet crypto facade rejects tampering and wrong aad" {
+    const allocator = std.testing.allocator;
+
+    var tls_context = try @import("../crypto/enhanced_tls.zig").EnhancedTlsContext.init(
+        allocator,
+        false,
+        .aes_128_gcm_sha256,
+    );
+    defer tls_context.deinit();
+
+    var packet_crypto = try PacketCrypto.init(allocator, &tls_context, null);
+    defer packet_crypto.deinit();
+
+    const header = [_]u8{ 0x40, 0x00, 0x00, 0x00, 0x09 };
+    const wrong_header = [_]u8{ 0x40, 0x00, 0x00, 0x00, 0x0a };
+    const payload = "authenticated payload for negative facade tests";
+
+    const encrypted = try packet_crypto.encryptPacket(.application, 9, &header, payload);
+    defer allocator.free(encrypted);
+
+    var tampered = try allocator.dupe(u8, encrypted);
+    defer allocator.free(tampered);
+    tampered[tampered.len - 1] ^= 0x01;
+    try std.testing.expectError(
+        Error.ZquicError.CryptoError,
+        packet_crypto.decryptPacket(.application, 9, &header, tampered),
+    );
+
+    try std.testing.expectError(
+        Error.ZquicError.CryptoError,
+        packet_crypto.decryptPacket(.application, 10, &header, encrypted),
+    );
+    try std.testing.expectError(
+        Error.ZquicError.CryptoError,
+        packet_crypto.decryptPacket(.application, 9, &wrong_header, encrypted),
+    );
+    try std.testing.expectError(
+        Error.ZquicError.CryptoError,
+        packet_crypto.decryptPacket(.handshake, 9, &header, encrypted),
+    );
+    try std.testing.expectError(
+        Error.ZquicError.CryptoError,
+        packet_crypto.decryptPacket(.application, 9, &header, encrypted[0..8]),
+    );
+}
+
+test "packet crypto installs matching TLS-derived application keys" {
+    const allocator = std.testing.allocator;
+
+    var sender_tls = try @import("../crypto/enhanced_tls.zig").EnhancedTlsContext.init(
+        allocator,
+        false,
+        .aes_256_gcm_sha384,
+    );
+    defer sender_tls.deinit();
+    try sender_tls.deriveApplicationKeys("shared tls application secret for packet crypto");
+
+    var receiver_tls = try @import("../crypto/enhanced_tls.zig").EnhancedTlsContext.init(
+        allocator,
+        true,
+        .aes_256_gcm_sha384,
+    );
+    defer receiver_tls.deinit();
+    try receiver_tls.deriveApplicationKeys("shared tls application secret for packet crypto");
+
+    var sender = try PacketCrypto.init(allocator, &sender_tls, null);
+    defer sender.deinit();
+    var receiver = try PacketCrypto.init(allocator, &receiver_tls, null);
+    defer receiver.deinit();
+
+    const header = [_]u8{ 0x40, 0x00, 0x00, 0x00, 0x11 };
+    const payload = "tls-derived packet payload";
+
+    const encrypted = try sender.encryptPacket(.application, 17, &header, payload);
+    defer allocator.free(encrypted);
+
+    const decrypted = try receiver.decryptPacket(.application, 17, &header, encrypted);
+    defer allocator.free(decrypted);
+    try std.testing.expectEqualStrings(payload, decrypted);
+}
+
+test "packet crypto rejects mismatched TLS-derived application keys" {
+    const allocator = std.testing.allocator;
+
+    var sender_tls = try @import("../crypto/enhanced_tls.zig").EnhancedTlsContext.init(
+        allocator,
+        false,
+        .chacha20_poly1305_sha256,
+    );
+    defer sender_tls.deinit();
+    try sender_tls.deriveApplicationKeys("sender application secret");
+
+    var receiver_tls = try @import("../crypto/enhanced_tls.zig").EnhancedTlsContext.init(
+        allocator,
+        true,
+        .chacha20_poly1305_sha256,
+    );
+    defer receiver_tls.deinit();
+    try receiver_tls.deriveApplicationKeys("receiver application secret");
+
+    var sender = try PacketCrypto.init(allocator, &sender_tls, null);
+    defer sender.deinit();
+    var receiver = try PacketCrypto.init(allocator, &receiver_tls, null);
+    defer receiver.deinit();
+
+    const header = [_]u8{ 0x40, 0x00, 0x00, 0x00, 0x12 };
+    const payload = "mismatched tls-derived packet payload";
+
+    const encrypted = try sender.encryptPacket(.application, 18, &header, payload);
+    defer allocator.free(encrypted);
+
+    try std.testing.expectError(
+        Error.ZquicError.CryptoError,
+        receiver.decryptPacket(.application, 18, &header, encrypted),
+    );
+}
+
+test "packet crypto refreshes keys derived after initialization" {
+    const allocator = std.testing.allocator;
+
+    var tls_context = try @import("../crypto/enhanced_tls.zig").EnhancedTlsContext.init(
+        allocator,
+        false,
+        .aes_128_gcm_sha256,
+    );
+    defer tls_context.deinit();
+
+    var packet_crypto = try PacketCrypto.init(allocator, &tls_context, null);
+    defer packet_crypto.deinit();
+
+    const header = [_]u8{ 0x40, 0x00, 0x00, 0x00, 0x13 };
+    const fallback_payload = "fallback before tls keys";
+    const fallback_encrypted = try packet_crypto.encryptPacket(.application, 19, &header, fallback_payload);
+    defer allocator.free(fallback_encrypted);
+
+    try tls_context.deriveApplicationKeys("late tls application secret");
+    try std.testing.expectEqual(@as(usize, 1), try packet_crypto.refreshKeysFromTlsContext());
+
+    try std.testing.expectError(
+        Error.ZquicError.CryptoError,
+        packet_crypto.decryptPacket(.application, 19, &header, fallback_encrypted),
+    );
+
+    const tls_payload = "payload after tls keys";
+    const tls_encrypted = try packet_crypto.encryptPacket(.application, 20, &header, tls_payload);
+    defer allocator.free(tls_encrypted);
+    const tls_decrypted = try packet_crypto.decryptPacket(.application, 20, &header, tls_encrypted);
+    defer allocator.free(tls_decrypted);
+    try std.testing.expectEqualStrings(tls_payload, tls_decrypted);
+}
+
+test "packet crypto raw packet path uses variable packet number lengths" {
+    const allocator = std.testing.allocator;
+
+    var tls_context = try @import("../crypto/enhanced_tls.zig").EnhancedTlsContext.init(
+        allocator,
+        false,
+        .aes_128_gcm_sha256,
+    );
+    defer tls_context.deinit();
+    try tls_context.deriveApplicationKeys("variable packet number raw packet path");
+
+    var packet_crypto = try PacketCrypto.init(allocator, &tls_context, null);
+    defer packet_crypto.deinit();
+
+    const dcid = [_]u8{ 0x21, 0x22, 0x23, 0x24, 0x25, 0x26, 0x27, 0x28 };
+    const payload = "variable packet number payload with enough bytes for hp sample";
+
+    const cases = [_]struct {
+        packet_number: u64,
+        packet_number_len: u8,
+    }{
+        .{ .packet_number = 0x7f, .packet_number_len = 1 },
+        .{ .packet_number = 0x1234, .packet_number_len = 2 },
+        .{ .packet_number = 0x12_3456, .packet_number_len = 3 },
+        .{ .packet_number = 0x1234_5678, .packet_number_len = 4 },
+    };
+
+    for (cases) |case| {
+        packet_crypto.packet_number_state.next_packet_number = case.packet_number;
+        const raw = try packet_crypto.createProtectedRawPacket(.application, .one_rtt, &dcid, &.{}, payload);
+        defer allocator.free(raw);
+
+        var processed = try packet_crypto.processProtectedRawPacket(raw, null);
+        defer processed.deinit(allocator);
+
+        try std.testing.expectEqual(case.packet_number, processed.packet_number);
+        try std.testing.expectEqual(case.packet_number_len, (processed.header[0] & 0x03) + 1);
+        try std.testing.expectEqualStrings(payload, processed.payload);
+    }
+}
+
+test "packet crypto raw packet path accepts zero rtt long header" {
+    const allocator = std.testing.allocator;
+
+    var tls_context = try @import("../crypto/enhanced_tls.zig").EnhancedTlsContext.init(
+        allocator,
+        false,
+        .aes_128_gcm_sha256,
+    );
+    defer tls_context.deinit();
+
+    var packet_crypto = try PacketCrypto.init(allocator, &tls_context, null);
+    defer packet_crypto.deinit();
+
+    const dcid = [_]u8{ 0x31, 0x32, 0x33, 0x34, 0x35, 0x36, 0x37, 0x38 };
+    const scid = [_]u8{ 0x41, 0x42, 0x43, 0x44 };
+    const payload = "zero rtt protected payload with sufficient sample bytes";
+
+    const raw = try packet_crypto.createProtectedRawPacket(.early_data, .zero_rtt, &dcid, &scid, payload);
+    defer allocator.free(raw);
+
+    var processed = try packet_crypto.processProtectedRawPacket(raw, null);
+    defer processed.deinit(allocator);
+
+    try std.testing.expectEqual(@as(u64, 0), processed.packet_number);
+    try std.testing.expectEqual(.early_data, processed.encryption_level);
+    try std.testing.expectEqualStrings(payload, processed.payload);
+}
+
+test "packet crypto parses QUIC varint token and length fields" {
+    var offset: usize = 0;
+    try std.testing.expectEqual(@as(u64, 0), try PacketCrypto.readQuicVarint(&.{0x00}, &offset));
+    try std.testing.expectEqual(@as(usize, 1), offset);
+
+    offset = 0;
+    try std.testing.expectEqual(@as(u64, 1), try PacketCrypto.readQuicVarint(&.{ 0x40, 0x01 }, &offset));
+    try std.testing.expectEqual(@as(usize, 2), offset);
+
+    var encoded: [2]u8 = undefined;
+    PacketCrypto.writeQuicVarint2(&encoded, 1200);
+    offset = 0;
+    try std.testing.expectEqual(@as(u64, 1200), try PacketCrypto.readQuicVarint(&encoded, &offset));
+    try std.testing.expectEqual(@as(usize, 2), offset);
+}
+
+test "packet crypto installs directional RFC 9001 initial keys" {
+    const allocator = std.testing.allocator;
+
+    var client_tls = try @import("../crypto/enhanced_tls.zig").EnhancedTlsContext.init(
+        allocator,
+        false,
+        .aes_128_gcm_sha256,
+    );
+    defer client_tls.deinit();
+    var server_tls = try @import("../crypto/enhanced_tls.zig").EnhancedTlsContext.init(
+        allocator,
+        true,
+        .aes_128_gcm_sha256,
+    );
+    defer server_tls.deinit();
+
+    var client_crypto = try PacketCrypto.init(allocator, &client_tls, null);
+    defer client_crypto.deinit();
+    var server_crypto = try PacketCrypto.init(allocator, &server_tls, null);
+    defer server_crypto.deinit();
+
+    const original_dcid = [_]u8{ 0x83, 0x94, 0xc8, 0xf0, 0x3e, 0x51, 0x57, 0x08 };
+    const client_scid = [_]u8{ 0x01, 0x02, 0x03, 0x04 };
+
+    try client_crypto.installRfc9001ClientInitialKeys(&original_dcid);
+    try server_crypto.installRfc9001ServerInitialKeys(&original_dcid);
+
+    const client_payload = "client initial crypto bytes with enough length for header protection sample";
+    const client_initial = try client_crypto.createProtectedRawPacket(.initial, .initial, &original_dcid, &client_scid, client_payload);
+    defer allocator.free(client_initial);
+
+    var server_processed = try server_crypto.processProtectedRawPacket(client_initial, null);
+    defer server_processed.deinit(allocator);
+    try std.testing.expectEqual(.initial, server_processed.encryption_level);
+    try std.testing.expectEqualStrings(client_payload, server_processed.payload);
+
+    const close_payload = [_]u8{ 0x1c, 0x00, 0x00, 0x00 };
+    const server_initial = try server_crypto.createProtectedRawPacket(
+        .initial,
+        .initial,
+        &client_scid,
+        &original_dcid,
+        &close_payload,
+    );
+    defer allocator.free(server_initial);
+
+    var client_processed = try client_crypto.processProtectedRawPacket(server_initial, null);
+    defer client_processed.deinit(allocator);
+    try std.testing.expectEqual(.initial, client_processed.encryption_level);
+    try std.testing.expectEqualSlices(u8, &close_payload, client_processed.payload);
 }

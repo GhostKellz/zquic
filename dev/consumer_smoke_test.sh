@@ -5,26 +5,27 @@
 #   ./dev/consumer_smoke_test.sh
 #
 # Post-tag/archive check:
-#   ZQUIC_URL=https://github.com/ghostkellz/zquic/archive/refs/tags/v0.9.15.tar.gz ./dev/consumer_smoke_test.sh
+#   ZQUIC_URL=https://github.com/ghostkellz/zquic/archive/refs/tags/v0.9.16.tar.gz ./dev/consumer_smoke_test.sh
 
 set -e
 ZIG="${ZIG:-/opt/zig-dev/zig}"
-ZIG_GLOBAL_CACHE_DIR="${ZIG_GLOBAL_CACHE_DIR:-/tmp/zig-global-cache}"
-ZIG_LOCAL_CACHE_DIR="${ZIG_LOCAL_CACHE_DIR:-/tmp/zquic-consumer-smoke-cache}"
 REPO_ROOT="$(pwd)"
 ZQUIC_URL="${ZQUIC_URL:-}"
 
 echo "=== ZQUIC Package Consumer Smoke Test ==="
 echo ""
 
-# Create temporary directory
-TMPDIR=$(mktemp -d)
-trap "rm -rf '$TMPDIR'" EXIT
+# Create a repo-local temporary consumer project.
+WORK_ROOT="$REPO_ROOT/zig-out/consumer-smoke"
+WORK_DIR="$WORK_ROOT/work"
+rm -rf "$WORK_DIR"
+mkdir -p "$WORK_DIR"
+trap "rm -rf '$WORK_ROOT'" EXIT
 
-echo "[1/5] Creating test project in $TMPDIR..."
+echo "[1/5] Creating test project in $WORK_DIR..."
 if [ -z "$ZQUIC_URL" ]; then
-    LOCAL_ARCHIVE="$TMPDIR/zquic-v0.9.15.tar.gz"
-    PACKAGE_DIR="$TMPDIR/zquic"
+    LOCAL_ARCHIVE="$WORK_DIR/zquic-v0.9.16.tar.gz"
+    PACKAGE_DIR="$WORK_DIR/zquic"
     echo "  packaging current checkout: $LOCAL_ARCHIVE"
     tar \
         --exclude=.git \
@@ -33,7 +34,7 @@ if [ -z "$ZQUIC_URL" ]; then
         -czf "$LOCAL_ARCHIVE" \
         -C "$(dirname "$REPO_ROOT")" \
         "$(basename "$REPO_ROOT")"
-    tar -xzf "$LOCAL_ARCHIVE" -C "$TMPDIR"
+    tar -xzf "$LOCAL_ARCHIVE" -C "$WORK_DIR"
     FETCH_SOURCE="$LOCAL_ARCHIVE"
     DEPENDENCY_SPEC=".path = \"zquic\","
     echo "  zquic package path: $PACKAGE_DIR"
@@ -44,7 +45,7 @@ fi
 
 echo "[2/5] Preparing dependency metadata..."
 if [ -z "$ZQUIC_URL" ]; then
-    FETCH_OUTPUT=$(ZIG_GLOBAL_CACHE_DIR="$ZIG_GLOBAL_CACHE_DIR" ZIG_LOCAL_CACHE_DIR="$ZIG_LOCAL_CACHE_DIR" "$ZIG" fetch "$FETCH_SOURCE" 2>&1)
+    FETCH_OUTPUT=$("$ZIG" fetch "$FETCH_SOURCE" 2>&1)
     ZQUIC_HASH=$(echo "$FETCH_OUTPUT" | grep -E '^zquic-[A-Za-z0-9._-]+-[A-Za-z0-9_-]+$' | tail -1)
 
     if [ -z "$ZQUIC_HASH" ]; then
@@ -61,7 +62,7 @@ fi
 
 # Create initial build.zig.zon without fingerprint (Zig will compute it)
 if [ -z "$ZQUIC_URL" ]; then
-    cat > "$TMPDIR/build.zig.zon" << EOF
+    cat > "$WORK_DIR/build.zig.zon" << EOF
 .{
     .name = .zquic_consumer_test,
     .version = "0.0.1",
@@ -79,7 +80,7 @@ if [ -z "$ZQUIC_URL" ]; then
 }
 EOF
 else
-    cat > "$TMPDIR/build.zig.zon" << EOF
+    cat > "$WORK_DIR/build.zig.zon" << EOF
 .{
     .name = .zquic_consumer_test,
     .version = "0.0.1",
@@ -95,7 +96,7 @@ EOF
 fi
 
 # Create a minimal build.zig (Zig 0.16.0-dev API)
-cat > "$TMPDIR/build.zig" << 'EOF'
+cat > "$WORK_DIR/build.zig" << 'EOF'
 const std = @import("std");
 
 pub fn build(b: *std.Build) void {
@@ -128,8 +129,8 @@ pub fn build(b: *std.Build) void {
 EOF
 
 # Create test source
-mkdir -p "$TMPDIR/src"
-cat > "$TMPDIR/src/main.zig" << 'EOF'
+mkdir -p "$WORK_DIR/src"
+cat > "$WORK_DIR/src/main.zig" << 'EOF'
 const std = @import("std");
 const zquic = @import("zquic");
 
@@ -155,11 +156,11 @@ pub fn main() !void {
 EOF
 
 echo "[3/5] Getting package fingerprint from Zig..."
-cd "$TMPDIR"
+cd "$WORK_DIR"
 
 # Run zig build once to get the correct fingerprint
 # Zig will fail but tell us what fingerprint to use
-BUILD_OUTPUT=$(ZIG_GLOBAL_CACHE_DIR="$ZIG_GLOBAL_CACHE_DIR" ZIG_LOCAL_CACHE_DIR="$ZIG_LOCAL_CACHE_DIR" "$ZIG" build 2>&1 || true)
+BUILD_OUTPUT=$("$ZIG" build 2>&1 || true)
 
 # Extract the suggested fingerprint from Zig's error message
 FINGERPRINT=$(echo "$BUILD_OUTPUT" | grep -o 'use this value: 0x[a-f0-9]*' | head -1 | sed 's/use this value: //')
@@ -176,7 +177,7 @@ echo "  Computed fingerprint: $FINGERPRINT"
 # Update build.zig.zon with correct fingerprint
 echo "[4/5] Updating package with correct fingerprint..."
 if [ -z "$ZQUIC_URL" ]; then
-    cat > "$TMPDIR/build.zig.zon" << EOF
+    cat > "$WORK_DIR/build.zig.zon" << EOF
 .{
     .name = .zquic_consumer_test,
     .version = "0.0.1",
@@ -194,7 +195,7 @@ if [ -z "$ZQUIC_URL" ]; then
 }
 EOF
 else
-    cat > "$TMPDIR/build.zig.zon" << EOF
+    cat > "$WORK_DIR/build.zig.zon" << EOF
 .{
     .name = .zquic_consumer_test,
     .version = "0.0.1",
@@ -208,11 +209,11 @@ else
 }
 EOF
     echo "  Saving zquic dependency with Zig package manager..."
-    ZIG_GLOBAL_CACHE_DIR="$ZIG_GLOBAL_CACHE_DIR" ZIG_LOCAL_CACHE_DIR="$ZIG_LOCAL_CACHE_DIR" "$ZIG" fetch --save=zquic "$ZQUIC_URL"
+    "$ZIG" fetch --save=zquic "$ZQUIC_URL"
 fi
 
 echo "[5/6] Building consumer test..."
-BUILD_OUTPUT=$(ZIG_GLOBAL_CACHE_DIR="$ZIG_GLOBAL_CACHE_DIR" ZIG_LOCAL_CACHE_DIR="$ZIG_LOCAL_CACHE_DIR" "$ZIG" build 2>&1) || {
+BUILD_OUTPUT=$("$ZIG" build 2>&1) || {
     echo "$BUILD_OUTPUT"
     exit 1
 }

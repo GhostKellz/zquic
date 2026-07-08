@@ -125,14 +125,7 @@ pub const UdpMultiplexer = struct {
             // Update last activity
             entry.last_activity = Time.nowMicros();
 
-            // Extract payload (data after the header)
-            const payload = packet_data[packet.header_length..];
-
-            // Create packet and route to connection
-            const full_packet = Packet.Packet.init(packet, payload);
-            entry.connection.processPacket(full_packet) catch |err| {
-                std.log.warn("Failed to process packet for connection {}: {}", .{ conn_id_hash, err });
-            };
+            try entry.connection.super_connection.queueIncomingRawPacket(packet_data);
 
             // Update connection's remote address if it changed (connection migration)
             if (!std.meta.eql(entry.remote_address, source_address)) {
@@ -149,6 +142,23 @@ pub const UdpMultiplexer = struct {
         self.bytes_received += packet_data.len;
     }
 
+    /// Drain protected raw packets from a connection and send them to its peer.
+    pub fn flushConnectionRawPackets(self: *Self, connection_id: *const Packet.ConnectionId) Error.ZquicError!u32 {
+        const conn_id_hash = self.hashConnectionId(connection_id);
+        const entry = self.connections.getPtr(conn_id_hash) orelse return Error.ZquicError.UnknownConnection;
+
+        const outgoing = try entry.connection.super_connection.drainOutgoingRawPackets(self.allocator);
+        defer self.allocator.free(outgoing);
+
+        var sent: u32 = 0;
+        for (outgoing) |*packet| {
+            defer packet.deinit(self.allocator);
+            try self.sendPacket(packet.data, entry.remote_address, connection_id.*);
+            sent += 1;
+        }
+        return sent;
+    }
+
     /// Receive and route packets from the UDP socket
     pub fn receiveAndRoute(self: *Self) Error.ZquicError!void {
         const result = self.socket.receiveFrom(self.receive_buffer) catch return Error.ZquicError.NetworkError;
@@ -156,6 +166,15 @@ pub const UdpMultiplexer = struct {
         if (result.bytes_received > 0) {
             try self.routePacket(self.receive_buffer[0..result.bytes_received], result.remote_address);
         }
+    }
+
+    /// Try to receive and route one datagram without blocking.
+    pub fn tryReceiveAndRoute(self: *Self) Error.ZquicError!bool {
+        const result = self.socket.tryReceiveFrom(self.receive_buffer) catch return Error.ZquicError.NetworkError;
+        const packet = result orelse return false;
+        if (packet.bytes_received == 0) return false;
+        try self.routePacket(self.receive_buffer[0..packet.bytes_received], packet.remote_address);
+        return true;
     }
 
     /// Send a packet through the multiplexer
@@ -305,4 +324,70 @@ test "connection management" {
 
     multiplexer.removeConnection(&conn_id);
     try std.testing.expect(multiplexer.connection_count == 0);
+}
+
+test "multiplexer routes ingress into owned raw packet queue" {
+    const config = MultiplexerConfig{};
+    const local_addr = NetAddress.initIp4([4]u8{ 127, 0, 0, 1 }, 0);
+
+    var multiplexer = UdpMultiplexer.init(std.testing.allocator, local_addr, config) catch return;
+    defer multiplexer.deinit();
+
+    const conn_id = try Packet.ConnectionId.init(&[_]u8{ 0x80, 0x81, 0x82, 0x83, 0x84, 0x85, 0x86, 0x87 });
+    var connection = try Connection.Connection.init(std.testing.allocator, .server, .{});
+    defer connection.deinit();
+
+    const first_addr = NetAddress.initIp4([4]u8{ 127, 0, 0, 1 }, 4433);
+    const migrated_addr = NetAddress.initIp4([4]u8{ 127, 0, 0, 1 }, 4434);
+    try multiplexer.addConnection(conn_id, &connection, first_addr);
+
+    const datagram = [_]u8{
+        0x40,
+        0x80,
+        0x81,
+        0x82,
+        0x83,
+        0x84,
+        0x85,
+        0x86,
+        0x87,
+        0x01,
+        0xaa,
+        0xbb,
+        0xcc,
+    };
+    try multiplexer.routePacket(&datagram, migrated_addr);
+
+    try std.testing.expectEqual(@as(usize, 1), connection.super_connection.incoming_raw_packets.items.len);
+    try std.testing.expectEqualSlices(u8, &datagram, connection.super_connection.incoming_raw_packets.items[0].data);
+
+    const entry = multiplexer.connections.getPtr(multiplexer.hashConnectionId(&conn_id)).?;
+    try std.testing.expect(std.meta.eql(entry.remote_address, migrated_addr));
+
+    const stats = multiplexer.getStats();
+    try std.testing.expectEqual(@as(u64, 1), stats.packets_received);
+    try std.testing.expectEqual(@as(u64, datagram.len), stats.bytes_received);
+}
+
+test "multiplexer flushes connection owned raw packets through socket" {
+    const config = MultiplexerConfig{};
+    const local_addr = NetAddress.initIp4([4]u8{ 127, 0, 0, 1 }, 0);
+
+    var multiplexer = UdpMultiplexer.init(std.testing.allocator, local_addr, config) catch return;
+    defer multiplexer.deinit();
+
+    const conn_id = try Packet.ConnectionId.init(&[_]u8{ 1, 3, 5, 7, 9, 11, 13, 15 });
+    var connection = try Connection.Connection.init(std.testing.allocator, .client, .{});
+    defer connection.deinit();
+
+    try multiplexer.addConnection(conn_id, &connection, multiplexer.socket.local_address);
+    try connection.super_connection.queueOutgoingRawPacket("protected datagram");
+
+    const sent = try multiplexer.flushConnectionRawPackets(&conn_id);
+    try std.testing.expectEqual(@as(u32, 1), sent);
+    try std.testing.expectEqual(@as(usize, 0), connection.super_connection.outgoing_raw_packets.items.len);
+
+    const stats = multiplexer.getStats();
+    try std.testing.expectEqual(@as(u64, 1), stats.packets_sent);
+    try std.testing.expectEqual(@as(u64, "protected datagram".len), stats.bytes_sent);
 }

@@ -1,6 +1,6 @@
-FROM alpine:3.21
+FROM alpine:3.24.1
 
-ENV PATH=/opt/zig:${PATH}
+ENV PATH=/workspace/docker/bin:/opt/zig:${PATH}
 
 RUN apk add --no-cache \
     bash \
@@ -9,7 +9,17 @@ RUN apk add --no-cache \
     git \
     build-base \
     valgrind \
-    file
+    file \
+    pkgconf \
+    python3 \
+    py3-aioquic \
+    ngtcp2 \
+    ngtcp2-dev \
+    ngtcp2-gnutls \
+    nghttp3 \
+    nghttp3-dev \
+    libmsquic \
+    libmsquic-dev
 
 WORKDIR /workspace
 

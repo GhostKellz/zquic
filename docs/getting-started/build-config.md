@@ -124,7 +124,7 @@ pub fn build(b: *std.Build) !void {
 
 The dependency inherits the same Zig toolchain. This release is validated with
 `/opt/zig-dev/zig` and package metadata requires
-`0.17.0-dev.657+2faf8debf` or newer.
+`0.17.0-dev.1257+67b05e521` or newer.
 
 ## 🔬 Development Tips
 

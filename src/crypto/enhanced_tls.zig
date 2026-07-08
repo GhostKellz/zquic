@@ -92,6 +92,79 @@ pub const Hkdf = struct {
     }
 };
 
+pub const Rfc9001InitialDirection = struct {
+    secret: [32]u8,
+    key: [16]u8,
+    iv: [12]u8,
+    header_protection_key: [16]u8,
+};
+
+pub const Rfc9001InitialKeys = struct {
+    initial_secret: [32]u8,
+    client: Rfc9001InitialDirection,
+    server: Rfc9001InitialDirection,
+};
+
+pub fn deriveRfc9001InitialKeys(destination_connection_id: []const u8) Error.ZquicError!Rfc9001InitialKeys {
+    const initial_salt = [_]u8{
+        0x38, 0x76, 0x2c, 0xf7, 0xf5, 0x59, 0x34, 0xb3, 0x4d, 0x17,
+        0x9a, 0xe6, 0xa4, 0xc8, 0x0c, 0xad, 0xcc, 0xbb, 0x7f, 0x0a,
+    };
+
+    var result: Rfc9001InitialKeys = undefined;
+    result.initial_secret = std.crypto.kdf.hkdf.HkdfSha256.extract(
+        &initial_salt,
+        destination_connection_id,
+    );
+
+    try hkdfExpandLabelSha256(&result.initial_secret, "client in", &.{}, &result.client.secret);
+    try hkdfExpandLabelSha256(&result.initial_secret, "server in", &.{}, &result.server.secret);
+    try deriveRfc9001InitialDirection(&result.client);
+    try deriveRfc9001InitialDirection(&result.server);
+
+    return result;
+}
+
+fn deriveRfc9001InitialDirection(keys: *Rfc9001InitialDirection) Error.ZquicError!void {
+    try hkdfExpandLabelSha256(&keys.secret, "quic key", &.{}, &keys.key);
+    try hkdfExpandLabelSha256(&keys.secret, "quic iv", &.{}, &keys.iv);
+    try hkdfExpandLabelSha256(&keys.secret, "quic hp", &.{}, &keys.header_protection_key);
+}
+
+fn hkdfExpandLabelSha256(
+    secret: *const [32]u8,
+    label: []const u8,
+    context: []const u8,
+    out: []u8,
+) Error.ZquicError!void {
+    const tls_prefix = "tls13 ";
+    const full_label_len = tls_prefix.len + label.len;
+    if (out.len > std.math.maxInt(u16) or full_label_len > std.math.maxInt(u8) or context.len > std.math.maxInt(u8)) {
+        return Error.ZquicError.CryptoError;
+    }
+
+    var info: [2 + 1 + tls_prefix.len + 64 + 1 + 64]u8 = undefined;
+    if (full_label_len > tls_prefix.len + 64 or context.len > 64) {
+        return Error.ZquicError.CryptoError;
+    }
+
+    var offset: usize = 0;
+    std.mem.writeInt(u16, info[offset..][0..2], @intCast(out.len), .big);
+    offset += 2;
+    info[offset] = @intCast(full_label_len);
+    offset += 1;
+    @memcpy(info[offset .. offset + tls_prefix.len], tls_prefix);
+    offset += tls_prefix.len;
+    @memcpy(info[offset .. offset + label.len], label);
+    offset += label.len;
+    info[offset] = @intCast(context.len);
+    offset += 1;
+    @memcpy(info[offset .. offset + context.len], context);
+    offset += context.len;
+
+    std.crypto.kdf.hkdf.HkdfSha256.expand(out, info[0..offset], secret.*);
+}
+
 /// Enhanced cryptographic keys with proper key derivation
 pub const EnhancedCryptoKeys = struct {
     cipher_suite: EnhancedCipherSuite,
@@ -601,6 +674,40 @@ test "enhanced crypto keys derivation" {
     // Keys should be properly derived
     try std.testing.expect(keys.key.len == 16); // AES-128
     try std.testing.expect(keys.iv.len == 12);
+}
+
+test "RFC 9001 Appendix A.1 Initial key vectors" {
+    const destination_connection_id = [_]u8{ 0x83, 0x94, 0xc8, 0xf0, 0x3e, 0x51, 0x57, 0x08 };
+    const keys = try deriveRfc9001InitialKeys(&destination_connection_id);
+
+    const expected_initial_secret = [_]u8{
+        0x7d, 0xb5, 0xdf, 0x06, 0xe7, 0xa6, 0x9e, 0x43, 0x24, 0x96, 0xad, 0xed, 0xb0, 0x08, 0x51, 0x92,
+        0x35, 0x95, 0x22, 0x15, 0x96, 0xae, 0x2a, 0xe9, 0xfb, 0x81, 0x15, 0xc1, 0xe9, 0xed, 0x0a, 0x44,
+    };
+    const expected_client_secret = [_]u8{
+        0xc0, 0x0c, 0xf1, 0x51, 0xca, 0x5b, 0xe0, 0x75, 0xed, 0x0e, 0xbf, 0xb5, 0xc8, 0x03, 0x23, 0xc4,
+        0x2d, 0x6b, 0x7d, 0xb6, 0x78, 0x81, 0x28, 0x9a, 0xf4, 0x00, 0x8f, 0x1f, 0x6c, 0x35, 0x7a, 0xea,
+    };
+    const expected_server_secret = [_]u8{
+        0x3c, 0x19, 0x98, 0x28, 0xfd, 0x13, 0x9e, 0xfd, 0x21, 0x6c, 0x15, 0x5a, 0xd8, 0x44, 0xcc, 0x81,
+        0xfb, 0x82, 0xfa, 0x8d, 0x74, 0x46, 0xfa, 0x7d, 0x78, 0xbe, 0x80, 0x3a, 0xcd, 0xda, 0x95, 0x1b,
+    };
+    const expected_client_key = [_]u8{ 0x1f, 0x36, 0x96, 0x13, 0xdd, 0x76, 0xd5, 0x46, 0x77, 0x30, 0xef, 0xcb, 0xe3, 0xb1, 0xa2, 0x2d };
+    const expected_client_iv = [_]u8{ 0xfa, 0x04, 0x4b, 0x2f, 0x42, 0xa3, 0xfd, 0x3b, 0x46, 0xfb, 0x25, 0x5c };
+    const expected_client_hp = [_]u8{ 0x9f, 0x50, 0x44, 0x9e, 0x04, 0xa0, 0xe8, 0x10, 0x28, 0x3a, 0x1e, 0x99, 0x33, 0xad, 0xed, 0xd2 };
+    const expected_server_key = [_]u8{ 0xcf, 0x3a, 0x53, 0x31, 0x65, 0x3c, 0x36, 0x4c, 0x88, 0xf0, 0xf3, 0x79, 0xb6, 0x06, 0x7e, 0x37 };
+    const expected_server_iv = [_]u8{ 0x0a, 0xc1, 0x49, 0x3c, 0xa1, 0x90, 0x58, 0x53, 0xb0, 0xbb, 0xa0, 0x3e };
+    const expected_server_hp = [_]u8{ 0xc2, 0x06, 0xb8, 0xd9, 0xb9, 0xf0, 0xf3, 0x76, 0x44, 0x43, 0x0b, 0x49, 0x0e, 0xea, 0xa3, 0x14 };
+
+    try std.testing.expectEqualSlices(u8, &expected_initial_secret, &keys.initial_secret);
+    try std.testing.expectEqualSlices(u8, &expected_client_secret, &keys.client.secret);
+    try std.testing.expectEqualSlices(u8, &expected_client_key, &keys.client.key);
+    try std.testing.expectEqualSlices(u8, &expected_client_iv, &keys.client.iv);
+    try std.testing.expectEqualSlices(u8, &expected_client_hp, &keys.client.header_protection_key);
+    try std.testing.expectEqualSlices(u8, &expected_server_secret, &keys.server.secret);
+    try std.testing.expectEqualSlices(u8, &expected_server_key, &keys.server.key);
+    try std.testing.expectEqualSlices(u8, &expected_server_iv, &keys.server.iv);
+    try std.testing.expectEqualSlices(u8, &expected_server_hp, &keys.server.header_protection_key);
 }
 
 test "aes gcm encryption" {

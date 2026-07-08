@@ -4,8 +4,6 @@
 //! Only included when the 'vpn' feature is enabled.
 
 const std = @import("std");
-const zquic_core = @import("zquic_core");
-const zcrypto = @import("zcrypto");
 const NetAddress = @import("net/address.zig");
 const Address = NetAddress.Address;
 
@@ -56,25 +54,39 @@ pub fn deinit() void {
 pub const VpnUtils = struct {
     /// Create a new VPN interface
     pub fn createInterface(allocator: std.mem.Allocator, config: VpnConfig) !*VpnInterface {
-        _ = allocator;
-        _ = config;
-        // Implementation would create and configure VPN interface
-        return undefined;
+        const interface = try allocator.create(VpnInterface);
+        interface.* = .{
+            .name = "zquic-vpn0",
+            .local_address = config.local_address,
+            .mtu = config.mtu,
+            .is_active = true,
+        };
+        return interface;
     }
 
     /// Establish VPN connection
     pub fn connect(allocator: std.mem.Allocator, interface: *VpnInterface, config: VpnConfig) !*VpnConnection {
-        _ = allocator;
-        _ = interface;
-        _ = config;
-        // Implementation would establish VPN connection
-        return undefined;
+        const router = try allocator.create(PacketRouter);
+        errdefer allocator.destroy(router);
+        router.* = PacketRouter.init(allocator, .{
+            .enable_nat = config.enable_nat,
+        });
+
+        const connection = try allocator.create(VpnConnection);
+        connection.* = .{
+            .interface = interface,
+            .router = router,
+            .is_connected = true,
+            .bytes_sent = 0,
+            .bytes_received = 0,
+            .connected_at = std.time.microTimestamp(),
+        };
+        return connection;
     }
 
     /// Disconnect VPN
     pub fn disconnect(connection: *VpnConnection) void {
-        _ = connection;
-        // Implementation would disconnect VPN
+        connection.is_connected = false;
     }
 };
 

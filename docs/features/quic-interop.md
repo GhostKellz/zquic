@@ -1,8 +1,11 @@
 # QUIC Interop Plan
 
-This page defines the v0.9.15 interop posture for zquic. It is a test plan and
+This page defines the v0.9.16 interop posture for zquic. It is a test plan and
 evidence log, not a claim that zquic is broadly interoperable with every QUIC
 deployment.
+
+The evidence ladder, qlog event taxonomy, and Docker architecture diagrams live
+in `docs/interop/methodology.md`.
 
 ## Scope
 
@@ -11,15 +14,37 @@ implementations:
 
 | Stack | Role | Initial target | Status |
 |-------|------|----------------|--------|
-| quiche | External client and server | HTTP/3 request/response, version negotiation, close paths | Planned |
-| ngtcp2/nghttp3 | External client and server | HTTP/3 request/response, SETTINGS, GOAWAY, reset paths | Planned |
+| quiche | External client and server | HTTP/3 request/response, version negotiation, close paths | Live packet probe receives Initial packets; full handshake pending |
+| ngtcp2/nghttp3 | External client and server | HTTP/3 request/response, SETTINGS, GOAWAY, reset paths | Live packet probe decrypts external Initial CRYPTO through Debian `gtlsclient`; full handshake pending |
 | MsQuic | External client and server | Transport handshake, connection close, stateless reset posture | Planned |
-| aioquic | External client and server | Python-driven HTTP/3, QPACK, malformed-input cases | Planned |
+| aioquic | External client and server | Python-driven HTTP/3, QPACK, malformed-input cases | Live packet probe decrypts an external Initial, observes CRYPTO, sends protected server Initial CRYPTO, and sends encrypted Initial CONNECTION_CLOSE; full handshake pending |
 | Maintained Zig QUIC projects | External client and server | Package/API compatibility and packet traces where available | Discovery needed |
 
 Interop checks should run only when the external tool is installed and an
 endpoint or command has been provided. Missing tools are skips, not failures,
 unless the caller opts into strict mode.
+
+## Next Raw Packet Target
+
+The next external target is a raw-packet smoke against `aioquic` or
+`ngtcp2/nghttp3` that exercises:
+
+- Initial long-header packet protection and header unprotection;
+- CRYPTO frame delivery through the per-level reassembly path;
+- packet-number reconstruction from truncated packet numbers;
+- transition from Initial/Handshake keys to 1-RTT packet protection.
+
+Current in-tree coverage validates constrained short-header raw packets,
+long-header Initial and Handshake CRYPTO packets, 0-RTT raw packet protection,
+variable-length packet numbers, UDP multiplexer queue ownership, and protected
+datagram egress flushing through owned connection queues. It also validates
+connection-level scheduling of flow-control frames and PTO PING probes into
+protected raw datagrams, ACK feedback into packet spaces, stream write-buffer
+egress, native protected Handshake-space CRYPTO scheduling, and localhost UDP
+loopback routing into the peer raw queue. External evidence currently stops at
+Initial-space decrypt/frame/response behavior; live external Handshake-space
+flight, handshake confirmation, and HTTP/3 request/response success are still
+pending.
 
 ## Harness
 
@@ -64,9 +89,19 @@ Useful environment variables:
 | `ZQUIC_INTEROP_REQUIRE_RUN=1` | Fail if every case is skipped. |
 | `ZQUIC_INTEROP_REQUIRE_TRANSPORT_CLOSE=1` | Fail unless at least one stateless-reset, Retry, CONNECTION_CLOSE, or draining command runs. |
 
-The harness intentionally avoids starting background servers by default. Server
-startup, certificates, ALPN, port selection, and cleanup need to become stable
-before release validation can rely on an automatic local endpoint.
+The generic harness intentionally avoids starting background servers by
+default. The dedicated Docker target
+`./dev/docker_validate.sh interop-zquic-server` is the exception: it starts
+`zquic-interop-probe-server`, runs Debian-packaged/source-built external
+clients against it, requires qlog-style packet trace plus encrypted Initial
+CONNECTION_CLOSE evidence, requires a decrypted CRYPTO frame, sends protected
+server Initial CRYPTO by default, and removes its repo-local scratch log before
+exit.
+
+The external clients may still time out or report handshake failure in this
+target. Those failures are expected until the production accept loop drives the
+full TLS/QUIC handshake and application protocol response path; they are not
+counted as passing HTTP/3 or full-handshake evidence.
 
 Version-negotiation command flags differ by implementation, so the harness does
 not guess them. Provide the exact command prefix for the installed client; the
@@ -97,10 +132,10 @@ Required transport interop cases for v0.9.x maturity:
 
 | Case | Expected evidence |
 |------|-------------------|
-| Initial packet protection | External stack accepts Initial packet sequence or rejects with a specific transport error. |
-| Handshake packet protection | Keys advance through handshake without packet-number rollback. |
-| 0-RTT packet handling | Rejection is explicit unless application policy and remembered transport parameters allow acceptance. |
-| 1-RTT packet handling | Steady-state packets decrypt and ACK correctly after handshake confirmation. |
+| Initial packet protection | In-tree long-header Initial CRYPTO packets decrypt through owned queues; the Docker live interop probe decrypts at least one external client Initial, observes CRYPTO, sends protected server Initial CRYPTO, and sends encrypted Initial CONNECTION_CLOSE. |
+| Handshake packet protection | In-tree long-header Handshake CRYPTO packets decrypt with handshake keys; external keys advance through handshake without packet-number rollback. |
+| 0-RTT packet handling | In-tree 0-RTT raw packet protection/deprotection works at the packet boundary; full rejection/acceptance policy still depends on application policy and remembered transport parameters. |
+| 1-RTT packet handling | In-tree short-header packets decrypt and dispatch STREAM frames through owned queues; ACK frames are generated and processed into packet spaces; stream write buffers can be scheduled into protected STREAM datagrams. External steady-state packets still need ACK/loss evidence after handshake confirmation. |
 | Version negotiation | zquic distinguishes malformed packets from unsupported nonzero versions, can serialize version-negotiation responses with swapped client CIDs, and exposes external-client command hooks in `dev/interop_smoke.sh`. |
 | Transport parameters | max data, stream limits, idle timeout, active connection ID limit, migration disablement, ACK delay exponent, and preferred address posture encode/decode across stacks. |
 | Retry | In-tree Retry parsing validates original destination connection ID and retry source connection ID; Retry integrity tag computation uses the RFC 9001 QUIC v1 AES-GCM key/nonce and is pinned by `tests/fixtures/interop/retry-integrity.json`; external command hook is available. |
@@ -171,17 +206,18 @@ packet sequences. Secrets, ticket keys, and private keys must not be committed.
 
 ## Known Gaps
 
-The table below is the v0.9.15 evidence ledger. Rows marked as fixture or
+The table below is the v0.9.16 evidence ledger. Rows marked as fixture or
 in-tree coverage are useful regression coverage, but they are not external
 interop evidence until the corresponding harness command is run against an
 installed implementation.
 
 | Area | Current evidence | Target files | Remaining gap |
 |------|------------------|--------------|---------------|
-| External client/server smoke | Optional harness discovery and command hooks for quiche, ngtcp2/nghttp3, MsQuic, and aioquic. | `dev/interop_smoke.sh`, `docs/features/quic-interop.md` | Requires installed external stacks, certificates, endpoints, and exact commands before release evidence can name a passing implementation. |
+| External client/server smoke | Optional harness discovery and command hooks for quiche, ngtcp2/nghttp3, MsQuic, and aioquic. Per-category require flags can fail a run when external clients, version negotiation, servers, HTTP/3, DoQ, or transport-close checks are skipped. `interop-zquic-server` proves quiche, ngtcp2/gtlsclient, and aioquic can reach a live zquic UDP endpoint, and requires at least one external Initial decrypt, decrypted CRYPTO frame, protected server Initial CRYPTO transmission from the `SuperConnection` outgoing raw queue, and encrypted Initial CONNECTION_CLOSE transmission. | `dev/interop_smoke.sh`, `docker/interop-zquic-server-smoke.sh`, `examples/interop_probe_server.zig`, `src/core/connection.zig`, `docs/features/quic-interop.md`, `docs/interop/methodology.md` | Full client success still requires production accept-loop TLS orchestration, ALPN, HTTP/3 response handling, Handshake-space packet flight, and stricter success gates. |
 | Packet trace replay | Deterministic JSON fixtures for Initial, Handshake, 0-RTT, and 1-RTT parser replay. | `tests/fixtures/interop/*.json`, `tests/packet_fuzz_test.zig` | Header and metadata replay only; protected-payload decryption fixtures remain pending. |
+| Raw packet socket path | UDP multiplexer ingress queues full datagrams into owned connection raw queues, supports peer address migration updates, flushes connection-owned protected datagrams to the peer socket address, supports nonblocking receive routing, schedules flow-control/PTO/ACK/STREAM frames as protected datagrams, can turn an owned raw client Initial CRYPTO packet into a protected server Initial CRYPTO response through `SuperConnection`, and has native coverage for protected Handshake CRYPTO scheduling. These helpers are advanced connection/interop APIs, not the normal application request/response entry point. `dev/cli_smoke.sh` builds and runs local demo binaries as a non-network release smoke. | `src/net/multiplexer.zig`, `src/core/connection.zig`, `src/core/packet_crypto.zig`, `src/core/recovery.zig`, `src/core/flow_control.zig`, `tests/handshake_integration_test.zig`, `dev/cli_smoke.sh` | Needs a live external stack to observe a protected Handshake-space CRYPTO flight before this counts as external Handshake-space interop evidence. |
 | Transport parameters | Encode/decode and validation coverage for limits, idle timeout, migration posture, ACK delay exponent, CID limits, preferred-address rejection, EncryptedExtensions parsing, and connection-level retention after handshake validation. | `src/core/transport_parameters.zig`, `src/crypto/comprehensive_tls.zig`, `tests/handshake_integration_test.zig` | Full live TLS handshake orchestration still needs to feed this policy from network packets end-to-end. |
-| Version negotiation | Unsupported-version parsing, version-negotiation packet parse/serialize coverage, and external command hooks. | `src/core/packet.zig`, `tests/packet_fuzz_test.zig`, `dev/interop_smoke.sh` | No live external client result is recorded yet. |
+| Version negotiation | Unsupported-version parsing, version-negotiation packet parse/serialize coverage, external command hooks, and live probe emission of a Version Negotiation packet when an external client sends an unsupported long-header version. | `src/core/packet.zig`, `tests/packet_fuzz_test.zig`, `examples/interop_probe_server.zig`, `dev/interop_smoke.sh` | Needs a strict external version-negotiation command before this becomes a release-blocking gate. |
 | Stateless reset, Retry, close, draining | In-tree parsing/matching helpers, RFC 9001 Retry integrity vector, shutdown/CONNECTION_CLOSE/draining assertions, and a focused `--transport-close` external harness mode with `ZQUIC_INTEROP_REQUIRE_TRANSPORT_CLOSE=1`. | `src/core/packet.zig`, `src/crypto/keys.zig`, `tests/fixtures/interop/retry-integrity.json`, `tests/handshake_integration_test.zig`, `dev/interop_smoke.sh` | Needs at least one external implementation run before the task can be marked complete. |
 | HTTP/3 | SETTINGS, request/response, GOAWAY/CANCEL_PUSH parsing, malformed frame rejection, and error mapping tests. | `src/http3/frame.zig`, `tests/http3_integration_test.zig`, `dev/interop_smoke.sh` | Connection-level GOAWAY ordering, transport reset propagation, and live external stack evidence are still missing. |
 | QPACK | JSON fixtures for static-equivalent literals, duplicate pseudo-headers, malformed blocks, header-list limits, and dynamic-table-disabled posture. | `src/http3/qpack.zig`, `tests/fixtures/qpack/*.json`, `tests/http3_integration_test.zig` | Fixtures intentionally avoid full RFC 9204 dynamic table interop. |
@@ -190,6 +226,14 @@ installed implementation.
 - The current example binaries mostly exercise in-process flows rather than a
   stable networked QUIC CLI. `ZQUIC_INTEROP_ZQUIC_CLIENT_CMD` remains required
   for zquic-as-client checks until that changes.
+- `dev/cli_smoke.sh` is local release evidence only; it does not replace
+  external interop runs.
+- Use `ZQUIC_INTEROP_REQUIRE_CLIENTS=1`,
+  `ZQUIC_INTEROP_REQUIRE_VERSION_NEGOTIATION=1`,
+  `ZQUIC_INTEROP_REQUIRE_SERVERS=1`, `ZQUIC_INTEROP_REQUIRE_HTTP3=1`,
+  `ZQUIC_INTEROP_REQUIRE_DOQ=1`, and
+  `ZQUIC_INTEROP_REQUIRE_TRANSPORT_CLOSE=1` to prevent skipped groups from
+  passing a required interop job.
 - The harness does not yet manage certificates or start a local zquic HTTP/3
   endpoint.
 - External version-negotiation checks require implementation-specific client

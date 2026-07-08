@@ -135,6 +135,12 @@ const ciphertext = try ctx.encrypt(plaintext, packet_number, allocator);
 - **`docs/integrations/zcrypto.md`** – tuning notes for PQ TLS + VPN helpers
 - **`examples/*.zig`** – runnable samples that match the documentation
 
+Repository hosting is expected to move to `git.cktechx.com`, a self-hosted
+GitLab instance maintained with image-based server backups and Wasabi S3
+repository backups. The move is intended to provide more control over the CI
+environment, runner configuration, and release infrastructure, while GitHub will
+likely remain as a backup mirror.
+
 ## 🔍 Why Zig?
 
 - **Manual memory management** for performance + predictability

@@ -145,6 +145,13 @@ pub const Crypto = core.Crypto;
 /// (X25519 + ML-KEM-768) and ML-DSA-65 signatures.
 pub const EnhancedCrypto = core.EnhancedCrypto;
 
+/// Experimental comprehensive TLS scaffold.
+///
+/// Provides bounded TLS record parsing, transcript handling, transport
+/// parameter extraction, and certificate helper surfaces. It is not a
+/// production-complete TLS stack.
+pub const ComprehensiveTls = core.ComprehensiveTls;
+
 /// TLS 1.3 handshake state machine for QUIC.
 ///
 /// Models the cryptographic handshake process including:
@@ -173,6 +180,7 @@ pub const SshQuic = core.SshQuic;
 /// Platform-specific UDP implementation with non-blocking I/O,
 /// configurable buffer sizes, and packet info reception.
 pub const Udp = core.Udp;
+pub const UdpSocket = core.UdpSocket;
 
 /// UDP connection multiplexer for handling multiple QUIC connections.
 ///

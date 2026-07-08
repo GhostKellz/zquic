@@ -53,6 +53,21 @@ pub const CC_CONSTANTS = struct {
     pub const LOSS_REDUCTION_FACTOR: f64 = 0.5;
 };
 
+pub const PtoProbePlan = struct {
+    initial: bool = false,
+    handshake: bool = false,
+    application: bool = false,
+    count: u8 = 0,
+
+    pub fn wants(self: PtoProbePlan, space_type: @import("packet_space.zig").PacketSpaceType) bool {
+        return switch (space_type) {
+            .initial => self.initial,
+            .handshake => self.handshake,
+            .application => self.application,
+        };
+    }
+};
+
 /// RTT measurements and statistics
 pub const RttStats = struct {
     /// Smoothed RTT estimate
@@ -353,14 +368,36 @@ pub const LossRecovery = struct {
 
     /// Handle PTO timeout
     fn onPtoTimeout(self: *Self, spaces: []const *PacketSpace, now: u64) void {
-        _ = spaces;
         _ = now;
 
         self.pto_count += 1;
+        _ = self.planPtoProbes(spaces);
+    }
 
-        // TODO: Send probe packets
-        // - Send one ack-eliciting packet in each space with in-flight packets
-        // - If no spaces have in-flight packets, send in application space
+    pub fn planPtoProbes(self: *const Self, spaces: []const *PacketSpace) PtoProbePlan {
+        _ = self;
+        var plan = PtoProbePlan{};
+        var application_active = false;
+
+        for (spaces) |space| {
+            if (!space.isActive()) continue;
+            if (space.space_type == .application) application_active = true;
+            if (!space.hasInFlightPackets()) continue;
+
+            switch (space.space_type) {
+                .initial => plan.initial = true,
+                .handshake => plan.handshake = true,
+                .application => plan.application = true,
+            }
+            plan.count += 1;
+        }
+
+        if (plan.count == 0 and application_active) {
+            plan.application = true;
+            plan.count = 1;
+        }
+
+        return plan;
     }
 
     /// Process acknowledgment
@@ -523,4 +560,31 @@ test "persistent congestion collapses congestion window" {
     const lost = [_]PacketNumber{ 1, 2 };
     try std.testing.expect(recovery.detectPersistentCongestion(&lost, &space));
     try std.testing.expectEqual(CC_CONSTANTS.MIN_WINDOW, recovery.getCongestionWindow());
+}
+
+test "pto probe plan targets active in-flight spaces or application fallback" {
+    var initial = try PacketSpace.init(std.testing.allocator, .initial);
+    defer initial.deinit();
+    var handshake = try PacketSpace.init(std.testing.allocator, .handshake);
+    defer handshake.deinit();
+    var application = try PacketSpace.init(std.testing.allocator, .application);
+    defer application.deinit();
+    var recovery = LossRecovery.init();
+
+    try initial.onPacketSent(0, 1_000, true, true, 1200);
+    try handshake.onPacketSent(0, 1_000, true, false, 1200);
+
+    const spaces = [_]*PacketSpace{ &initial, &handshake, &application };
+    const plan = recovery.planPtoProbes(&spaces);
+    try std.testing.expect(plan.wants(.initial));
+    try std.testing.expect(!plan.wants(.handshake));
+    try std.testing.expect(!plan.wants(.application));
+    try std.testing.expectEqual(@as(u8, 1), plan.count);
+
+    initial.discard();
+    const fallback = recovery.planPtoProbes(&spaces);
+    try std.testing.expect(!fallback.wants(.initial));
+    try std.testing.expect(!fallback.wants(.handshake));
+    try std.testing.expect(fallback.wants(.application));
+    try std.testing.expectEqual(@as(u8, 1), fallback.count);
 }

@@ -19,7 +19,9 @@ echo ""
 
 # Run benchmark tests
 echo "[2/5] Running benchmark tests..."
-"$ZIG" build test -Doptimize=ReleaseFast 2>&1 | tee /tmp/zquic_bench.log
+mkdir -p zig-out/logs
+BENCH_LOG="zig-out/logs/zquic_bench.log"
+"$ZIG" build test -Doptimize=ReleaseFast 2>&1 | tee "$BENCH_LOG"
 echo ""
 
 # Binary size analysis
@@ -46,7 +48,7 @@ echo ""
 # Summary
 echo "[5/5] Performance summary..."
 echo "Build type: ReleaseFast"
-echo "Test status: $(grep -c 'passed' /tmp/zquic_bench.log 2>/dev/null || echo 'N/A') tests passed"
+echo "Test status: $(grep -c 'passed' "$BENCH_LOG" 2>/dev/null || echo 'N/A') tests passed"
 echo ""
 
 echo "=== Benchmark Complete ==="

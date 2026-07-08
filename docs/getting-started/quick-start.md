@@ -178,9 +178,9 @@ When enabled, ML-KEM-768 + X25519 hybrid key exchange is available. See [zcrypto
 ## Troubleshooting
 
 ### Build Issues
-- Ensure you have Zig 0.17.0-dev.657+2faf8debf or later
+- Ensure you have Zig 0.17.0-dev.1257+67b05e521 or later
 - Check that zcrypto dependencies are available
-- Try `rm -rf zig-cache .zig-cache` and rebuild
+- Ensure repo-local `.zig-cache` and `zig-out` are owned by your user, then rebuild
 
 ### Runtime Issues
 - Verify port 8080 is available

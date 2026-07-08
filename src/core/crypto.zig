@@ -11,6 +11,7 @@
 const std = @import("std");
 const zcrypto = @import("zcrypto");
 const Error = @import("../utils/error.zig");
+const enhanced_tls = @import("../crypto/enhanced_tls.zig");
 
 /// QUIC encryption levels corresponding to TLS record types
 pub const EncryptionLevel = enum(u8) {
@@ -368,7 +369,8 @@ pub const HeaderProtection = struct {
         try self.generateMask(hp_key, sample, &mask);
 
         // Apply mask to first byte and packet number bytes
-        header[0] ^= mask[0] & if (header[0] & 0x80 != 0) 0x0F else 0x1F;
+        const first_byte_mask: u8 = if (header[0] & 0x80 != 0) 0x0F else 0x1F;
+        header[0] ^= mask[0] & first_byte_mask;
 
         // Determine packet number length and apply mask
         const pn_length = if (header[0] & 0x80 != 0)
@@ -380,6 +382,50 @@ pub const HeaderProtection = struct {
             if (1 + i < header.len) {
                 header[1 + i] ^= mask[1 + i];
             }
+        }
+    }
+
+    pub fn protectAtPacketNumberOffset(
+        self: Self,
+        hp_key: []const u8,
+        header: []u8,
+        packet_number_offset: usize,
+        sample: []const u8,
+    ) Error.ZquicError!void {
+        if (header.len == 0 or packet_number_offset >= header.len) return Error.ZquicError.CryptoError;
+
+        var mask: [5]u8 = undefined;
+        try self.generateMask(hp_key, sample, &mask);
+
+        const first_byte_mask: u8 = if (header[0] & 0x80 != 0) 0x0F else 0x1F;
+        const packet_number_len: usize = (header[0] & 0x03) + 1;
+        if (packet_number_offset + packet_number_len > header.len) return Error.ZquicError.CryptoError;
+
+        header[0] ^= mask[0] & first_byte_mask;
+        for (0..packet_number_len) |i| {
+            header[packet_number_offset + i] ^= mask[1 + i];
+        }
+    }
+
+    pub fn unprotectAtPacketNumberOffset(
+        self: Self,
+        hp_key: []const u8,
+        header: []u8,
+        packet_number_offset: usize,
+        sample: []const u8,
+    ) Error.ZquicError!void {
+        if (header.len == 0 or packet_number_offset >= header.len) return Error.ZquicError.CryptoError;
+
+        var mask: [5]u8 = undefined;
+        try self.generateMask(hp_key, sample, &mask);
+
+        const first_byte_mask: u8 = if (header[0] & 0x80 != 0) 0x0F else 0x1F;
+        header[0] ^= mask[0] & first_byte_mask;
+
+        const packet_number_len: usize = (header[0] & 0x03) + 1;
+        if (packet_number_offset + packet_number_len > header.len) return Error.ZquicError.CryptoError;
+        for (0..packet_number_len) |i| {
+            header[packet_number_offset + i] ^= mask[1 + i];
         }
     }
 
@@ -693,6 +739,64 @@ test "header protection rejects malformed inputs" {
     try hp.protect(&hp_key, &header, &sample);
     try hp.unprotect(&hp_key, &header, &sample);
     try std.testing.expectEqualSlices(u8, &[_]u8{ 0x40, 0x00, 0x00, 0x00, 0x01 }, &header);
+}
+
+fn hexToArray(comptime len: usize, hex: []const u8) ![len]u8 {
+    var out: [len]u8 = undefined;
+    const bytes = try std.fmt.hexToBytes(&out, hex);
+    if (bytes.len != len) return error.InvalidLength;
+    return out;
+}
+
+test "RFC 9001 Appendix A Initial packet header protection vectors" {
+    const keys = try enhanced_tls.deriveRfc9001InitialKeys(&[_]u8{ 0x83, 0x94, 0xc8, 0xf0, 0x3e, 0x51, 0x57, 0x08 });
+    const hp = HeaderProtection.init(.aes_128_gcm_sha256);
+
+    const client_sample = try hexToArray(16, "d1b1c98dd7689fb8ec11d242b123dc9b");
+    const expected_client_mask = try hexToArray(5, "437b9aec36");
+    var client_mask: [5]u8 = undefined;
+    try hp.generateMask(&keys.client.header_protection_key, &client_sample, &client_mask);
+    try std.testing.expectEqualSlices(u8, &expected_client_mask, &client_mask);
+
+    const client_unprotected = try hexToArray(22, "c300000001088394c8f03e5157080000449e00000002");
+    const client_protected = try hexToArray(22, "c000000001088394c8f03e5157080000449e7b9aec34");
+    var protected_client_header = client_unprotected;
+    try hp.protectAtPacketNumberOffset(&keys.client.header_protection_key, &protected_client_header, 18, &client_sample);
+    try std.testing.expectEqualSlices(u8, &client_protected, &protected_client_header);
+    try hp.unprotectAtPacketNumberOffset(&keys.client.header_protection_key, &protected_client_header, 18, &client_sample);
+    try std.testing.expectEqualSlices(u8, &client_unprotected, &protected_client_header);
+
+    const server_sample = try hexToArray(16, "2cd0991cd25b0aac406a5816b6394100");
+    const expected_server_mask = try hexToArray(5, "2ec0d8356a");
+    var server_mask: [5]u8 = undefined;
+    try hp.generateMask(&keys.server.header_protection_key, &server_sample, &server_mask);
+    try std.testing.expectEqualSlices(u8, &expected_server_mask, &server_mask);
+
+    const server_unprotected = try hexToArray(19, "c1000000010008f067a5502a4262b50040750001");
+    const server_protected = try hexToArray(19, "cf000000010008f067a5502a4262b5004075c0d9");
+    var protected_server_header = server_unprotected;
+    try hp.protectAtPacketNumberOffset(&keys.server.header_protection_key, &protected_server_header, 17, &server_sample);
+    try std.testing.expectEqualSlices(u8, &server_protected, &protected_server_header);
+    try hp.unprotectAtPacketNumberOffset(&keys.server.header_protection_key, &protected_server_header, 17, &server_sample);
+    try std.testing.expectEqualSlices(u8, &server_unprotected, &protected_server_header);
+}
+
+test "RFC 9001 Appendix A.5 ChaCha20 header protection vector" {
+    const hp = HeaderProtection.init(.chacha20_poly1305_sha256);
+    const hp_key = try hexToArray(32, "25a282b9e82f06f21f488917a4fc8f1b73573685608597d0efcb076b0ab7a7a4");
+    const sample = try hexToArray(16, "5e5cd55c41f69080575d7999c25a5bfb");
+    const expected_mask = try hexToArray(5, "aefefe7d03");
+    var mask: [5]u8 = undefined;
+    try hp.generateMask(&hp_key, &sample, &mask);
+    try std.testing.expectEqualSlices(u8, &expected_mask, &mask);
+
+    const unprotected_header = try hexToArray(4, "4200bff4");
+    const protected_header = try hexToArray(4, "4cfe4189");
+    var header = unprotected_header;
+    try hp.protectAtPacketNumberOffset(&hp_key, &header, 1, &sample);
+    try std.testing.expectEqualSlices(u8, &protected_header, &header);
+    try hp.unprotectAtPacketNumberOffset(&hp_key, &header, 1, &sample);
+    try std.testing.expectEqualSlices(u8, &unprotected_header, &header);
 }
 
 test "quic crypto packet roundtrip rejects tampering and undersized buffers" {

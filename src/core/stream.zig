@@ -97,6 +97,8 @@ pub const SuperStream = struct {
     read_buffer: std.ArrayListUnmanaged(u8),
     read_start: usize, // Offset to avoid memmove on every read
     write_buffer: std.ArrayListUnmanaged(u8),
+    write_start: usize,
+    bytes_flushed: u64,
 
     // Flow control state (atomic for lock-free access)
     send_window: std.atomic.Value(u64),
@@ -121,6 +123,8 @@ pub const SuperStream = struct {
             .read_buffer = .empty,
             .read_start = 0,
             .write_buffer = .empty,
+            .write_start = 0,
+            .bytes_flushed = 0,
 
             // Initialize flow control (generous initial windows for high throughput)
             .send_window = std.atomic.Value(u64).init(1_048_576), // 1MB
@@ -225,6 +229,31 @@ pub const SuperStream = struct {
     /// Zero-copy async write - takes ownership of data reference
     pub fn writeAsync(self: *Self, data: []const u8, fin: bool) !void {
         _ = try self.write(data, fin);
+    }
+
+    pub fn pendingWriteData(self: *const Self) []const u8 {
+        if (self.write_start >= self.write_buffer.items.len) return &.{};
+        return self.write_buffer.items[self.write_start..];
+    }
+
+    pub fn bytesFlushed(self: *const Self) u64 {
+        return self.bytes_flushed;
+    }
+
+    pub fn markWriteDataFlushed(self: *Self, bytes: usize) void {
+        const pending = self.pendingWriteData();
+        const consumed = @min(bytes, pending.len);
+        self.write_start += consumed;
+        self.bytes_flushed += consumed;
+
+        if (self.write_start > self.write_buffer.items.len / 2 and self.write_start > 4096) {
+            const remaining = self.write_buffer.items.len - self.write_start;
+            if (remaining > 0) {
+                @memcpy(self.write_buffer.items[0..remaining], self.write_buffer.items[self.write_start..]);
+            }
+            self.write_buffer.shrinkRetainingCapacity(remaining);
+            self.write_start = 0;
+        }
     }
 
     /// Handle incoming data
