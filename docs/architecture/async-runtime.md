@@ -1,6 +1,9 @@
 # Async Runtime Notes
 
-ZQUIC no longer depends on zsync; the async runtime is fully in-tree under `src/async/`. Highlights:
+ZQUIC's runtime implementation is in-tree under `src/async/` and does not
+import zsync. The package metadata still retains a pinned zsync dependency
+entry, so this is a source/runtime boundary rather than a zero-metadata-dependency
+claim. Highlights:
 
 - **Event Loop**: `async/runtime.zig` drives connection, stream, and timer progress using a poll loop tuned for QUIC workloads.
 - **Timer Wheel**: `async/event_loop.zig` exposes microsecond timers for retransmits, PTO, and keep-alives.
@@ -9,13 +12,18 @@ ZQUIC no longer depends on zsync; the async runtime is fully in-tree under `src/
 ## Migrating from zsync
 Earlier builds asked you to pull zsync into your project. With 0.9.3:
 1. Remove any zsync dependency from your `build.zig`.
-2. Use `zquic.AsyncRuntime` (re-exported from `src/core.zig`) to spin workers.
-3. The runtime integrates tightly with the packet multiplexer, so HTTP/3/DoQ benefit automatically.
+2. Use `zquic.AsyncRuntime.QuicRuntime` (re-exported from `src/core.zig`) for
+   the in-tree UDP runtime.
+3. Integrate protocol work explicitly with the runtime and packet multiplexer.
 
 Example:
 ```zig
-var runtime = zquic.AsyncRuntime.init(allocator, .{});
-try runtime.spawn(.{ .task = myServerTask });
+const address = try zquic.NetAddress.resolveIp("127.0.0.1", 4433);
+var runtime = try zquic.AsyncRuntime.QuicRuntime.init(allocator, address, .{});
+defer runtime.deinit();
+
+// `run()` owns the blocking event-loop call; `stop()` ends it.
+try runtime.run();
 ```
 
 ## Next Steps

@@ -5,6 +5,8 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 VARIANT="${1:-release}"
 COMPOSE_FILE="$ROOT/docker/compose.yml"
 script_args=("${@:2}")
+export HOST_UID="${HOST_UID:-$(id -u)}"
+export HOST_GID="${HOST_GID:-$(id -g)}"
 
 interop_env_args=()
 for name in \
@@ -19,6 +21,21 @@ for name in \
   ZQUIC_INTEROP_REQUIRE_TRANSPORT_CLOSE \
   ZQUIC_INTEROP_REQUIRE_HTTP3 \
   ZQUIC_INTEROP_REQUIRE_DOQ \
+  ZQUIC_INTEROP_REQUIRE_CLIENT_HELLO_ACCEPTED \
+  ZQUIC_INTEROP_REQUIRE_HANDSHAKE_KEYS \
+  ZQUIC_INTEROP_REQUIRE_CONNECTION_STATE_REUSED \
+  ZQUIC_INTEROP_REQUIRE_SERVER_HANDSHAKE_FLIGHT \
+  ZQUIC_INTEROP_REQUIRE_HANDSHAKE_CONFIRMED \
+  ZQUIC_INTEROP_REQUIRE_APPLICATION_DECRYPT \
+  ZQUIC_INTEROP_REQUIRE_ACK_SENT \
+  ZQUIC_INTEROP_REQUIRE_ACK_RECEIVED \
+  ZQUIC_INTEROP_REQUIRE_PTO_PROBE \
+  ZQUIC_INTEROP_REQUIRE_CRYPTO_RETRANSMISSION \
+  ZQUIC_INTEROP_REQUIRE_HANDSHAKE_TIMEOUT \
+  ZQUIC_INTEROP_REQUIRE_HTTP3_RESPONSE \
+  ZQUIC_INTEROP_REQUIRE_AIOQUIC_HTTP3_RESPONSE \
+  ZQUIC_INTEROP_REQUIRE_QUICHE_HTTP3_RESPONSE \
+  ZQUIC_INTEROP_VERBOSE_LOG \
   QUICHE_CLIENT_CMD \
   NGTCP2_H3CLIENT_CMD \
   AIOQUIC_CLIENT_CMD \
@@ -48,31 +65,31 @@ done
 
 case "$VARIANT" in
   release)
-    docker compose -f "$COMPOSE_FILE" run --rm zquic-verify bash docker/run-verify.sh
+    docker compose -f "$COMPOSE_FILE" run --build --rm zquic-verify bash docker/run-verify.sh
     ;;
   valgrind)
-    docker compose -f "$COMPOSE_FILE" run --rm zquic-verify bash docker/valgrind-check.sh
+    docker compose -f "$COMPOSE_FILE" run --build --rm zquic-verify bash docker/valgrind-check.sh
     ;;
   interop)
-    docker compose -f "$COMPOSE_FILE" run --rm "${interop_env_args[@]}" zquic-verify bash dev/interop_smoke.sh "${script_args[@]}"
+    docker compose -f "$COMPOSE_FILE" run --build --rm "${interop_env_args[@]}" zquic-verify bash dev/interop_smoke.sh "${script_args[@]}"
     ;;
   interop-tools)
-    docker compose -f "$COMPOSE_FILE" run --rm zquic-interop bash docker/interop-tools.sh
+    docker compose -f "$COMPOSE_FILE" run --build --rm zquic-interop bash docker/interop-tools.sh
     ;;
   interop-source-tools)
-    docker compose -f "$COMPOSE_FILE" run --rm zquic-interop bash docker/interop-source-tools.sh
+    docker compose -f "$COMPOSE_FILE" run --build --rm zquic-interop bash docker/interop-source-tools.sh
     ;;
   interop-debian)
-    docker compose -f "$COMPOSE_FILE" run --rm "${interop_env_args[@]}" zquic-interop bash dev/interop_smoke.sh "${script_args[@]}"
+    docker compose -f "$COMPOSE_FILE" run --build --rm "${interop_env_args[@]}" zquic-interop bash dev/interop_smoke.sh "${script_args[@]}"
     ;;
   interop-libs)
-    docker compose -f "$COMPOSE_FILE" run --rm zquic-verify bash docker/interop-library-smoke.sh
+    docker compose -f "$COMPOSE_FILE" run --build --rm zquic-verify bash docker/interop-library-smoke.sh
     ;;
   interop-zquic-server)
-    docker compose -f "$COMPOSE_FILE" run --rm "${interop_env_args[@]}" zquic-interop bash docker/interop-zquic-server-smoke.sh
+    docker compose -f "$COMPOSE_FILE" run --build --rm "${interop_env_args[@]}" zquic-interop bash docker/interop-zquic-server-smoke.sh
     ;;
   shell)
-    docker compose -f "$COMPOSE_FILE" run --rm zquic-verify bash
+    docker compose -f "$COMPOSE_FILE" run --build --rm zquic-verify bash
     ;;
   *)
     echo "usage: $0 [release|valgrind|interop|interop-tools|interop-source-tools|interop-debian|interop-libs|interop-zquic-server|shell]" >&2

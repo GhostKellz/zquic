@@ -3,7 +3,8 @@
 Thanks for helping keep ZQUIC fast, stable, and ready for Zig 0.17.0-dev. This guide captures the expectations we follow for local development, code review, and release prep.
 
 ## 1. Prerequisites
-- Zig `0.17.0-dev.27` or newer on your PATH
+- The Zig version declared by `minimum_zig_version` in `build.zig.zon`, or newer,
+  on your PATH
 - Git, curl, and a POSIX-compatible shell (the `dev/` scripts assume `bash`/`zsh`)
 - Optional: `valgrind` or `asan` equivalents for leak checks on Linux/macOS
 

@@ -72,6 +72,10 @@ Run external clients against the live zquic UDP interop probe:
 ./dev/docker_validate.sh interop-zquic-server
 ```
 
+The wrapper rebuilds the selected Compose image before each run so Dockerfile
+user and home-directory changes cannot be hidden by a stale local image. Zig is
+invoked normally and uses its default caches.
+
 Compile/link smoke for the installed QUIC libraries:
 
 ```bash
@@ -116,11 +120,28 @@ MsQuic tools into `/usr/local/bin`, including `quiche-client`, `quiche-server`,
 `./dev/docker_validate.sh interop-zquic-server` starts
 `zquic-interop-probe-server`, runs the Debian external clients against it, and
 requires qlog-style evidence that zquic received real UDP Initial packets,
-decrypted at least one external Initial, and sent an encrypted Initial
-CONNECTION_CLOSE. It also requires a decrypted CRYPTO frame and protected
-server Initial CRYPTO transmission by default. Full handshake/client success
-remains a stricter future gate; the evidence levels and diagrams are documented
-in `docs/interop/methodology.md`.
+decrypted at least one external Initial, observed a decrypted CRYPTO frame, sent
+a protected server Initial packet, and reached a terminal outcome — either
+`handshake_keys_installed` or an encrypted Initial CONNECTION_CLOSE.
+
+The probe keeps per-connection state between datagrams, answers an accepted
+ClientHello with a complete ephemeral Ed25519 or ECDSA P-256 TLS 1.3 server
+flight, verifies the peer Finished, and then installs directional RFC 9001
+application keys.
+Its bounded HTTP/3 path exchanges SETTINGS and serves a fixed `GET /` response.
+Opt-in gates assert progressively stronger outcomes:
+`ZQUIC_INTEROP_REQUIRE_CLIENT_HELLO_ACCEPTED=1`,
+`ZQUIC_INTEROP_REQUIRE_HANDSHAKE_KEYS=1`, and
+`ZQUIC_INTEROP_REQUIRE_CONNECTION_STATE_REUSED=1`, plus
+`ZQUIC_INTEROP_REQUIRE_SERVER_HANDSHAKE_FLIGHT=1`,
+`ZQUIC_INTEROP_REQUIRE_HANDSHAKE_CONFIRMED=1`, and
+`ZQUIC_INTEROP_REQUIRE_APPLICATION_DECRYPT=1`. Add
+`ZQUIC_INTEROP_REQUIRE_HTTP3_RESPONSE=1` to require the HTTP/3 qlog boundary and
+an exact body decoded by ngtcp2/gtlsclient. The evidence levels and diagrams are
+in `docs/interop/methodology.md`. Use
+`ZQUIC_INTEROP_REQUIRE_AIOQUIC_HTTP3_RESPONSE=1` for the independent aioquic
+status and exact-body gate, and `ZQUIC_INTEROP_REQUIRE_QUICHE_HTTP3_RESPONSE=1`
+for the independent quiche status/header/exact-body gate.
 
 Variant summary:
 

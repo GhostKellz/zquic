@@ -31,14 +31,16 @@ All data encryption uses authenticated encryption with associated data (AEAD):
   `verifyX509CertificateWithRoots()` boundary, which uses `zcrypto.tls.config`
   and explicit caller-supplied trust anchors. Local DER verification still
   fails closed with `NotSupported`.
-- Production-complete TLS is **not currently provided** by zquic. Full
-  record-layer handshake orchestration, complete chain policy, revocation
-  checks, QUIC transport-parameter extension wiring, and external interop
-  vectors remain future work.
+- Production-complete TLS is **not currently provided** by zquic. The bounded
+  probe server completes a narrow TLS 1.3 handshake, including QUIC transport
+  parameters and external interop evidence, but complete chain policy,
+  revocation, production credential lifecycle, broad negotiation, and a stable
+  application accept path remain future work.
 - `src/crypto/comprehensive_tls.zig` keeps simplified CertificateVerify paths
   disabled by default with `allow_simplified_verification = false`.
-- Finished message HMAC helpers exist in the experimental scaffold, but the
-  full TLS transcript is not yet wired through the core QUIC connection path.
+- The strict probe path transcript-binds both Finished messages and exposes
+  application keys only after peer Finished authentication. This does not turn
+  the ephemeral self-signed probe identity into production certificate policy.
 
 ### Session Security
 - Session ticket MAC verification

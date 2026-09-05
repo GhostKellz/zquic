@@ -282,7 +282,7 @@ pub const DnsMessage = struct {
     }
 
     pub fn responseCode(self: *const DnsMessage) DnsResponseCode {
-        return @enumFromInt(@as(u4, @intCast(self.header.flags & 0x000F)));
+        return @fromBackingInt(@intCast(@as(u4, @intCast(self.header.flags & 0x000F))));
     }
 };
 
@@ -290,7 +290,7 @@ pub fn createResponseForQuery(allocator: std.mem.Allocator, query: *const DnsMes
     var response = DnsMessage.init(allocator);
     response.header = DnsHeader{
         .id = query.header.id,
-        .flags = 0x8000 | (@as(u16, @intFromEnum(rcode)) & 0x000F),
+        .flags = 0x8000 | (@as(u16, @backingInt(rcode)) & 0x000F),
         .qdcount = query.header.qdcount,
         .ancount = 0,
         .nscount = 0,
@@ -545,7 +545,7 @@ test "DNS message parsing" {
     message.questions = try allocator.alloc(DnsQuestion, 1);
     message.questions[0] = DnsQuestion{
         .name = try allocator.dupe(u8, "example.com"),
-        .qtype = @intFromEnum(DnsRecordType.A),
+        .qtype = @backingInt(DnsRecordType.A),
         .qclass = 1, // IN
     };
 

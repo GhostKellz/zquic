@@ -166,7 +166,7 @@ Post-quantum modules require `-Dpost-quantum=true -Dexperimental-crypto=true`:
 2. The ZQUIC PQ integration (`src/crypto/pq_quic.zig`, `src/crypto/hybrid_pq_tls.zig`) is **experimental scaffolding**
 3. Do not rely on the PQ path for production cryptographic security until explicitly marked stable
 4. The hybrid classical+PQ key exchange uses real X25519 and ML-KEM-768 primitives, but the overall integration is still under development
-5. RSA and SLH-DSA are not part of the zquic v0.9.15 crypto contract
+5. RSA and SLH-DSA are not part of the zquic v0.9.17 crypto contract
 
 ### ZQUIC PQ Implementation Status
 

@@ -2,7 +2,7 @@
 
 ZQUIC exposes a native Prometheus text exporter for runtime and protocol
 observability. Metric names use the `zquic_*` prefix and are intended to be
-stable across the v0.9.15 release line.
+stable across the current v0.9.x release line.
 
 ## Metric Flow
 

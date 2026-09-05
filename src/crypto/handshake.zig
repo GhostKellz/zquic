@@ -12,6 +12,7 @@ const PacketCryptoMod = @import("../core/packet_crypto.zig");
 pub const HandshakeManager = struct {
     tls_context: Tls.TlsContext,
     crypto_buffer: std.ArrayListUnmanaged(u8),
+    handshake_crypto_buffer: std.ArrayListUnmanaged(u8),
     handshake_complete: bool,
     allocator: std.mem.Allocator,
 
@@ -21,6 +22,7 @@ pub const HandshakeManager = struct {
         return Self{
             .tls_context = Tls.TlsContext.init(allocator, is_server),
             .crypto_buffer = .empty,
+            .handshake_crypto_buffer = .empty,
             .handshake_complete = false,
             .allocator = allocator,
         };
@@ -29,6 +31,7 @@ pub const HandshakeManager = struct {
     pub fn deinit(self: *Self) void {
         self.tls_context.deinit();
         self.crypto_buffer.deinit(self.allocator);
+        self.handshake_crypto_buffer.deinit(self.allocator);
     }
 
     /// Start the handshake process
@@ -52,9 +55,19 @@ pub const HandshakeManager = struct {
             const crypto_data = try self.tls_context.generateCryptoData(self.allocator);
             defer self.allocator.free(crypto_data);
             try self.crypto_buffer.appendSlice(self.allocator, crypto_data);
+
+            // The compatibility TLS engine still models messages rather than
+            // encoding a production TLS 1.3 flight. Keep the post-ServerHello
+            // bytes in Handshake space so packet scheduling and evidence do
+            // not incorrectly collapse both QUIC encryption levels.
+            const handshake_flight = "EncryptedExtensions, Certificate, CertificateVerify, Finished";
+            try self.handshake_crypto_buffer.appendSlice(self.allocator, handshake_flight);
         } else if (self.tls_context.state == .wait_finished and !self.tls_context.is_server) {
             const crypto_data = try self.tls_context.generateCryptoData(self.allocator);
             defer self.allocator.free(crypto_data);
+            // The compatibility TLS engine historically exposes the client's
+            // Finished through the generic buffer. Preserve that API while the
+            // level-aware accessor below classifies it as Handshake data.
             try self.crypto_buffer.appendSlice(self.allocator, crypto_data);
         }
 
@@ -71,6 +84,33 @@ pub const HandshakeManager = struct {
     /// Clear sent CRYPTO data
     pub fn clearSentCryptoData(self: *Self) void {
         self.crypto_buffer.clearRetainingCapacity();
+    }
+
+    pub fn getPendingCryptoDataForLevel(
+        self: *Self,
+        level: PacketCryptoMod.EncryptionLevel,
+    ) []const u8 {
+        return self.pendingCryptoBufferForLevel(level).items;
+    }
+
+    pub fn clearSentCryptoDataForLevel(
+        self: *Self,
+        level: PacketCryptoMod.EncryptionLevel,
+    ) void {
+        self.pendingCryptoBufferForLevel(level).clearRetainingCapacity();
+    }
+
+    fn pendingCryptoBufferForLevel(
+        self: *Self,
+        level: PacketCryptoMod.EncryptionLevel,
+    ) *std.ArrayListUnmanaged(u8) {
+        return switch (level) {
+            .handshake => if (self.handshake_crypto_buffer.items.len > 0 or self.tls_context.is_server)
+                &self.handshake_crypto_buffer
+            else
+                &self.crypto_buffer,
+            .initial, .early_data, .application => &self.crypto_buffer,
+        };
     }
 
     /// Check if handshake is complete

@@ -1070,7 +1070,7 @@ pub const AdvancedHttp3Server = struct {
         self.stats.addBytesSent(response.getBodySize());
 
         // Record metrics
-        self.metrics_collector.recordRequest(@intCast(@max(request_duration, 0)), @intFromEnum(response.status));
+        self.metrics_collector.recordRequest(@intCast(@max(request_duration, 0)), @backingInt(response.status));
     }
 
     /// Handle proxy request

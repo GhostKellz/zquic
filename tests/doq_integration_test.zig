@@ -33,7 +33,7 @@ fn makeQuery(allocator: std.mem.Allocator, id: u16, name: []const u8, qtype: DoQ
     message.questions = try allocator.alloc(DoQ.DnsQuestion, 1);
     message.questions[0] = DoQ.DnsQuestion{
         .name = try allocator.dupe(u8, name),
-        .qtype = @intFromEnum(qtype),
+        .qtype = @backingInt(qtype),
         .qclass = 1,
     };
     return message;
@@ -73,7 +73,7 @@ fn replayDoqFixture(comptime fixture_json: []const u8) !void {
 
         if (std.mem.eql(u8, fixture.expected_result, "rcode")) {
             try std.testing.expect(fixture.expected_rcode != null);
-            try std.testing.expectEqual(@as(u8, fixture.expected_rcode.?), @as(u8, @intFromEnum(message.responseCode())));
+            try std.testing.expectEqual(@as(u8, fixture.expected_rcode.?), @as(u8, @backingInt(message.responseCode())));
         }
     }
 }
@@ -307,7 +307,7 @@ test "doq dns message serialize roundtrip" {
     message.questions = try allocator.alloc(DoQ.DnsQuestion, 1);
     message.questions[0] = DoQ.DnsQuestion{
         .name = try allocator.dupe(u8, "zquic.dev"),
-        .qtype = @intFromEnum(DoQ.DnsRecordType.AAAA),
+        .qtype = @backingInt(DoQ.DnsRecordType.AAAA),
         .qclass = 1,
     };
 
@@ -315,7 +315,7 @@ test "doq dns message serialize roundtrip" {
     const ipv6_bytes = [_]u8{ 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1 };
     message.answers[0] = DoQ.DnsResourceRecord{
         .name = try allocator.dupe(u8, "zquic.dev"),
-        .rtype = @intFromEnum(DoQ.DnsRecordType.AAAA),
+        .rtype = @backingInt(DoQ.DnsRecordType.AAAA),
         .rclass = 1,
         .ttl = 60,
         .rdlength = ipv6_bytes.len,

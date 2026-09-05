@@ -66,11 +66,17 @@ concrete MsQuic client invocation before counting MsQuic client evidence.
 aioquic against it from the Debian image, and requires qlog-style evidence that
 zquic received external Initial datagrams, decrypted at least one Initial,
 observed a CRYPTO frame, sent protected server Initial CRYPTO from the
-connection-owned outgoing raw queue, and sent an encrypted Initial
-CONNECTION_CLOSE. It is packet-level live interop evidence, not full handshake
-or HTTP/3 success; the external clients currently time out or fail the
-handshake because the production accept loop, Handshake-space flight, ALPN, and
-application response path are still pending. See
+connection-owned outgoing raw queue, and reached either the Handshake-key
+boundary or an encrypted Initial close. Opt-in gates cover the complete TLS
+flight, peer Finished authentication, application packet protection, ACKs, and
+the HTTP/3 boundary. With `ZQUIC_INTEROP_REQUIRE_HTTP3_RESPONSE=1`, the gate
+also requires the SETTINGS/request/response qlog events and an exact `zquic\n`
+body decoded by ngtcp2/gtlsclient. The separate
+`ZQUIC_INTEROP_REQUIRE_AIOQUIC_HTTP3_RESPONSE=1` gate proves the same body with
+aioquic. `ZQUIC_INTEROP_REQUIRE_QUICHE_HTTP3_RESPONSE=1` independently proves
+the status, headers, exact body, and FIN with quiche using the offered ECDSA
+P-256 identity. This remains narrow probe evidence: production routing,
+broader QPACK, and graceful close remain pending. See
 `docs/interop/methodology.md` for the evidence ladder and qlog event taxonomy.
 
 ## Docker Output Cleanup

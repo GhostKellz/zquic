@@ -1,0 +1,54 @@
+#!/usr/bin/env python3
+"""Run quiche-client and materialize a validated HTTP/3 response body."""
+
+import argparse
+import json
+from pathlib import Path
+import subprocess
+import sys
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(add_help=False)
+    parser.add_argument("--output", required=True)
+    args, client_args = parser.parse_known_args()
+
+    completed = subprocess.run(
+        ["quiche-client", "--idle-timeout", "2000", "--dump-json", *client_args],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    sys.stderr.write(completed.stderr)
+    if completed.returncode != 0:
+        sys.stdout.write(completed.stdout)
+        return completed.returncode
+
+    try:
+        document = json.loads(completed.stdout)
+        entries = document["entries"]
+        if len(entries) != 1:
+            raise ValueError("expected exactly one response")
+        response = entries[0]["response"]
+        status_values = [
+            item["value"] for item in response["headers"] if item["name"] == ":status"
+        ]
+        if len(status_values) != 1:
+            raise ValueError("expected exactly one :status header")
+        status = int(status_values[0])
+        body = bytes(response["body"])
+    except (KeyError, TypeError, ValueError, OverflowError, json.JSONDecodeError) as error:
+        sys.stdout.write(completed.stdout)
+        print(f"quiche-json-client: invalid response JSON: {error}", file=sys.stderr)
+        return 1
+
+    if status != 200:
+        print(f"quiche-json-client: unexpected status={status}", file=sys.stderr)
+        return 1
+    Path(args.output).write_bytes(body)
+    print(f"quiche-json-client: status={status}", file=sys.stderr)
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

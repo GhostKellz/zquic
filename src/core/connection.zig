@@ -187,6 +187,64 @@ pub const OwnedRawPacket = struct {
     }
 };
 
+pub const ScheduledCryptoPacket = struct {
+    encryption_level: PacketCryptoMod.EncryptionLevel,
+    packet_number: u64,
+    crypto_len: usize,
+};
+
+pub const ScheduledAckPacket = struct {
+    encryption_level: PacketCryptoMod.EncryptionLevel,
+    packet_number: u64,
+    largest_acknowledged: u64,
+    range_count: usize,
+};
+
+pub const ScheduledAckBatch = struct {
+    packets: [3]ScheduledAckPacket = undefined,
+    count: usize = 0,
+
+    pub fn slice(self: *const ScheduledAckBatch) []const ScheduledAckPacket {
+        return self.packets[0..self.count];
+    }
+};
+
+pub const RecoveryProbe = struct {
+    encryption_level: PacketCryptoMod.EncryptionLevel,
+    packet_number: u64,
+    retransmitted_crypto: bool,
+    crypto_len: usize = 0,
+};
+
+pub const RecoveryPollResult = struct {
+    probes: [3]RecoveryProbe = undefined,
+    count: usize = 0,
+    pto_count: u32 = 0,
+
+    pub fn slice(self: *const RecoveryPollResult) []const RecoveryProbe {
+        return self.probes[0..self.count];
+    }
+};
+
+pub const InitialCryptoFlightResult = struct {
+    scheduled_packets: usize,
+    tls_messages_processed: usize,
+    /// CRYPTO bytes carrying a real TLS 1.3 ServerHello that were scheduled at
+    /// the Initial level. Zero when no ServerHello was produced.
+    server_hello_bytes: usize = 0,
+    /// Whether RFC 9001 Handshake packet-protection keys were installed from a
+    /// real TLS 1.3 handshake key schedule during this call.
+    handshake_keys_installed: bool = false,
+    /// Complete EncryptedExtensions..Finished bytes scheduled at Handshake
+    /// level during this call.
+    server_handshake_bytes: usize = 0,
+};
+
+pub const CryptoPayloadResult = struct {
+    compatibility_keys_installed: usize,
+    tls_messages_processed: usize,
+};
+
 const CryptoReassemblyLevel = enum(usize) {
     initial = 0,
     handshake = 1,
@@ -194,21 +252,77 @@ const CryptoReassemblyLevel = enum(usize) {
 };
 
 const AckTracker = struct {
-    smallest: u64 = 0,
-    largest: u64 = 0,
-    has_packets: bool = false,
+    const capacity = 64;
+
+    packet_numbers: [capacity]u64 = undefined,
+    count: usize = 0,
     ack_required: bool = false,
 
     fn record(self: *AckTracker, packet_number: u64, ack_eliciting: bool) void {
-        if (!self.has_packets) {
-            self.smallest = packet_number;
-            self.largest = packet_number;
-            self.has_packets = true;
+        for (self.packet_numbers[0..self.count]) |existing| {
+            if (existing == packet_number) {
+                self.ack_required = self.ack_required or ack_eliciting;
+                return;
+            }
+        }
+
+        if (self.count < capacity) {
+            self.packet_numbers[self.count] = packet_number;
+            self.count += 1;
         } else {
-            self.smallest = @min(self.smallest, packet_number);
-            self.largest = @max(self.largest, packet_number);
+            var smallest_index: usize = 0;
+            for (self.packet_numbers[1..], 1..) |existing, index| {
+                if (existing < self.packet_numbers[smallest_index]) smallest_index = index;
+            }
+            if (packet_number > self.packet_numbers[smallest_index]) {
+                self.packet_numbers[smallest_index] = packet_number;
+            }
         }
         self.ack_required = self.ack_required or ack_eliciting;
+    }
+
+    fn buildFrame(self: *const AckTracker, allocator: std.mem.Allocator) Error.ZquicError!QuicFrames.AckFrame {
+        if (self.count == 0) return Error.ZquicError.InvalidState;
+
+        var sorted: [capacity]u64 = undefined;
+        @memcpy(sorted[0..self.count], self.packet_numbers[0..self.count]);
+        std.mem.sort(u64, sorted[0..self.count], {}, std.sort.desc(u64));
+
+        const ranges = allocator.alloc(QuicFrames.AckFrame.AckRange, self.count - 1) catch return Error.ZquicError.OutOfMemory;
+        errdefer allocator.free(ranges);
+
+        const largest = sorted[0];
+        var index: usize = 1;
+        while (index < self.count and AckTracker.currentLowIsPrevious(sorted[index - 1], sorted[index])) : (index += 1) {}
+        const first_low = sorted[index - 1];
+        var previous_low = first_low;
+        var range_count: usize = 0;
+        while (index < self.count) {
+            const next_high = sorted[index];
+            index += 1;
+            var next_low = next_high;
+            while (index < self.count and AckTracker.currentLowIsPrevious(next_low, sorted[index])) : (index += 1) {
+                next_low = sorted[index];
+            }
+            ranges[range_count] = .{
+                .gap = previous_low - next_high - 2,
+                .ack_range_length = next_high - next_low,
+            };
+            range_count += 1;
+            previous_low = next_low;
+        }
+
+        return .{
+            .largest_acknowledged = largest,
+            .ack_delay = 0,
+            .ack_range_count = range_count,
+            .first_ack_range = largest - first_low,
+            .ack_ranges = allocator.realloc(ranges, range_count) catch return Error.ZquicError.OutOfMemory,
+        };
+    }
+
+    fn currentLowIsPrevious(current_low: u64, candidate: u64) bool {
+        return current_low > 0 and candidate == current_low - 1;
     }
 
     fn clear(self: *AckTracker) void {
@@ -243,6 +357,8 @@ fn nowMicrosU64() u64 {
 }
 
 const CryptoReassemblyBuffer = struct {
+    const max_buffered_bytes = 1024 * 1024;
+
     data: std.ArrayListUnmanaged(u8) = .empty,
     consumed: usize = 0,
 
@@ -258,10 +374,18 @@ const CryptoReassemblyBuffer = struct {
 
     pub fn append(self: *CryptoReassemblyBuffer, allocator: std.mem.Allocator, offset: u64, bytes: []const u8) Error.ZquicError![]const u8 {
         const start: usize = std.math.cast(usize, offset) orelse return Error.ZquicError.InvalidFrame;
+        if (start > max_buffered_bytes or bytes.len > max_buffered_bytes - start) {
+            return Error.ZquicError.InvalidFrame;
+        }
         const end = start + bytes.len;
-        if (end < start) return Error.ZquicError.InvalidFrame;
 
         if (start > self.data.items.len) return Error.ZquicError.InvalidFrame;
+        const overlap_end = @min(end, self.data.items.len);
+        if (start < overlap_end and
+            !std.mem.eql(u8, self.data.items[start..overlap_end], bytes[0 .. overlap_end - start]))
+        {
+            return Error.ZquicError.InvalidFrame;
+        }
         if (end > self.data.items.len) {
             self.data.resize(allocator, end) catch return Error.ZquicError.OutOfMemory;
         }
@@ -273,6 +397,39 @@ const CryptoReassemblyBuffer = struct {
         return ready;
     }
 };
+
+const RetainedCrypto = struct {
+    bytes: ?[]u8 = null,
+    offset: u64 = 0,
+
+    fn replace(self: *RetainedCrypto, allocator: std.mem.Allocator, offset: u64, bytes: []const u8) Error.ZquicError!void {
+        const copy = allocator.dupe(u8, bytes) catch return Error.ZquicError.OutOfMemory;
+        if (self.bytes) |old| allocator.free(old);
+        self.bytes = copy;
+        self.offset = offset;
+    }
+
+    fn clear(self: *RetainedCrypto, allocator: std.mem.Allocator) void {
+        if (self.bytes) |bytes| allocator.free(bytes);
+        self.* = .{};
+    }
+};
+
+test "CRYPTO reassembly bounds input and rejects conflicting overlaps" {
+    var buffer = CryptoReassemblyBuffer{};
+    defer buffer.deinit(std.testing.allocator);
+
+    try std.testing.expectEqualStrings("hello", try buffer.append(std.testing.allocator, 0, "hello"));
+    try std.testing.expectEqualStrings("!", try buffer.append(std.testing.allocator, 2, "llo!"));
+    try std.testing.expectError(
+        Error.ZquicError.InvalidFrame,
+        buffer.append(std.testing.allocator, 1, "X"),
+    );
+    try std.testing.expectError(
+        Error.ZquicError.InvalidFrame,
+        buffer.append(std.testing.allocator, std.math.maxInt(u64), &.{}),
+    );
+}
 
 /// High-performance QUIC connection
 pub const SuperConnection = struct {
@@ -289,12 +446,17 @@ pub const SuperConnection = struct {
     // Internal packet queues
     incoming_packets: std.ArrayListUnmanaged(Packet.Packet),
     outgoing_packets: std.ArrayListUnmanaged(Packet.Packet),
+    /// Backs payload slices placed in the legacy packet queues by this
+    /// connection. External packets remain caller-owned.
+    owned_control_payloads: std.ArrayListUnmanaged([]u8),
     incoming_raw_packets: std.ArrayListUnmanaged(OwnedRawPacket),
     outgoing_raw_packets: std.ArrayListUnmanaged(OwnedRawPacket),
     stream_events: std.ArrayListUnmanaged(StreamEvent),
     crypto_reassembly: [3]CryptoReassemblyBuffer,
+    retained_crypto: [3]RetainedCrypto,
     packet_spaces: PacketSpace.PacketSpaceManager,
     ack_trackers: [3]AckTracker,
+    loss_recovery: Recovery.LossRecovery,
 
     // Stream management
     streams: std.AutoHashMapUnmanaged(u64, *Stream.SuperStream),
@@ -347,12 +509,15 @@ pub const SuperConnection = struct {
             .next_uni_stream_id = initial_uni_id,
             .incoming_packets = .empty,
             .outgoing_packets = .empty,
+            .owned_control_payloads = .empty,
             .incoming_raw_packets = .empty,
             .outgoing_raw_packets = .empty,
             .stream_events = .empty,
             .crypto_reassembly = .{ .{}, .{}, .{} },
+            .retained_crypto = .{ .{}, .{}, .{} },
             .packet_spaces = try PacketSpace.PacketSpaceManager.init(allocator),
             .ack_trackers = .{ .{}, .{}, .{} },
+            .loss_recovery = Recovery.LossRecovery.init(),
             .streams = .empty,
             .allocator = allocator,
         };
@@ -372,6 +537,8 @@ pub const SuperConnection = struct {
         // Clean up queues
         self.incoming_packets.deinit(self.allocator);
         self.outgoing_packets.deinit(self.allocator);
+        self.clearOwnedControlPayloads();
+        self.owned_control_payloads.deinit(self.allocator);
         self.clearOwnedRawPackets();
         self.incoming_raw_packets.deinit(self.allocator);
         self.outgoing_raw_packets.deinit(self.allocator);
@@ -379,6 +546,7 @@ pub const SuperConnection = struct {
         for (&self.crypto_reassembly) |*buffer| {
             buffer.deinit(self.allocator);
         }
+        for (&self.retained_crypto) |*retained| retained.clear(self.allocator);
         self.packet_spaces.deinit();
     }
 
@@ -576,8 +744,52 @@ pub const SuperConnection = struct {
         level: PacketCryptoMod.EncryptionLevel,
         payload: []const u8,
     ) Error.ZquicError!usize {
+        const result = try self.processCryptoPayloadInternal(
+            handshake_manager,
+            enhanced_tls_context,
+            null,
+            packet_crypto,
+            connection_id,
+            level,
+            payload,
+        );
+        return result.compatibility_keys_installed;
+    }
+
+    pub fn processCryptoPayloadWithComprehensiveTls(
+        self: *Self,
+        handshake_manager: *Handshake.HandshakeManager,
+        enhanced_tls_context: *EnhancedTls.EnhancedTlsContext,
+        comprehensive_tls_context: *ComprehensiveTls.ComprehensiveTlsContext,
+        packet_crypto: *PacketCryptoMod.PacketCrypto,
+        connection_id: []const u8,
+        level: PacketCryptoMod.EncryptionLevel,
+        payload: []const u8,
+    ) Error.ZquicError!CryptoPayloadResult {
+        return self.processCryptoPayloadInternal(
+            handshake_manager,
+            enhanced_tls_context,
+            comprehensive_tls_context,
+            packet_crypto,
+            connection_id,
+            level,
+            payload,
+        );
+    }
+
+    fn processCryptoPayloadInternal(
+        self: *Self,
+        handshake_manager: *Handshake.HandshakeManager,
+        enhanced_tls_context: *EnhancedTls.EnhancedTlsContext,
+        comprehensive_tls_context: ?*ComprehensiveTls.ComprehensiveTlsContext,
+        packet_crypto: *PacketCryptoMod.PacketCrypto,
+        connection_id: []const u8,
+        level: PacketCryptoMod.EncryptionLevel,
+        payload: []const u8,
+    ) Error.ZquicError!CryptoPayloadResult {
         var reader = std.Io.Reader.fixed(payload);
         var installed: usize = 0;
+        var tls_messages_processed: usize = 0;
         while (reader.seek < reader.end) {
             var frame = QuicFrames.Frame.parse(&reader, self.allocator) catch |err| return mapFrameError(err);
             defer freeParsedFrame(self.allocator, &frame);
@@ -586,10 +798,18 @@ pub const SuperConnection = struct {
                 .crypto => |crypto| {
                     const ready = try self.appendCryptoFrame(level, crypto.offset, crypto.data);
                     if (ready.len > 0) {
-                        try handshake_manager.processCryptoFrame(ready, crypto.offset);
-                        installed = try handshake_manager.syncPacketCrypto(enhanced_tls_context, packet_crypto, connection_id);
+                        if (comprehensive_tls_context) |tls_context| {
+                            tls_messages_processed += try tls_context.processQuicCryptoData(ready);
+                        } else {
+                            try handshake_manager.processCryptoFrame(ready, crypto.offset);
+                            installed = try handshake_manager.syncPacketCrypto(enhanced_tls_context, packet_crypto, connection_id);
+                        }
                     }
-                    self.state = switch (handshake_manager.getCurrentEncryptionLevel()) {
+                    self.state = if (comprehensive_tls_context != null) switch (level) {
+                        .initial => .initial,
+                        .handshake => .handshake,
+                        .early_data, .application => .established,
+                    } else switch (handshake_manager.getCurrentEncryptionLevel()) {
                         .initial => .initial,
                         .handshake => .handshake,
                         .application => .established,
@@ -598,7 +818,10 @@ pub const SuperConnection = struct {
                 else => try self.handleParsedFrameAtLevel(level, frame),
             }
         }
-        return installed;
+        return .{
+            .compatibility_keys_installed = installed,
+            .tls_messages_processed = tls_messages_processed,
+        };
     }
 
     pub fn processInitialCryptoAndScheduleServerFlight(
@@ -609,10 +832,53 @@ pub const SuperConnection = struct {
         dest_conn_id: []const u8,
         src_conn_id: []const u8,
     ) Error.ZquicError!usize {
+        const result = try self.processInitialCryptoAndScheduleServerFlightInternal(
+            packet_crypto,
+            handshake_manager,
+            null,
+            payload,
+            dest_conn_id,
+            src_conn_id,
+        );
+        return result.scheduled_packets;
+    }
+
+    pub fn processInitialCryptoAndScheduleServerFlightWithComprehensiveTls(
+        self: *Self,
+        packet_crypto: *PacketCryptoMod.PacketCrypto,
+        handshake_manager: *Handshake.HandshakeManager,
+        tls_context: *ComprehensiveTls.ComprehensiveTlsContext,
+        payload: []const u8,
+        dest_conn_id: []const u8,
+        src_conn_id: []const u8,
+    ) Error.ZquicError!InitialCryptoFlightResult {
+        return self.processInitialCryptoAndScheduleServerFlightInternal(
+            packet_crypto,
+            handshake_manager,
+            tls_context,
+            payload,
+            dest_conn_id,
+            src_conn_id,
+        );
+    }
+
+    fn processInitialCryptoAndScheduleServerFlightInternal(
+        self: *Self,
+        packet_crypto: *PacketCryptoMod.PacketCrypto,
+        handshake_manager: *Handshake.HandshakeManager,
+        comprehensive_tls_context: ?*ComprehensiveTls.ComprehensiveTlsContext,
+        payload: []const u8,
+        dest_conn_id: []const u8,
+        src_conn_id: []const u8,
+    ) Error.ZquicError!InitialCryptoFlightResult {
         if (self.role != .server) return Error.ZquicError.ProtocolViolation;
 
         var reader = std.Io.Reader.fixed(payload);
         var scheduled: usize = 0;
+        var tls_messages_processed: usize = 0;
+        var server_hello_bytes: usize = 0;
+        var handshake_keys_installed = false;
+        var server_handshake_bytes: usize = 0;
         while (reader.seek < reader.end) {
             var frame = QuicFrames.Frame.parse(&reader, self.allocator) catch |err| return mapFrameError(err);
             defer freeParsedFrame(self.allocator, &frame);
@@ -621,32 +887,107 @@ pub const SuperConnection = struct {
                 .crypto => |crypto| {
                     const ready = try self.appendCryptoFrame(.initial, crypto.offset, crypto.data);
                     if (ready.len > 0) {
-                        try handshake_manager.processCryptoFrame(ready, crypto.offset);
+                        if (comprehensive_tls_context) |tls_context| {
+                            tls_messages_processed += try tls_context.processQuicCryptoData(ready);
+                        } else {
+                            try handshake_manager.processCryptoFrame(ready, crypto.offset);
+                        }
                     }
 
-                    const pending = handshake_manager.getPendingCryptoData();
-                    if (pending.len > 0) {
-                        _ = try self.schedulePendingCryptoAsProtectedRawPacket(
-                            packet_crypto,
-                            handshake_manager,
-                            .initial,
-                            .initial,
-                            dest_conn_id,
-                            src_conn_id,
-                        );
-                        scheduled += 1;
+                    // A real TLS 1.3 ServerHello takes precedence over the
+                    // legacy compatibility flight; emitting both would place
+                    // two different messages at offset 0 of the same Initial
+                    // CRYPTO stream.
+                    if (comprehensive_tls_context) |tls_context| {
+                        const server_hello = tls_context.pendingHandshakeCrypto();
+                        if (server_hello.len > 0) {
+                            if (tls_context.tls13HandshakeKeys()) |schedule| {
+                                // Install before queueing ServerHello. If packet
+                                // allocation fails, the pending CRYPTO bytes stay
+                                // available for retry and the connection still has
+                                // the keys needed for the peer's next flight.
+                                packet_crypto.installRfc9001HandshakeKeys(
+                                    &schedule.server_packet_keys,
+                                    &schedule.client_packet_keys,
+                                ) catch return Error.ZquicError.CryptoError;
+                                handshake_keys_installed = true;
+                            } else {
+                                return Error.ZquicError.InvalidState;
+                            }
+
+                            _ = try self.scheduleCryptoBytesAsProtectedRawPacket(
+                                packet_crypto,
+                                .initial,
+                                .initial,
+                                dest_conn_id,
+                                src_conn_id,
+                                0,
+                                server_hello,
+                            );
+                            scheduled += 1;
+                            server_hello_bytes += server_hello.len;
+                            tls_context.clearSentHandshakeCrypto();
+
+                            if (tls_context.serverHandshakeFlightConfigured()) {
+                                try tls_context.produceServerHandshakeFlight();
+                                const server_flight = tls_context.pendingServerHandshakeCrypto();
+                                if (server_flight.len > 0) {
+                                    _ = try self.scheduleCryptoBytesAsProtectedRawPacket(
+                                        packet_crypto,
+                                        .handshake,
+                                        .handshake,
+                                        dest_conn_id,
+                                        src_conn_id,
+                                        0,
+                                        server_flight,
+                                    );
+                                    scheduled += 1;
+                                    server_handshake_bytes += server_flight.len;
+                                    tls_context.clearSentServerHandshakeCrypto();
+                                }
+                            }
+                            // Drop the compatibility flight so it can never be
+                            // emitted alongside the real ServerHello.
+                            handshake_manager.clearSentCryptoDataForLevel(.initial);
+
+                            self.state = .handshake;
+                            continue;
+                        }
                     }
 
-                    self.state = switch (handshake_manager.getCurrentEncryptionLevel()) {
-                        .initial => .initial,
-                        .handshake => .handshake,
-                        .application => .established,
-                    };
+                    if (comprehensive_tls_context == null) {
+                        const pending = handshake_manager.getPendingCryptoData();
+                        if (pending.len > 0) {
+                            _ = try self.schedulePendingCryptoAsProtectedRawPacket(
+                                packet_crypto,
+                                handshake_manager,
+                                .initial,
+                                .initial,
+                                dest_conn_id,
+                                src_conn_id,
+                            );
+                            scheduled += 1;
+                        }
+
+                        self.state = switch (handshake_manager.getCurrentEncryptionLevel()) {
+                            .initial => .initial,
+                            .handshake => .handshake,
+                            .application => .established,
+                        };
+                    } else {
+                        self.state = .initial;
+                    }
                 },
                 else => try self.handleParsedFrameAtLevel(.initial, frame),
             }
         }
-        return scheduled;
+        return .{
+            .scheduled_packets = scheduled,
+            .tls_messages_processed = tls_messages_processed,
+            .server_hello_bytes = server_hello_bytes,
+            .handshake_keys_installed = handshake_keys_installed,
+            .server_handshake_bytes = server_handshake_bytes,
+        };
     }
 
     fn appendCryptoFrame(
@@ -660,7 +1001,7 @@ pub const SuperConnection = struct {
             .handshake => .handshake,
             .early_data, .application => .application,
         };
-        return self.crypto_reassembly[@intFromEnum(reassembly_level)].append(self.allocator, offset, data);
+        return self.crypto_reassembly[@backingInt(reassembly_level)].append(self.allocator, offset, data);
     }
 
     fn handleParsedFrame(self: *Self, frame: QuicFrames.Frame) Error.ZquicError!void {
@@ -743,7 +1084,12 @@ pub const SuperConnection = struct {
             next_largest = range_start;
         }
 
-        _ = try self.packetSpaceForLevel(level).processAck(ranges.items, ack.ack_delay, nowMicrosU64());
+        const now = nowMicrosU64();
+        const space = self.packetSpaceForLevel(level);
+        const result = try space.processAck(ranges.items, ack.ack_delay, now);
+        self.loss_recovery.onAckProcessed(space, result, ack.ack_delay, now);
+        var spaces = self.packetSpacePointers();
+        self.loss_recovery.setLossDetectionTimer(&spaces, now);
     }
 
     /// Send packet
@@ -792,7 +1138,7 @@ pub const SuperConnection = struct {
         src_conn_id: []const u8,
         plaintext_payload: []const u8,
     ) Error.ZquicError!void {
-        const packet_number = packet_crypto.packet_number_state.next_packet_number;
+        const packet_number = packet_crypto.nextPacketNumberForLevel(level);
         const ack_eliciting = try self.payloadIsAckEliciting(plaintext_payload);
         const raw = packet_crypto.createProtectedRawPacket(level, packet_type, dest_conn_id, src_conn_id, plaintext_payload) catch return Error.ZquicError.CryptoError;
         defer self.allocator.free(raw);
@@ -826,15 +1172,159 @@ pub const SuperConnection = struct {
         dest_conn_id: []const u8,
         src_conn_id: []const u8,
     ) Error.ZquicError!bool {
-        const pending = handshake_manager.getPendingCryptoData();
-        if (pending.len == 0) return false;
+        return (try self.schedulePendingCryptoAsProtectedRawPacketWithMetadata(
+            packet_crypto,
+            handshake_manager,
+            level,
+            packet_type,
+            dest_conn_id,
+            src_conn_id,
+        )) != null;
+    }
+
+    pub fn schedulePendingCryptoAsProtectedRawPacketWithMetadata(
+        self: *Self,
+        packet_crypto: *PacketCryptoMod.PacketCrypto,
+        handshake_manager: *Handshake.HandshakeManager,
+        level: PacketCryptoMod.EncryptionLevel,
+        packet_type: Packet.PacketType,
+        dest_conn_id: []const u8,
+        src_conn_id: []const u8,
+    ) Error.ZquicError!?ScheduledCryptoPacket {
+        const pending = handshake_manager.getPendingCryptoDataForLevel(level);
+        if (pending.len == 0) return null;
+
+        const packet_number = packet_crypto.nextPacketNumberForLevel(level);
+        const crypto_len = pending.len;
 
         const frame = [_]QuicFrames.Frame{
             .{ .crypto = QuicFrames.CryptoFrame.init(0, pending) },
         };
         try self.scheduleFramesAsProtectedRawPacket(packet_crypto, level, packet_type, dest_conn_id, src_conn_id, &frame);
-        handshake_manager.clearSentCryptoData();
-        return true;
+        handshake_manager.clearSentCryptoDataForLevel(level);
+        return .{
+            .encryption_level = level,
+            .packet_number = packet_number,
+            .crypto_len = crypto_len,
+        };
+    }
+
+    /// Schedule an explicit CRYPTO payload instead of whatever the handshake
+    /// manager happens to have buffered.
+    ///
+    /// `schedulePendingCryptoAsProtectedRawPacketWithMetadata` always emits at
+    /// CRYPTO offset 0 from the handshake manager's own buffer, so a real
+    /// ServerHello and the legacy compatibility flight would both claim offset
+    /// 0 of the same CRYPTO stream. This variant lets the caller own both the
+    /// bytes and the offset so the two cannot contradict each other.
+    pub fn scheduleCryptoBytesAsProtectedRawPacket(
+        self: *Self,
+        packet_crypto: *PacketCryptoMod.PacketCrypto,
+        level: PacketCryptoMod.EncryptionLevel,
+        packet_type: Packet.PacketType,
+        dest_conn_id: []const u8,
+        src_conn_id: []const u8,
+        crypto_offset: u64,
+        crypto_bytes: []const u8,
+    ) Error.ZquicError!?ScheduledCryptoPacket {
+        return self.scheduleCryptoBytesInternal(
+            packet_crypto,
+            level,
+            packet_type,
+            dest_conn_id,
+            src_conn_id,
+            crypto_offset,
+            crypto_bytes,
+            true,
+        );
+    }
+
+    fn scheduleCryptoBytesInternal(
+        self: *Self,
+        packet_crypto: *PacketCryptoMod.PacketCrypto,
+        level: PacketCryptoMod.EncryptionLevel,
+        packet_type: Packet.PacketType,
+        dest_conn_id: []const u8,
+        src_conn_id: []const u8,
+        crypto_offset: u64,
+        crypto_bytes: []const u8,
+        retain: bool,
+    ) Error.ZquicError!?ScheduledCryptoPacket {
+        if (crypto_bytes.len == 0) return null;
+
+        const retained_copy = if (retain)
+            self.allocator.dupe(u8, crypto_bytes) catch return Error.ZquicError.OutOfMemory
+        else
+            null;
+        errdefer if (retained_copy) |copy| self.allocator.free(copy);
+
+        const packet_number = packet_crypto.nextPacketNumberForLevel(level);
+        const frame = [_]QuicFrames.Frame{
+            .{ .crypto = QuicFrames.CryptoFrame.init(crypto_offset, crypto_bytes) },
+        };
+        try self.scheduleFramesAsProtectedRawPacket(packet_crypto, level, packet_type, dest_conn_id, src_conn_id, &frame);
+        if (retained_copy) |copy| {
+            const retained = self.retainedCryptoForLevel(level);
+            if (retained.bytes) |old| self.allocator.free(old);
+            retained.bytes = copy;
+            retained.offset = crypto_offset;
+        }
+        return .{
+            .encryption_level = level,
+            .packet_number = packet_number,
+            .crypto_len = crypto_bytes.len,
+        };
+    }
+
+    pub fn retransmitRetainedCryptoAsProtectedRawPacket(
+        self: *Self,
+        packet_crypto: *PacketCryptoMod.PacketCrypto,
+        level: PacketCryptoMod.EncryptionLevel,
+        dest_conn_id: []const u8,
+        src_conn_id: []const u8,
+    ) Error.ZquicError!?ScheduledCryptoPacket {
+        const retained = self.retainedCryptoForLevel(level);
+        const bytes = retained.bytes orelse return null;
+        const packet_type: Packet.PacketType = switch (level) {
+            .initial => .initial,
+            .handshake => .handshake,
+            .early_data => .zero_rtt,
+            .application => .one_rtt,
+        };
+        return self.scheduleCryptoBytesInternal(
+            packet_crypto,
+            level,
+            packet_type,
+            dest_conn_id,
+            if (level == .application) &.{} else src_conn_id,
+            retained.offset,
+            bytes,
+            false,
+        );
+    }
+
+    pub fn clearRetainedCrypto(self: *Self, level: PacketCryptoMod.EncryptionLevel) void {
+        self.retainedCryptoForLevel(level).clear(self.allocator);
+    }
+
+    /// Discard obsolete keys' recovery state after the peer advances to a
+    /// higher encryption level. Packets in a discarded number space must not
+    /// keep the loss timer armed or produce later PTO probes.
+    pub fn discardPacketNumberSpace(self: *Self, level: PacketCryptoMod.EncryptionLevel) void {
+        const tracker = self.ackTrackerForLevel(level);
+        tracker.* = .{};
+        self.clearRetainedCrypto(level);
+        self.packetSpaceForLevel(level).discard();
+        var spaces = self.packetSpacePointers();
+        self.loss_recovery.setLossDetectionTimer(&spaces, nowMicrosU64());
+    }
+
+    pub fn retainedCryptoLen(self: *Self, level: PacketCryptoMod.EncryptionLevel) usize {
+        return if (self.retainedCryptoForLevel(level).bytes) |bytes| bytes.len else 0;
+    }
+
+    fn retainedCryptoForLevel(self: *Self, level: PacketCryptoMod.EncryptionLevel) *RetainedCrypto {
+        return &self.retained_crypto[@backingInt(ackLevelForLevel(level))];
     }
 
     pub fn scheduleFlowControlFrames(
@@ -863,11 +1353,29 @@ pub const SuperConnection = struct {
         dest_conn_id: []const u8,
         src_conn_id: []const u8,
     ) Error.ZquicError!usize {
-        var scheduled: usize = 0;
-        if (try self.scheduleAckForLevel(packet_crypto, .initial, .initial, dest_conn_id, src_conn_id)) scheduled += 1;
-        if (try self.scheduleAckForLevel(packet_crypto, .handshake, .handshake, dest_conn_id, src_conn_id)) scheduled += 1;
-        if (try self.scheduleAckForLevel(packet_crypto, .application, .one_rtt, dest_conn_id, &.{})) scheduled += 1;
-        return scheduled;
+        return (try self.schedulePendingAckFramesWithMetadata(packet_crypto, dest_conn_id, src_conn_id)).count;
+    }
+
+    pub fn schedulePendingAckFramesWithMetadata(
+        self: *Self,
+        packet_crypto: *PacketCryptoMod.PacketCrypto,
+        dest_conn_id: []const u8,
+        src_conn_id: []const u8,
+    ) Error.ZquicError!ScheduledAckBatch {
+        var result = ScheduledAckBatch{};
+        if (try self.scheduleAckForLevel(packet_crypto, .initial, .initial, dest_conn_id, src_conn_id)) |metadata| {
+            result.packets[result.count] = metadata;
+            result.count += 1;
+        }
+        if (try self.scheduleAckForLevel(packet_crypto, .handshake, .handshake, dest_conn_id, src_conn_id)) |metadata| {
+            result.packets[result.count] = metadata;
+            result.count += 1;
+        }
+        if (try self.scheduleAckForLevel(packet_crypto, .application, .one_rtt, dest_conn_id, &.{})) |metadata| {
+            result.packets[result.count] = metadata;
+            result.count += 1;
+        }
+        return result;
     }
 
     pub fn scheduleStreamDataFrames(
@@ -924,6 +1432,92 @@ pub const SuperConnection = struct {
         return scheduled;
     }
 
+    pub fn recoveryDeadline(self: *const Self) ?u64 {
+        return self.loss_recovery.deadline();
+    }
+
+    /// Enter draining when a handshake has made no successful progress before
+    /// the caller-owned deadline. Time remains an input so tests and event
+    /// loops do not depend on sleeping or a particular clock implementation.
+    pub fn pollHandshakeTimeout(
+        self: *Self,
+        started_at_us: u64,
+        now_us: u64,
+        timeout_us: u64,
+    ) Error.ZquicError!bool {
+        if (self.state != .initial and self.state != .handshake) return false;
+        if (now_us < started_at_us or now_us - started_at_us < timeout_us) return false;
+
+        self.clearOwnedRawPackets();
+        for (&self.retained_crypto) |*retained| retained.clear(self.allocator);
+        self.loss_recovery = Recovery.LossRecovery.init();
+        self.initiateShutdown(0x01, "handshake timeout") catch return Error.ZquicError.OutOfMemory;
+        return true;
+    }
+
+    pub fn pollLossRecovery(
+        self: *Self,
+        packet_crypto: *PacketCryptoMod.PacketCrypto,
+        now_us: u64,
+        dest_conn_id: []const u8,
+        src_conn_id: []const u8,
+    ) Error.ZquicError!RecoveryPollResult {
+        const deadline = self.loss_recovery.deadline() orelse return .{};
+        if (now_us < deadline) return .{};
+
+        var spaces = self.packetSpacePointers();
+        const plan = self.loss_recovery.planPtoProbes(&spaces);
+        const pto_fired = self.loss_recovery.onLossDetectionTimeout(&spaces, now_us) catch
+            return Error.ZquicError.OutOfMemory;
+        if (!pto_fired) return .{};
+
+        var result = RecoveryPollResult{ .pto_count = self.loss_recovery.ptoCount() };
+        const targets = [_]struct { level: PacketCryptoMod.EncryptionLevel, wanted: bool }{
+            .{ .level = .initial, .wanted = plan.initial },
+            .{ .level = .handshake, .wanted = plan.handshake },
+            .{ .level = .application, .wanted = plan.application },
+        };
+        for (targets) |target| {
+            const level = target.level;
+            if (!target.wanted) continue;
+            const packet_number = packet_crypto.nextPacketNumberForLevel(level);
+            if (try self.retransmitRetainedCryptoAsProtectedRawPacket(packet_crypto, level, dest_conn_id, src_conn_id)) |crypto| {
+                result.probes[result.count] = .{
+                    .encryption_level = level,
+                    .packet_number = crypto.packet_number,
+                    .retransmitted_crypto = true,
+                    .crypto_len = crypto.crypto_len,
+                };
+            } else {
+                const packet_type: Packet.PacketType = switch (level) {
+                    .initial => .initial,
+                    .handshake => .handshake,
+                    .early_data => .zero_rtt,
+                    .application => .one_rtt,
+                };
+                const probe = [_]QuicFrames.Frame{
+                    .{ .ping = QuicFrames.PingFrame.init() },
+                    .{ .padding = QuicFrames.PaddingFrame.init(3) },
+                };
+                try self.scheduleFramesAsProtectedRawPacket(
+                    packet_crypto,
+                    level,
+                    packet_type,
+                    dest_conn_id,
+                    if (level == .application) &.{} else src_conn_id,
+                    &probe,
+                );
+                result.probes[result.count] = .{
+                    .encryption_level = level,
+                    .packet_number = packet_number,
+                    .retransmitted_crypto = false,
+                };
+            }
+            result.count += 1;
+        }
+        return result;
+    }
+
     fn serializeFrames(self: *Self, frames: []const QuicFrames.Frame) Error.ZquicError![]u8 {
         if (frames.len == 0) return Error.ZquicError.InvalidFrame;
 
@@ -948,17 +1542,23 @@ pub const SuperConnection = struct {
         packet_type: Packet.PacketType,
         dest_conn_id: []const u8,
         src_conn_id: []const u8,
-    ) Error.ZquicError!bool {
+    ) Error.ZquicError!?ScheduledAckPacket {
         const tracker = self.ackTrackerForLevel(level);
-        if (!tracker.ack_required or !tracker.has_packets) return false;
+        if (!tracker.ack_required or tracker.count == 0) return null;
 
-        var ack = QuicFrames.AckFrame.init(self.allocator, tracker.largest, 0, tracker.largest - tracker.smallest) catch return Error.ZquicError.OutOfMemory;
+        var ack = try tracker.buildFrame(self.allocator);
         defer ack.deinit(self.allocator);
 
+        const packet_number = packet_crypto.nextPacketNumberForLevel(level);
         const frame = [_]QuicFrames.Frame{.{ .ack = ack }};
         try self.scheduleFramesAsProtectedRawPacket(packet_crypto, level, packet_type, dest_conn_id, src_conn_id, &frame);
         tracker.clear();
-        return true;
+        return .{
+            .encryption_level = level,
+            .packet_number = packet_number,
+            .largest_acknowledged = ack.largest_acknowledged,
+            .range_count = @intCast(ack.ack_range_count + 1),
+        };
     }
 
     fn recordRawPacketSent(
@@ -969,13 +1569,16 @@ pub const SuperConnection = struct {
         ack_eliciting: bool,
     ) Error.ZquicError!void {
         if (packet_number > PacketSpace.MAX_PACKET_NUMBER) return Error.ZquicError.InvalidPacket;
+        const now = nowMicrosU64();
         self.packetSpaceForLevel(level).onPacketSent(
             @intCast(packet_number),
-            nowMicrosU64(),
+            now,
             ack_eliciting,
             ack_eliciting,
             sent_bytes,
         ) catch return Error.ZquicError.OutOfMemory;
+        var spaces = self.packetSpacePointers();
+        self.loss_recovery.setLossDetectionTimer(&spaces, now);
     }
 
     fn recordRawPacketReceived(
@@ -1002,8 +1605,16 @@ pub const SuperConnection = struct {
         return self.packet_spaces.getSpace(packetSpaceTypeForLevel(level));
     }
 
+    fn packetSpacePointers(self: *Self) [3]*PacketSpace.PacketSpace {
+        return .{
+            &self.packet_spaces.initial,
+            &self.packet_spaces.handshake,
+            &self.packet_spaces.application,
+        };
+    }
+
     fn ackTrackerForLevel(self: *Self, level: PacketCryptoMod.EncryptionLevel) *AckTracker {
-        return &self.ack_trackers[@intFromEnum(ackLevelForLevel(level))];
+        return &self.ack_trackers[@backingInt(ackLevelForLevel(level))];
     }
 
     pub fn processNextIncomingRawPacket(
@@ -1034,6 +1645,44 @@ pub const SuperConnection = struct {
         connection_id: []const u8,
         largest_processed: ?u64,
     ) Error.ZquicError!?PacketCryptoMod.ProcessedPacket {
+        return self.processNextIncomingRawCryptoPacketInternal(
+            packet_crypto,
+            handshake_manager,
+            enhanced_tls_context,
+            null,
+            connection_id,
+            largest_processed,
+        );
+    }
+
+    pub fn processNextIncomingRawCryptoPacketWithComprehensiveTls(
+        self: *Self,
+        packet_crypto: *PacketCryptoMod.PacketCrypto,
+        handshake_manager: *Handshake.HandshakeManager,
+        enhanced_tls_context: *EnhancedTls.EnhancedTlsContext,
+        comprehensive_tls_context: *ComprehensiveTls.ComprehensiveTlsContext,
+        connection_id: []const u8,
+        largest_processed: ?u64,
+    ) Error.ZquicError!?PacketCryptoMod.ProcessedPacket {
+        return self.processNextIncomingRawCryptoPacketInternal(
+            packet_crypto,
+            handshake_manager,
+            enhanced_tls_context,
+            comprehensive_tls_context,
+            connection_id,
+            largest_processed,
+        );
+    }
+
+    fn processNextIncomingRawCryptoPacketInternal(
+        self: *Self,
+        packet_crypto: *PacketCryptoMod.PacketCrypto,
+        handshake_manager: *Handshake.HandshakeManager,
+        enhanced_tls_context: *EnhancedTls.EnhancedTlsContext,
+        comprehensive_tls_context: ?*ComprehensiveTls.ComprehensiveTlsContext,
+        connection_id: []const u8,
+        largest_processed: ?u64,
+    ) Error.ZquicError!?PacketCryptoMod.ProcessedPacket {
         if (self.incoming_raw_packets.items.len == 0) return null;
         var owned = self.incoming_raw_packets.orderedRemove(0);
         defer owned.deinit(self.allocator);
@@ -1042,7 +1691,30 @@ pub const SuperConnection = struct {
         errdefer processed.deinit(self.allocator);
         const ack_eliciting = try self.payloadIsAckEliciting(processed.payload);
         self.recordRawPacketReceived(processed.encryption_level, processed.packet_number, ack_eliciting);
-        _ = try self.processCryptoPayload(handshake_manager, enhanced_tls_context, packet_crypto, connection_id, processed.encryption_level, processed.payload);
+        _ = try self.processCryptoPayloadInternal(
+            handshake_manager,
+            enhanced_tls_context,
+            comprehensive_tls_context,
+            packet_crypto,
+            connection_id,
+            processed.encryption_level,
+            processed.payload,
+        );
+        if (comprehensive_tls_context) |tls_context| {
+            if (!packet_crypto.isLevelPinned(.application)) {
+                if (tls_context.tls13ApplicationKeys()) |schedule| {
+                    const local_keys, const remote_keys = switch (self.role) {
+                        .server => .{ &schedule.server_packet_keys, &schedule.client_packet_keys },
+                        .client => .{ &schedule.client_packet_keys, &schedule.server_packet_keys },
+                    };
+                    packet_crypto.installRfc9001ApplicationKeys(
+                        local_keys,
+                        remote_keys,
+                    ) catch return Error.ZquicError.CryptoError;
+                    self.state = .established;
+                }
+            }
+        }
         self.stats.bytes_received += processed.payload.len;
         self.stats.packets_received += 1;
         self.stats.crypto_operations += 1;
@@ -1057,7 +1729,48 @@ pub const SuperConnection = struct {
         src_conn_id: []const u8,
         largest_processed: ?u64,
     ) Error.ZquicError!usize {
-        if (self.incoming_raw_packets.items.len == 0) return 0;
+        const result = try self.processNextIncomingInitialCryptoAndScheduleServerFlightInternal(
+            packet_crypto,
+            handshake_manager,
+            null,
+            dest_conn_id,
+            src_conn_id,
+            largest_processed,
+        );
+        return result.scheduled_packets;
+    }
+
+    pub fn processNextIncomingInitialCryptoAndScheduleServerFlightWithComprehensiveTls(
+        self: *Self,
+        packet_crypto: *PacketCryptoMod.PacketCrypto,
+        handshake_manager: *Handshake.HandshakeManager,
+        tls_context: *ComprehensiveTls.ComprehensiveTlsContext,
+        dest_conn_id: []const u8,
+        src_conn_id: []const u8,
+        largest_processed: ?u64,
+    ) Error.ZquicError!InitialCryptoFlightResult {
+        return self.processNextIncomingInitialCryptoAndScheduleServerFlightInternal(
+            packet_crypto,
+            handshake_manager,
+            tls_context,
+            dest_conn_id,
+            src_conn_id,
+            largest_processed,
+        );
+    }
+
+    fn processNextIncomingInitialCryptoAndScheduleServerFlightInternal(
+        self: *Self,
+        packet_crypto: *PacketCryptoMod.PacketCrypto,
+        handshake_manager: *Handshake.HandshakeManager,
+        comprehensive_tls_context: ?*ComprehensiveTls.ComprehensiveTlsContext,
+        dest_conn_id: []const u8,
+        src_conn_id: []const u8,
+        largest_processed: ?u64,
+    ) Error.ZquicError!InitialCryptoFlightResult {
+        if (self.incoming_raw_packets.items.len == 0) {
+            return .{ .scheduled_packets = 0, .tls_messages_processed = 0 };
+        }
         var owned = self.incoming_raw_packets.orderedRemove(0);
         defer owned.deinit(self.allocator);
 
@@ -1067,9 +1780,10 @@ pub const SuperConnection = struct {
 
         const ack_eliciting = try self.payloadIsAckEliciting(processed.payload);
         self.recordRawPacketReceived(processed.encryption_level, processed.packet_number, ack_eliciting);
-        const scheduled = try self.processInitialCryptoAndScheduleServerFlight(
+        const result = try self.processInitialCryptoAndScheduleServerFlightInternal(
             packet_crypto,
             handshake_manager,
+            comprehensive_tls_context,
             processed.payload,
             dest_conn_id,
             src_conn_id,
@@ -1077,7 +1791,7 @@ pub const SuperConnection = struct {
         self.stats.bytes_received += processed.payload.len;
         self.stats.packets_received += 1;
         self.stats.crypto_operations += 1;
-        return scheduled;
+        return result;
     }
 
     fn clearOwnedRawPackets(self: *Self) void {
@@ -1167,6 +1881,7 @@ pub const SuperConnection = struct {
         if (self.state == .closed or self.state == .draining) {
             return; // Already shutting down
         }
+        if (error_code > 0x3fff_ffff_ffff_ffff) return Error.ZquicError.InvalidArgument;
 
         std.log.info("Connection {x}: Initiating graceful shutdown (code={}, reason={s})", .{
             self.local_conn_id.bytes()[0],
@@ -1199,46 +1914,20 @@ pub const SuperConnection = struct {
     /// - Reason Phrase Length (variable-length integer)
     /// - Reason Phrase (bytes)
     fn queueConnectionClose(self: *Self, error_code: u64, reason: ?[]const u8) !void {
-        // Build CONNECTION_CLOSE frame payload
-        // Frame type 0x1c = CONNECTION_CLOSE (application)
-        // Frame type 0x1d = CONNECTION_CLOSE (transport)
-        var frame_buf: [256]u8 = undefined;
-        var frame_len: usize = 0;
-
-        // Frame type (0x1c for application-level close)
-        frame_buf[frame_len] = 0x1c;
-        frame_len += 1;
-
-        // Error code as varint (simplified: 1-byte for small codes, 2-byte otherwise)
-        if (error_code < 64) {
-            frame_buf[frame_len] = @intCast(error_code);
-            frame_len += 1;
-        } else if (error_code < 16384) {
-            frame_buf[frame_len] = @intCast(0x40 | (error_code >> 8));
-            frame_buf[frame_len + 1] = @intCast(error_code & 0xFF);
-            frame_len += 2;
-        } else {
-            // 4-byte varint for larger codes
-            frame_buf[frame_len] = @intCast(0x80 | (error_code >> 24));
-            frame_buf[frame_len + 1] = @intCast((error_code >> 16) & 0xFF);
-            frame_buf[frame_len + 2] = @intCast((error_code >> 8) & 0xFF);
-            frame_buf[frame_len + 3] = @intCast(error_code & 0xFF);
-            frame_len += 4;
-        }
-
-        // Frame type that triggered close (0 for application close)
-        frame_buf[frame_len] = 0x00;
-        frame_len += 1;
-
-        // Reason phrase length and content
+        if (error_code > 0x3fff_ffff_ffff_ffff) return Error.ZquicError.InvalidArgument;
         const reason_bytes = reason orelse "";
-        const reason_len = @min(reason_bytes.len, 200); // Cap reason length
-        frame_buf[frame_len] = @intCast(reason_len);
-        frame_len += 1;
-        if (reason_len > 0) {
-            @memcpy(frame_buf[frame_len..][0..reason_len], reason_bytes[0..reason_len]);
-            frame_len += reason_len;
-        }
+        const reason_len = @min(reason_bytes.len, 200);
+        const payload = self.allocator.alloc(u8, 256) catch return Error.ZquicError.OutOfMemory;
+        errdefer self.allocator.free(payload);
+
+        var writer = std.Io.Writer.fixed(payload);
+        const close_frame = QuicFrames.Frame{ .connection_close = QuicFrames.ConnectionCloseFrame.init(
+            error_code,
+            0,
+            reason_bytes[0..reason_len],
+        ) };
+        close_frame.serialize(&writer) catch return Error.ZquicError.PacketTooLarge;
+        const frame_len = std.Io.Writer.buffered(&writer).len;
 
         // Build packet header - use 1-RTT (short header) if established, else handshake
         const packet_type: Packet.PacketType = if (self.state == .established)
@@ -1257,9 +1946,16 @@ pub const SuperConnection = struct {
             .header_length = 0, // Not used for outgoing packets
         };
 
-        const close_packet = Packet.Packet.init(header, frame_buf[0..frame_len]);
-        try self.outgoing_packets.append(self.allocator, close_packet);
+        self.outgoing_packets.ensureUnusedCapacity(self.allocator, 1) catch return Error.ZquicError.OutOfMemory;
+        self.owned_control_payloads.ensureUnusedCapacity(self.allocator, 1) catch return Error.ZquicError.OutOfMemory;
+        self.outgoing_packets.appendAssumeCapacity(Packet.Packet.init(header, payload[0..frame_len]));
+        self.owned_control_payloads.appendAssumeCapacity(payload);
         self.stats.packets_sent += 1;
+    }
+
+    fn clearOwnedControlPayloads(self: *Self) void {
+        for (self.owned_control_payloads.items) |payload| self.allocator.free(payload);
+        self.owned_control_payloads.clearRetainingCapacity();
     }
 
     /// Wait for connection draining to complete.
@@ -1373,13 +2069,16 @@ pub const SuperConnection = struct {
         // Clear packet queues
         self.incoming_packets.clearRetainingCapacity();
         self.outgoing_packets.clearRetainingCapacity();
+        self.clearOwnedControlPayloads();
         self.clearOwnedRawPackets();
         for (&self.crypto_reassembly) |*buffer| {
             buffer.clear();
         }
+        for (&self.retained_crypto) |*retained| retained.clear(self.allocator);
         self.packet_spaces.deinit();
         self.packet_spaces = try PacketSpace.PacketSpaceManager.init(self.allocator);
         self.ack_trackers = .{ .{}, .{}, .{} };
+        self.loss_recovery = Recovery.LossRecovery.init();
         self.stream_events.clearRetainingCapacity();
 
         // Reset statistics
@@ -1634,16 +2333,7 @@ fn mapFrameError(err: anyerror) Error.ZquicError {
 }
 
 fn freeParsedFrame(allocator: std.mem.Allocator, frame: *QuicFrames.Frame) void {
-    switch (frame.*) {
-        .crypto => |crypto| allocator.free(crypto.data),
-        .new_token => |new_token| allocator.free(new_token.token),
-        .stream, .stream_fin, .stream_len, .stream_len_fin, .stream_off, .stream_off_fin, .stream_off_len, .stream_off_len_fin => |stream| allocator.free(stream.data),
-        .new_connection_id => |new_connection_id| allocator.free(new_connection_id.connection_id),
-        .connection_close => |connection_close| allocator.free(connection_close.reason_phrase),
-        .connection_close_app => |connection_close| allocator.free(connection_close.reason_phrase),
-        .datagram, .datagram_len => |datagram| allocator.free(datagram.data),
-        else => {},
-    }
+    frame.deinit(allocator);
 }
 
 test "connection creation" {

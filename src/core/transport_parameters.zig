@@ -235,7 +235,7 @@ fn parameterIdFromInt(raw_id: u64) ?ParameterId {
 }
 
 fn writeRawParameter(writer: anytype, id: ParameterId, value: []const u8) Error.ZquicError!void {
-    Frames.writeVarint(writer, @intFromEnum(id)) catch return Error.ZquicError.BufferTooSmall;
+    Frames.writeVarint(writer, @backingInt(id)) catch return Error.ZquicError.BufferTooSmall;
     Frames.writeVarint(writer, value.len) catch return Error.ZquicError.BufferTooSmall;
     writer.writeAll(value) catch return Error.ZquicError.BufferTooSmall;
 }

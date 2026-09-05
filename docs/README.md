@@ -173,7 +173,7 @@ flowchart TD
 
 ## Project Plans
 
-- [v0.9.17 Release Plan](project/release-plan-v0-9-17.md) - planned Handshake-space and HTTP/3 interop evidence gates
+- [v0.9.17 Release Plan](project/release-plan-v0-9-17.md) - Handshake-space and HTTP/3 interop evidence gates
 
 ## Build Profiles
 

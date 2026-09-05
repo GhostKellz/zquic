@@ -1,8 +1,8 @@
-//! ZQUIC — High-Performance QUIC/HTTP3 Library for Zig
+//! ZQUIC — experimental QUIC transport components for Zig.
 //!
-//! A modular QUIC (RFC 9000) and HTTP/3 (RFC 9114) implementation written in
-//! pure Zig. Designed for flexibility from minimal embedded clients to
-//! full-featured server runtimes with opt-in post-quantum experiments.
+//! The package exposes QUIC packet, connection, stream, recovery, HTTP/3, and
+//! DoQ modules plus explicitly gated experimental surfaces. The bounded live
+//! interop probe is not a production server or a broad RFC-conformance claim.
 //!
 //! ## Quick Start
 //!
@@ -10,7 +10,7 @@
 //! const zquic = @import("zquic");
 //!
 //! // Create a QUIC connection
-//! var conn = try zquic.Connection.init(allocator, .client, .{});
+//! var conn = try zquic.Connection.Connection.init(allocator, .client, .{});
 //! defer conn.deinit();
 //!
 //! // Create a stream for data transfer
@@ -22,42 +22,38 @@
 //!
 //! Features are enabled/disabled at build time via `zig build` options:
 //!
-//! | Feature | Build Flag | Size | Description |
-//! |---------|------------|------|-------------|
-//! | Core QUIC | Always included | ~1MB | RFC 9000 transport, streams, crypto |
-//! | HTTP/3 | `-Dhttp3=true` | +1MB | RFC 9114 web server support |
-//! | DoQ | `-Ddoq=true` | +0.5MB | DNS-over-QUIC (RFC 9250) |
-//! | Services | `-Dservices=true` | +2MB | GhostBridge gRPC, Wraith proxy |
-//! | VPN | `-Dvpn=true` | +0.5MB | Mesh VPN routing |
-//! | Post-Quantum | `-Dpost-quantum=true -Dexperimental-crypto=true` | +1.5MB | ML-KEM-768 (experimental) |
-//! | Monitoring | `-Dmonitoring=true` | +0.2MB | Prometheus metrics |
+//! | Feature | Build Flag | Description |
+//! |---------|------------|-------------|
+//! | Core QUIC | Always included | Packet, connection, stream, and recovery modules |
+//! | HTTP/3 | `-Dhttp3=true` | Server, routing, frame, and QPACK components |
+//! | DoQ | `-Ddoq=true` | DNS-over-QUIC components |
+//! | Services | `-Dservices=true` | GhostBridge, Wraith, CNS, and ZVM modules |
+//! | VPN | `-Dvpn=true` | Experimental mesh-routing helpers |
+//! | Post-Quantum | `-Dpost-quantum=true -Dexperimental-crypto=true` | Experimental ML-KEM/ML-DSA paths |
+//! | Monitoring | `-Dmonitoring=true` | Prometheus metric helpers |
 //!
 //! ## Architecture
 //!
-//! ```
-//! ┌─────────────────────────────────────────────────────────────┐
-//! │                      Application Layer                       │
-//! │  ┌─────────┐ ┌─────────┐ ┌─────────┐ ┌─────────┐ ┌─────────┐│
-//! │  │ HTTP/3  │ │   DoQ   │ │Services │ │   VPN   │ │Monitoring││
-//! │  └────┬────┘ └────┬────┘ └────┬────┘ └────┬────┘ └────┬────┘│
-//! ├───────┴──────────┴──────────┴──────────┴──────────┴────────┤
-//! │                       Core QUIC Layer                        │
-//! │  ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌──────────────────┐│
-//! │  │Connection│ │  Stream  │ │  Crypto  │ │ Flow/Congestion  ││
-//! │  └──────────┘ └──────────┘ └──────────┘ └──────────────────┘│
+//! ```text
+//! ┌──────────────────────────────────────────────────────────────┐
+//! │                    Application modules                       │
+//! │   HTTP/3       DoQ       Services       VPN      Monitoring  │
+//! │  default     default      opt-in      opt-in       opt-in    │
 //! ├──────────────────────────────────────────────────────────────┤
-//! │                      Network Layer                           │
-//! │  ┌──────────┐ ┌──────────┐ ┌──────────────────────────────┐ │
-//! │  │   UDP    │ │Multiplexer│ │      Async Runtime         │ │
-//! │  └──────────┘ └──────────┘ └──────────────────────────────┘ │
+//! │                       QUIC core                              │
+//! │ Connection · Stream · Frames · Recovery · Flow/Congestion   │
+//! ├──────────────────────────────────────────────────────────────┤
+//! │                  Packet protection and TLS                   │
+//! │ RFC 9001 helpers · bounded TLS probe · experimental PQ      │
+//! ├──────────────────────────────────────────────────────────────┤
+//! │                    Runtime and network                       │
+//! │              UDP · Multiplexer · Async runtime               │
 //! └──────────────────────────────────────────────────────────────┘
 //! ```
 //!
-//! ## Thread Safety
-//!
-//! - Connection and Stream operations use atomic state for lock-free metrics
-//! - Buffer pools are thread-safe with mutex protection
-//! - The async runtime supports multi-threaded worker pools
+//! The diagram describes module layering, not production maturity. See
+//! `docs/features/crypto-maturity.md` and `docs/features/quic-interop.md` for
+//! the tested boundaries.
 //!
 //! ## Error Handling
 //!
@@ -70,7 +66,7 @@
 //!
 //! - Library version: build.zig.zon version
 //! - QUIC version: RFC 9000 (v1)
-//! - Zig compatibility: 0.17.0-dev.27+
+//! - Zig compatibility: see `minimum_zig_version` in `build.zig.zon`
 
 const std = @import("std");
 const build_options = @import("build_options");
@@ -89,13 +85,17 @@ pub const core = @import("core.zig");
 
 /// QUIC connection manager handling handshakes, streams, and packet I/O.
 ///
-/// A Connection represents a single QUIC connection between two endpoints.
+/// This export is the connection module. Use `Connection.Connection` for the
+/// compatibility wrapper or `Connection.SuperConnection` for lower-level
+/// orchestration.
+///
+/// A connection represents a single QUIC connection between two endpoints.
 /// It manages multiple streams, handles cryptographic handshakes, and
 /// provides flow control and congestion management.
 ///
 /// ## Example
 /// ```zig
-/// var conn = try Connection.init(allocator, .client, .{});
+/// var conn = try Connection.Connection.init(allocator, .client, .{});
 /// defer conn.deinit();
 ///
 /// // Create streams for data transfer
@@ -151,6 +151,14 @@ pub const EnhancedCrypto = core.EnhancedCrypto;
 /// parameter extraction, and certificate helper surfaces. It is not a
 /// production-complete TLS stack.
 pub const ComprehensiveTls = core.ComprehensiveTls;
+/// Strict ClientHello parsing and ServerHello construction for the bounded
+/// TLS 1.3 parameter set used by the interop probe.
+pub const Tls13Messages = core.Tls13Messages;
+/// TLS 1.3 and RFC 9001 key-schedule leaf helpers for AES-128-GCM-SHA256.
+pub const Tls13KeySchedule = core.Tls13KeySchedule;
+/// Ephemeral self-signed identities for interop tests; not production
+/// credentials or a certificate lifecycle API.
+pub const Tls13Identity = core.Tls13Identity;
 
 /// TLS 1.3 handshake state machine for QUIC.
 ///
@@ -244,7 +252,7 @@ pub const PacketMemoryPool = core.PacketMemoryPool;
 
 /// HTTP/3 server and client implementation (RFC 9114).
 ///
-/// Requires: `-Denable_http3=true`
+/// Requires: `-Dhttp3=true`
 ///
 /// Provides:
 /// - HTTP/3 server with middleware support
@@ -255,14 +263,14 @@ pub const http3 = if (build_options.enable_http3) @import("http3.zig") else stru
 
 /// DNS-over-QUIC implementation (RFC 9250).
 ///
-/// Requires: `-Denable_doq=true`
+/// Requires: `-Ddoq=true`
 ///
 /// Provides encrypted DNS resolution over QUIC transport.
 pub const doq = if (build_options.enable_doq) @import("doq.zig") else struct {};
 
 /// VPN routing and mesh networking support.
 ///
-/// Requires: `-Denable_vpn=true`
+/// Requires: `-Dvpn=true`
 ///
 /// Provides:
 /// - Packet routing with NAT
@@ -272,7 +280,7 @@ pub const vpn = if (build_options.enable_vpn) @import("vpn.zig") else struct {};
 
 /// GhostBridge gRPC and Wraith reverse proxy services.
 ///
-/// Requires: `-Denable_services=true`
+/// Requires: `-Dservices=true`
 ///
 /// Provides:
 /// - GhostBridge: gRPC-over-QUIC relay
@@ -281,7 +289,7 @@ pub const services = if (build_options.enable_services) @import("services.zig") 
 
 /// Post-quantum cryptography integration via zcrypto.
 ///
-/// Requires: `-Denable_post_quantum=true`
+/// Requires both `-Dpost-quantum=true` and `-Dexperimental-crypto=true`.
 ///
 /// Provides:
 /// - ML-KEM-768 key encapsulation
@@ -291,7 +299,7 @@ pub const post_quantum = if (build_options.enable_post_quantum) @import("post_qu
 
 /// Prometheus metrics and performance monitoring.
 ///
-/// Requires: `-Denable_monitoring=true`
+/// Requires: `-Dmonitoring=true`
 ///
 /// Provides:
 /// - Connection/stream metrics
@@ -519,6 +527,11 @@ test {
     _ = @import("core/stream_flow_control.zig");
     _ = @import("core/congestion.zig");
     _ = @import("core/connection_migration.zig");
+    _ = @import("core/crypto.zig");
+    _ = @import("core/packet_crypto.zig");
+    _ = @import("crypto/tls13_key_schedule.zig");
+    _ = @import("crypto/tls13_identity.zig");
+    _ = @import("crypto/tls13_messages.zig");
     _ = @import("utils/sync.zig");
     _ = @import("net/sys.zig");
     _ = @import("async/event_loop.zig");

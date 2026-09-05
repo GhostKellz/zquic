@@ -4,9 +4,10 @@
 
 | Version | Status |
 |---------|--------|
-| `0.9.14` | Supported |
+| `0.9.17` | Supported after release |
+| `0.9.16` | Supported |
 | `main` | Best effort |
-| `< 0.9.14` | Not supported |
+| `<= 0.9.15` | Not supported |
 
 Security fixes are targeted at the current release line first.
 
@@ -43,7 +44,7 @@ It also includes integration risks where `zquic` misuses dependencies in a way t
 
 ## Crypto Status
 
-`zquic` uses `zcrypto v1.0.5` for parts of its cryptographic implementation.
+`zquic` uses `zcrypto v1.0.6` for parts of its cryptographic implementation.
 
 Current support posture:
 
@@ -119,11 +120,11 @@ Dependencies are pinned in `build.zig.zon` with archive URLs and Zig package
 hashes. Release validation should include:
 
 ```bash
-/opt/zig-dev/zig build --summary all
-/opt/zig-dev/zig build test --summary all
-/opt/zig-dev/zig build integration-tests --summary all
-/opt/zig-dev/zig build fuzz-tests --summary all
-/opt/zig-dev/zig build -Dpost-quantum=true -Dexperimental-crypto=true --summary all
+zig build --summary all
+zig build test --summary all
+zig build integration-tests --summary all
+zig build fuzz-tests --summary all
+zig build -Dpost-quantum=true -Dexperimental-crypto=true --summary all
 ```
 
 Known accepted and resolved advisories are tracked under

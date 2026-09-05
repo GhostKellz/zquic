@@ -97,7 +97,7 @@ fn customDnsHandler(query: *zquic.DoQ.Message.DnsMessage, allocator: std.mem.All
 
     const domain = query.questions[0].name;
     const qtype = query.questions[0].qtype;
-    const record_type = @as(zquic.DoQ.Message.DnsRecordType, @enumFromInt(qtype));
+    const record_type = @as(zquic.DoQ.Message.DnsRecordType, @fromBackingInt(@intCast(qtype)));
 
     std.log.info("🔍 DoQ Query: {s} (type: {s})", .{ domain, record_type.toString() });
 
@@ -131,7 +131,7 @@ fn handleARecord(query: *const zquic.DoQ.Message.DnsMessage, domain: []const u8,
     response.questions = try allocator.alloc(zquic.DoQ.Message.DnsQuestion, 1);
     response.questions[0] = zquic.DoQ.Message.DnsQuestion{
         .name = try allocator.dupe(u8, domain),
-        .qtype = @intFromEnum(zquic.DoQ.Message.DnsRecordType.A),
+        .qtype = @backingInt(zquic.DoQ.Message.DnsRecordType.A),
         .qclass = query.questions[0].qclass,
     };
 
@@ -150,7 +150,7 @@ fn handleARecord(query: *const zquic.DoQ.Message.DnsMessage, domain: []const u8,
 
     response.answers[0] = zquic.DoQ.Message.DnsResourceRecord{
         .name = try allocator.dupe(u8, domain),
-        .rtype = @intFromEnum(zquic.DoQ.Message.DnsRecordType.A),
+        .rtype = @backingInt(zquic.DoQ.Message.DnsRecordType.A),
         .rclass = 1, // IN
         .ttl = 300,
         .rdlength = 4,
@@ -177,7 +177,7 @@ fn handleAAAARecord(query: *const zquic.DoQ.Message.DnsMessage, domain: []const 
     response.questions = try allocator.alloc(zquic.DoQ.Message.DnsQuestion, 1);
     response.questions[0] = zquic.DoQ.Message.DnsQuestion{
         .name = try allocator.dupe(u8, domain),
-        .qtype = @intFromEnum(zquic.DoQ.Message.DnsRecordType.AAAA),
+        .qtype = @backingInt(zquic.DoQ.Message.DnsRecordType.AAAA),
         .qclass = query.questions[0].qclass,
     };
 
@@ -191,7 +191,7 @@ fn handleAAAARecord(query: *const zquic.DoQ.Message.DnsMessage, domain: []const 
 
     response.answers[0] = zquic.DoQ.Message.DnsResourceRecord{
         .name = try allocator.dupe(u8, domain),
-        .rtype = @intFromEnum(zquic.DoQ.Message.DnsRecordType.AAAA),
+        .rtype = @backingInt(zquic.DoQ.Message.DnsRecordType.AAAA),
         .rclass = 1,
         .ttl = 300,
         .rdlength = 16,
@@ -218,7 +218,7 @@ fn handleTXTRecord(query: *const zquic.DoQ.Message.DnsMessage, domain: []const u
     response.questions = try allocator.alloc(zquic.DoQ.Message.DnsQuestion, 1);
     response.questions[0] = zquic.DoQ.Message.DnsQuestion{
         .name = try allocator.dupe(u8, domain),
-        .qtype = @intFromEnum(zquic.DoQ.Message.DnsRecordType.TXT),
+        .qtype = @backingInt(zquic.DoQ.Message.DnsRecordType.TXT),
         .qclass = query.questions[0].qclass,
     };
 
@@ -234,7 +234,7 @@ fn handleTXTRecord(query: *const zquic.DoQ.Message.DnsMessage, domain: []const u
 
     response.answers[0] = zquic.DoQ.Message.DnsResourceRecord{
         .name = try allocator.dupe(u8, domain),
-        .rtype = @intFromEnum(zquic.DoQ.Message.DnsRecordType.TXT),
+        .rtype = @backingInt(zquic.DoQ.Message.DnsRecordType.TXT),
         .rclass = 1,
         .ttl = 300,
         .rdlength = @intCast(txt_data.len),
@@ -261,7 +261,7 @@ fn handleMXRecord(query: *const zquic.DoQ.Message.DnsMessage, domain: []const u8
     response.questions = try allocator.alloc(zquic.DoQ.Message.DnsQuestion, 1);
     response.questions[0] = zquic.DoQ.Message.DnsQuestion{
         .name = try allocator.dupe(u8, domain),
-        .qtype = @intFromEnum(zquic.DoQ.Message.DnsRecordType.MX),
+        .qtype = @backingInt(zquic.DoQ.Message.DnsRecordType.MX),
         .qclass = query.questions[0].qclass,
     };
 
@@ -289,7 +289,7 @@ fn handleMXRecord(query: *const zquic.DoQ.Message.DnsMessage, domain: []const u8
 
     response.answers[0] = zquic.DoQ.Message.DnsResourceRecord{
         .name = try allocator.dupe(u8, domain),
-        .rtype = @intFromEnum(zquic.DoQ.Message.DnsRecordType.MX),
+        .rtype = @backingInt(zquic.DoQ.Message.DnsRecordType.MX),
         .rclass = 1,
         .ttl = 300,
         .rdlength = @intCast(mx_data.items.len),
@@ -335,7 +335,7 @@ fn createErrorResponse(query: *const zquic.DoQ.Message.DnsMessage, allocator: st
 
     response.header = zquic.DoQ.Message.DnsHeader{
         .id = query.header.id,
-        .flags = 0x8000 | (@as(u16, @intFromEnum(rcode)) & 0x000F), // QR=1, RCODE=rcode
+        .flags = 0x8000 | (@as(u16, @backingInt(rcode)) & 0x000F), // QR=1, RCODE=rcode
         .qdcount = query.header.qdcount,
         .ancount = 0,
         .nscount = 0,

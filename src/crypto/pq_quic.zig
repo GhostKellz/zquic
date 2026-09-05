@@ -345,7 +345,7 @@ pub const PQHandshakeTranscript = struct {
         hasher.update(domain);
         updateU16(&hasher, version);
         updateU16(&hasher, self.cipher_suite.id());
-        hasher.update(&[_]u8{@intFromEnum(self.role)});
+        hasher.update(&[_]u8{@backingInt(self.role)});
         hasher.update(&[_]u8{if (self.experimental_crypto) 1 else 0});
         updateSlice(&hasher, self.kem_public_key);
         updateSlice(&hasher, self.classical_public_key orelse &[_]u8{});

@@ -5,6 +5,7 @@ services:
       dockerfile: docker/Dockerfile
       network: host
     network_mode: host
+    user: "${HOST_UID:-1000}:${HOST_GID:-1000}"
     working_dir: /workspace
     volumes:
       - ..:/workspace
@@ -17,6 +18,7 @@ services:
       dockerfile: docker/Dockerfile.interop
       network: host
     network_mode: host
+    user: "${HOST_UID:-1000}:${HOST_GID:-1000}"
     working_dir: /workspace
     volumes:
       - ..:/workspace

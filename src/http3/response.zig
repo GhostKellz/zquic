@@ -89,7 +89,7 @@ pub const StatusCode = enum(u16) {
     }
 
     pub fn getCode(self: StatusCode) u16 {
-        return @intFromEnum(self);
+        return @backingInt(self);
     }
 
     pub fn getReasonPhrase(self: StatusCode) []const u8 {

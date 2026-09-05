@@ -806,7 +806,7 @@ fn proxyHandler(req: *Request, res: *Response) !void {
 
     // Copy response status
     const backend_status = backend_request.response.status;
-    res.setStatus(@enumFromInt(@intFromEnum(backend_status)));
+    res.setStatus(@fromBackingInt(@intCast(@backingInt(backend_status))));
 
     // Copy response headers (simplified)
     var header_iter = backend_request.response.iterateHeaders();

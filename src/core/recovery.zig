@@ -13,6 +13,7 @@ const Error = @import("../utils/error.zig");
 const PacketSpace = @import("packet_space.zig").PacketSpace;
 const PacketNumber = @import("packet_space.zig").PacketNumber;
 const AckRange = @import("packet_space.zig").AckRange;
+const AckResult = @import("packet_space.zig").AckResult;
 
 /// RTT constants (in microseconds)
 pub const RTT_CONSTANTS = struct {
@@ -133,12 +134,16 @@ pub const RttStats = struct {
         const base_pto = self.smoothed_rtt +
             @max(RTT_CONSTANTS.K_GRANULARITY * self.rttvar, RTT_CONSTANTS.GRANULARITY) +
             self.max_ack_delay;
-        return base_pto << @intCast(pto_count);
+        const shift: std.math.Log2Int(u64) = @intCast(@min(pto_count, 63));
+        return std.math.shlExact(u64, base_pto, shift) catch std.math.maxInt(u64);
     }
 
     /// Get time threshold for loss detection
     pub fn lossTimeThreshold(self: Self) u64 {
-        return @intFromFloat(@as(f64, @floatFromInt(@max(self.latest_rtt, self.smoothed_rtt))) * RTT_CONSTANTS.K_TIME_THRESHOLD);
+        const rtt_threshold: u64 = @intFromFloat(
+            @as(f64, @floatFromInt(@max(self.latest_rtt, self.smoothed_rtt))) * RTT_CONSTANTS.K_TIME_THRESHOLD,
+        );
+        return @max(rtt_threshold, RTT_CONSTANTS.GRANULARITY);
     }
 };
 
@@ -296,7 +301,7 @@ pub const LossRecovery = struct {
         } else if (has_ack_eliciting) {
             // Set PTO timer
             const pto_timeout = self.rtt_stats.calculatePto(self.pto_count);
-            self.loss_detection_timer = now + pto_timeout;
+            self.loss_detection_timer = std.math.add(u64, now, pto_timeout) catch std.math.maxInt(u64);
         } else {
             // No timer needed
             self.loss_detection_timer = null;
@@ -315,7 +320,7 @@ pub const LossRecovery = struct {
         while (iterator.next()) |packet| {
             if (!packet.ack_eliciting) continue;
 
-            const loss_time = packet.time_sent + loss_delay;
+            const loss_time = std.math.add(u64, packet.time_sent, loss_delay) catch std.math.maxInt(u64);
             if (loss_time <= now) return loss_time;
             if (earliest_loss_time == null or loss_time < earliest_loss_time.?) {
                 earliest_loss_time = loss_time;
@@ -326,8 +331,9 @@ pub const LossRecovery = struct {
     }
 
     /// Handle loss detection timer expiry
-    pub fn onLossDetectionTimeout(self: *Self, spaces: []const *PacketSpace, now: u64) !void {
+    pub fn onLossDetectionTimeout(self: *Self, spaces: []const *PacketSpace, now: u64) !bool {
         var earliest_loss_time: ?u64 = null;
+        var losses_detected = false;
 
         // Check for time-based losses
         for (spaces) |space| {
@@ -341,6 +347,7 @@ pub const LossRecovery = struct {
                 defer lost_packets.deinit(space.allocator);
 
                 if (lost_packets.items.len > 0) {
+                    losses_detected = true;
                     const lost_stats = space.lostPacketStats(lost_packets.items);
                     space.onPacketsLost(lost_packets.items);
                     if (lost_stats.lost_bytes > 0) {
@@ -358,12 +365,14 @@ pub const LossRecovery = struct {
         }
 
         // If no losses detected, this was a PTO
-        if (earliest_loss_time == null or earliest_loss_time.? > now) {
+        const pto_fired = !losses_detected and (earliest_loss_time == null or earliest_loss_time.? > now);
+        if (pto_fired) {
             self.onPtoTimeout(spaces, now);
         }
 
         // Reset timer
         self.setLossDetectionTimer(spaces, now);
+        return pto_fired;
     }
 
     /// Handle PTO timeout
@@ -425,6 +434,25 @@ pub const LossRecovery = struct {
         if (ack_result.newly_acked_count > 0) {
             self.pto_count = 0;
         }
+    }
+
+    /// Apply recovery accounting after a caller has strictly validated and
+    /// processed an ACK in its packet-number space.
+    pub fn onAckProcessed(self: *Self, space: *PacketSpace, result: AckResult, ack_delay: u64, now: u64) void {
+        if (result.largest_newly_acked_time > 0 and result.largest_newly_acked != null) {
+            const rtt = now -| result.largest_newly_acked_time;
+            self.rtt_stats.updateRtt(ack_delay, rtt, now);
+        }
+        self.congestion_controller.onAckReceived(result.newly_acked_bytes, space.largest_acked_time, now);
+        if (result.newly_acked_count > 0) self.pto_count = 0;
+    }
+
+    pub fn deadline(self: *const Self) ?u64 {
+        return self.loss_detection_timer;
+    }
+
+    pub fn ptoCount(self: *const Self) u32 {
+        return self.pto_count;
     }
 
     /// Detect persistent congestion
@@ -531,10 +559,12 @@ test "loss timeout removes lost packets and reduces congestion window" {
 
     recovery.loss_detection_timer = 5_000;
     const spaces = [_]*PacketSpace{&space};
-    try recovery.onLossDetectionTimeout(&spaces, 1_000_000);
+    const pto_fired = try recovery.onLossDetectionTimeout(&spaces, 1_000_000);
 
     try std.testing.expectEqual(@as(usize, 0), space.sent_packets.count());
     try std.testing.expect(recovery.getCongestionWindow() < CC_CONSTANTS.INITIAL_WINDOW);
+    try std.testing.expect(!pto_fired);
+    try std.testing.expectEqual(@as(u32, 0), recovery.ptoCount());
 }
 
 test "rtt pto includes peer ack delay" {
@@ -543,6 +573,22 @@ test "rtt pto includes peer ack delay" {
 
     const pto = rtt_stats.calculatePto(0);
     try std.testing.expect(pto >= rtt_stats.smoothed_rtt + rtt_stats.max_ack_delay);
+}
+
+test "pto backoff saturates instead of wrapping to an expired deadline" {
+    const rtt_stats = RttStats.init();
+    try std.testing.expectEqual(std.math.maxInt(u64), rtt_stats.calculatePto(64));
+    try std.testing.expectEqual(std.math.maxInt(u64), rtt_stats.calculatePto(1_000));
+
+    var space = try PacketSpace.init(std.testing.allocator, .application);
+    defer space.deinit();
+    try space.onPacketSent(0, 1, true, true, 1200);
+
+    var recovery = LossRecovery.init();
+    recovery.pto_count = 1_000;
+    const spaces = [_]*PacketSpace{&space};
+    recovery.setLossDetectionTimer(&spaces, 10_000);
+    try std.testing.expectEqual(@as(?u64, std.math.maxInt(u64)), recovery.deadline());
 }
 
 test "persistent congestion collapses congestion window" {

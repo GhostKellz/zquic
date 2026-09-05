@@ -40,6 +40,7 @@ pub const FrameHeader = @import("http3/frame.zig").FrameHeader;
 pub const SettingsFrame = @import("http3/frame.zig").SettingsFrame;
 pub const GoawayFrame = @import("http3/frame.zig").GoawayFrame;
 pub const CancelPushFrame = @import("http3/frame.zig").CancelPushFrame;
+pub const MinimalInterop = @import("http3/minimal_interop.zig");
 
 // HTTP/3 configuration
 pub const Http3Config = struct {
@@ -69,6 +70,7 @@ test {
     _ = @import("http3/response.zig");
     _ = @import("http3/router.zig");
     _ = @import("http3/advanced_server.zig");
+    _ = @import("http3/minimal_interop.zig");
 }
 
 test "HTTP/3 client surface fails closed until implemented" {

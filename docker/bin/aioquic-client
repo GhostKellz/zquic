@@ -3,6 +3,7 @@
 
 import argparse
 import asyncio
+from pathlib import Path
 import ssl
 import sys
 from urllib.parse import urlparse
@@ -27,10 +28,11 @@ class HttpClientProtocol(QuicConnectionProtocol):
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Run one HTTP/3 GET through aioquic and fail on non-2xx/3xx responses.",
+        description="Run one HTTP/3 GET through aioquic and require status 200.",
     )
     parser.add_argument("--insecure", action="store_true", help="disable certificate verification")
     parser.add_argument("--timeout", type=float, default=10.0, help="overall request timeout in seconds")
+    parser.add_argument("--output", help="write the decoded response body to this file")
     parser.add_argument("url", help="https URL to fetch")
     return parser.parse_args()
 
@@ -98,11 +100,17 @@ async def request(args: argparse.Namespace) -> int:
             print("aioquic-client: response did not include :status", file=sys.stderr)
             return 1
 
-        sys.stdout.buffer.write(body)
-        if body:
-            sys.stdout.buffer.write(b"\n")
         print(f"aioquic-client: status={status}", file=sys.stderr)
-        return 0 if 200 <= status < 400 else 1
+        if status != 200:
+            return 1
+
+        if args.output:
+            Path(args.output).write_bytes(body)
+        else:
+            sys.stdout.buffer.write(body)
+            if body:
+                sys.stdout.buffer.write(b"\n")
+        return 0
 
 
 def main() -> int:

@@ -101,7 +101,7 @@ pub const TicketIssuer = struct {
         hmac.update(std.mem.asBytes(&ticket.creation_time));
         hmac.update(std.mem.asBytes(&ticket.expiry_time));
         hmac.update(&ticket.resumption_secret);
-        hmac.update(&[_]u8{@intFromEnum(ticket.resumption_policy)});
+        hmac.update(&[_]u8{@backingInt(ticket.resumption_policy)});
         hmac.update(&ticket.pq_binder);
         hmac.update(&[_]u8{ticket.early_data_cipher});
         hmac.update(std.mem.asBytes(&ticket.max_early_data));

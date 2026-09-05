@@ -115,7 +115,7 @@ pub const TransportError = enum(u64) {
 
     /// Check if this is a crypto-related error
     pub fn isCryptoError(self: TransportError) bool {
-        return @intFromEnum(self) >= @intFromEnum(TransportError.crypto_error_base);
+        return @backingInt(self) >= @backingInt(TransportError.crypto_error_base);
     }
 };
 

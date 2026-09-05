@@ -4,7 +4,9 @@
 
 ZQUIC has **one external dependency**: [zcrypto](https://github.com/ghostkellz/zcrypto) for cryptographic operations. That's it.
 
-We used to depend on zsync for async I/O, but that's gone. The async runtime is now built directly into zquic.
+The active source no longer imports zsync for async I/O; the async runtime is
+built directly into zquic. `build.zig.zon` still retains a pinned zsync
+dependency entry.
 
 ## Why We Moved Away from zsync
 
@@ -172,7 +174,7 @@ If you're building something that needs:
 
 | Aspect | With zsync (legacy) | Current |
 |--------|---------------------|---------|
-| External deps | zsync + zcrypto | zcrypto only |
+| Runtime imports | zsync + zcrypto | zcrypto only; zsync remains pinned in package metadata |
 | Async model | zsync executor | Built-in poll loop |
 | Timer handling | zsync timers | Native timer wheel |
 | Complexity | Two codebases | One codebase |

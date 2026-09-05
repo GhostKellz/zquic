@@ -7,6 +7,7 @@ const Error = @import("../utils/error.zig");
 
 const CoreCrypto = @import("crypto.zig");
 const Packet = @import("packet.zig");
+const Tls13KeySchedule = @import("../crypto/tls13_key_schedule.zig");
 const enhanced_tls = @import("../crypto/enhanced_tls.zig");
 const EnhancedTlsContext = enhanced_tls.EnhancedTlsContext;
 const EnhancedCipherSuite = enhanced_tls.EnhancedCipherSuite;
@@ -17,6 +18,11 @@ pub const EncryptionLevel = enum {
     early_data,
     handshake,
     application,
+};
+
+const PacketNumberState = struct {
+    largest_acked: u64 = 0,
+    next_packet_number: u64 = 0,
 };
 
 /// QUIC packet protection using zcrypto with hardware acceleration
@@ -34,10 +40,17 @@ pub const PacketCrypto = struct {
     batch_processor: ?PacketBatchProcessor = null,
 
     /// Packet number encoding state
-    packet_number_state: struct {
-        largest_acked: u64 = 0,
-        next_packet_number: u64 = 0,
-    },
+    packet_number_state: PacketNumberState,
+    initial_packet_number_state: PacketNumberState,
+    handshake_packet_number_state: PacketNumberState,
+
+    /// Levels holding real, standards-derived key material.
+    ///
+    /// `refreshKeysFromTlsContext` installs deterministic facade keys derived
+    /// from the `EnhancedTlsContext` helper, which are not RFC 9001 keys. Once
+    /// a level has been given real keys it is pinned so that refresh cannot
+    /// silently replace them.
+    pinned_levels: std.EnumSet(CoreCrypto.EncryptionLevel),
 
     pub fn init(allocator: std.mem.Allocator, tls_context: *EnhancedTlsContext, pq_context: ?*anyopaque) !PacketCrypto {
         // Initialize hardware acceleration
@@ -61,6 +74,9 @@ pub const PacketCrypto = struct {
             .cipher_suite = cipher_suite,
             .hw_accelerator = hw_accelerator,
             .packet_number_state = .{},
+            .initial_packet_number_state = .{},
+            .handshake_packet_number_state = .{},
+            .pinned_levels = .empty,
         };
         _ = try packet_crypto.refreshKeysFromTlsContext();
         return packet_crypto;
@@ -78,23 +94,40 @@ pub const PacketCrypto = struct {
     ///
     /// This bridges the packet facade to TLS-derived key material while keeping
     /// deterministic facade keys as a fallback for not-yet-derived levels.
+    ///
+    /// Pinned levels are skipped and are not counted in the return value: they
+    /// already hold real RFC 9001 key material, which this helper path must not
+    /// overwrite.
     pub fn refreshKeysFromTlsContext(self: *PacketCrypto) !usize {
         var installed: usize = 0;
 
         if (self.tls_context.initial_keys) |*keys| {
-            try self.installTlsKeys(.initial, keys);
-            installed += 1;
+            if (try self.installTlsKeysUnlessPinned(.initial, keys)) installed += 1;
         }
         if (self.tls_context.handshake_keys) |*keys| {
-            try self.installTlsKeys(.handshake, keys);
-            installed += 1;
+            if (try self.installTlsKeysUnlessPinned(.handshake, keys)) installed += 1;
         }
         if (self.tls_context.application_keys) |*keys| {
-            try self.installTlsKeys(.application, keys);
-            installed += 1;
+            if (try self.installTlsKeysUnlessPinned(.application, keys)) installed += 1;
         }
 
         return installed;
+    }
+
+    /// Returns true when the helper keys were actually installed.
+    fn installTlsKeysUnlessPinned(
+        self: *PacketCrypto,
+        level: CoreCrypto.EncryptionLevel,
+        keys: *const enhanced_tls.EnhancedCryptoKeys,
+    ) !bool {
+        if (self.isLevelPinned(level)) return false;
+        try self.installTlsKeys(level, keys);
+        return true;
+    }
+
+    /// Whether a level holds real, standards-derived key material.
+    pub fn isLevelPinned(self: *const PacketCrypto, level: CoreCrypto.EncryptionLevel) bool {
+        return self.pinned_levels.contains(level);
     }
 
     fn installTlsKeys(self: *PacketCrypto, level: CoreCrypto.EncryptionLevel, keys: *const enhanced_tls.EnhancedCryptoKeys) !void {
@@ -112,7 +145,7 @@ pub const PacketCrypto = struct {
     ///
     /// `destination_connection_id` is the DCID from the client's first Initial.
     /// After this call, local Initial packets use server keys and remote
-    /// Initial packets use client keys.
+    /// Initial packets use client keys, and the Initial level is pinned.
     pub fn installRfc9001ServerInitialKeys(self: *PacketCrypto, destination_connection_id: []const u8) !void {
         const initial = try enhanced_tls.deriveRfc9001InitialKeys(destination_connection_id);
         const local = try CoreCrypto.DirectionalKeys.init(
@@ -134,12 +167,13 @@ pub const PacketCrypto = struct {
             &initial.client.header_protection_key,
         );
         self.core_crypto.installKeys(.initial, local, remote);
+        self.pinned_levels.insert(.initial);
     }
 
     /// Install RFC 9001 QUIC v1 Initial keys for a client endpoint.
     ///
     /// After this call, local Initial packets use client keys and remote
-    /// Initial packets use server keys.
+    /// Initial packets use server keys, and the Initial level is pinned.
     pub fn installRfc9001ClientInitialKeys(self: *PacketCrypto, destination_connection_id: []const u8) !void {
         const initial = try enhanced_tls.deriveRfc9001InitialKeys(destination_connection_id);
         const local = try CoreCrypto.DirectionalKeys.init(
@@ -161,6 +195,82 @@ pub const PacketCrypto = struct {
             &initial.server.header_protection_key,
         );
         self.core_crypto.installKeys(.initial, local, remote);
+        self.pinned_levels.insert(.initial);
+    }
+
+    /// Install RFC 9001 Handshake packet-protection keys derived from a real
+    /// TLS 1.3 handshake key schedule.
+    ///
+    /// `local` protects packets this endpoint sends; `remote` unprotects the
+    /// packets it receives. Callers own the traffic-secret mapping: a server
+    /// passes the server-derived keys as `local` and the client-derived keys as
+    /// `remote`, and a client passes them the other way around.
+    ///
+    /// Both directional key sets are built before either is installed, so an
+    /// allocation failure leaves any previously installed Handshake keys
+    /// untouched. The Handshake level is pinned afterwards.
+    pub fn installRfc9001HandshakeKeys(
+        self: *PacketCrypto,
+        local_keys: *const Tls13KeySchedule.QuicPacketKeys,
+        remote_keys: *const Tls13KeySchedule.QuicPacketKeys,
+    ) !void {
+        // The key schedule only derives AES-128-GCM-SHA256 material. Installing
+        // it under a facade configured for another AEAD would silently protect
+        // packets with the wrong algorithm.
+        if (self.cipher_suite != .aes_128_gcm_sha256) return Error.ZquicError.CryptoError;
+
+        const local = try CoreCrypto.DirectionalKeys.init(
+            self.allocator,
+            .aes_128_gcm_sha256,
+            &local_keys.key,
+            &local_keys.iv,
+            &local_keys.hp,
+        );
+        errdefer {
+            var local_copy = local;
+            local_copy.deinit();
+        }
+        const remote = try CoreCrypto.DirectionalKeys.init(
+            self.allocator,
+            .aes_128_gcm_sha256,
+            &remote_keys.key,
+            &remote_keys.iv,
+            &remote_keys.hp,
+        );
+        self.core_crypto.installKeys(.handshake, local, remote);
+        self.pinned_levels.insert(.handshake);
+    }
+
+    /// Install first-generation RFC 9001 application (1-RTT) keys after TLS
+    /// Finished authentication. Direction mapping is identical to Handshake:
+    /// local protects writes and remote authenticates peer packets.
+    pub fn installRfc9001ApplicationKeys(
+        self: *PacketCrypto,
+        local_keys: *const Tls13KeySchedule.QuicPacketKeys,
+        remote_keys: *const Tls13KeySchedule.QuicPacketKeys,
+    ) !void {
+        if (self.cipher_suite != .aes_128_gcm_sha256) return Error.ZquicError.CryptoError;
+
+        const local = try CoreCrypto.DirectionalKeys.init(
+            self.allocator,
+            .aes_128_gcm_sha256,
+            &local_keys.key,
+            &local_keys.iv,
+            &local_keys.hp,
+        );
+        errdefer {
+            var local_copy = local;
+            local_copy.deinit();
+        }
+        const remote = try CoreCrypto.DirectionalKeys.init(
+            self.allocator,
+            .aes_128_gcm_sha256,
+            &remote_keys.key,
+            &remote_keys.iv,
+            &remote_keys.hp,
+        );
+        self.core_crypto.installKeys(.application, local, remote);
+        self.pinned_levels.insert(.application);
     }
 
     /// Encrypt QUIC packet payload using hardware acceleration
@@ -282,8 +392,9 @@ pub const PacketCrypto = struct {
         src_conn_id: []const u8,
         payload: []const u8,
     ) ![]u8 {
-        const packet_number = self.packet_number_state.next_packet_number;
-        self.packet_number_state.next_packet_number += 1;
+        const packet_number_state = self.packetNumberStateForLevel(level);
+        const packet_number = packet_number_state.next_packet_number;
+        packet_number_state.next_packet_number += 1;
         const packet_number_len = choosePacketNumberLen(packet_number);
 
         const header = try self.buildRawPacketHeader(packet_type, dest_conn_id, src_conn_id, packet_number, packet_number_len, payload.len);
@@ -317,22 +428,22 @@ pub const PacketCrypto = struct {
         var packet = try self.allocator.dupe(u8, raw_packet);
         errdefer self.allocator.free(packet);
 
-        const header_without_pn_len = try self.parseHeaderLength(packet);
-        const pn_offset = header_without_pn_len;
+        const layout = try self.parseProtectedRawPacketLayout(packet);
+        const pn_offset = layout.pn_offset;
         const sample_offset = pn_offset + 4;
-        if (sample_offset + 16 > packet.len) return Error.ZquicError.InvalidPacket;
+        if (sample_offset + 16 > layout.packet_end) return Error.ZquicError.InvalidPacket;
 
-        const level = try self.determineEncryptionLevel(packet[0..header_without_pn_len]);
+        const level = try self.determineEncryptionLevel(packet[0..pn_offset]);
         const sample = packet[sample_offset .. sample_offset + 16];
         try self.applyRawHeaderProtection(level, packet[0 .. pn_offset + 4], pn_offset, sample, .unprotect);
 
         const packet_number_len: u8 = (packet[0] & 0x03) + 1;
-        if (pn_offset + packet_number_len > packet.len) return Error.ZquicError.InvalidPacket;
+        if (pn_offset + packet_number_len > layout.packet_end) return Error.ZquicError.InvalidPacket;
 
         const truncated = try Packet.readTruncatedPacketNumber(packet[pn_offset .. pn_offset + packet_number_len]);
         const packet_number = try Packet.reconstructPacketNumber(largest_processed, truncated, packet_number_len);
         const header = packet[0 .. pn_offset + packet_number_len];
-        const ciphertext = packet[pn_offset + packet_number_len ..];
+        const ciphertext = packet[pn_offset + packet_number_len .. layout.packet_end];
         const plaintext = try self.decryptPacket(level, packet_number, header, ciphertext);
         errdefer self.allocator.free(plaintext);
 
@@ -356,8 +467,9 @@ pub const PacketCrypto = struct {
         payload: []const u8,
     ) ![]u8 {
         // Generate next packet number
-        const packet_number = self.packet_number_state.next_packet_number;
-        self.packet_number_state.next_packet_number += 1;
+        const packet_number_state = self.packetNumberStateForLevel(level);
+        const packet_number = packet_number_state.next_packet_number;
+        packet_number_state.next_packet_number += 1;
 
         // Build packet header
         const header = try self.buildPacketHeader(packet_type, connection_id, packet_number);
@@ -480,6 +592,18 @@ pub const PacketCrypto = struct {
         };
     }
 
+    pub fn nextPacketNumberForLevel(self: *PacketCrypto, level: EncryptionLevel) u64 {
+        return self.packetNumberStateForLevel(level).next_packet_number;
+    }
+
+    fn packetNumberStateForLevel(self: *PacketCrypto, level: EncryptionLevel) *PacketNumberState {
+        return switch (level) {
+            .initial => &self.initial_packet_number_state,
+            .handshake => &self.handshake_packet_number_state,
+            .early_data, .application => &self.packet_number_state,
+        };
+    }
+
     const HeaderProtectionDirection = enum { protect, unprotect };
 
     fn applyRawHeaderProtection(
@@ -541,6 +665,18 @@ pub const PacketCrypto = struct {
 
     /// Parse packet header length
     fn parseHeaderLength(self: *PacketCrypto, packet: []const u8) !usize {
+        return (try self.parseProtectedRawPacketLayout(packet)).pn_offset;
+    }
+
+    const ProtectedRawPacketLayout = struct {
+        pn_offset: usize,
+        packet_end: usize,
+    };
+
+    /// Locate the protected packet within a UDP datagram. Long headers carry a
+    /// Length field covering packet number plus ciphertext, while a short
+    /// header has no delimiter and therefore consumes the remaining datagram.
+    fn parseProtectedRawPacketLayout(self: *PacketCrypto, packet: []const u8) !ProtectedRawPacketLayout {
         _ = self;
         if (packet.len == 0) return Error.ZquicError.InvalidPacket;
 
@@ -570,14 +706,17 @@ pub const PacketCrypto = struct {
                 offset += @intCast(token_len);
             }
 
-            _ = try readQuicVarint(packet, &offset);
-            if (offset > packet.len) return Error.ZquicError.InvalidPacket;
+            const protected_len = try readQuicVarint(packet, &offset);
+            if (protected_len == 0 or protected_len > packet.len - offset) return Error.ZquicError.InvalidPacket;
 
-            return offset;
+            return .{
+                .pn_offset = offset,
+                .packet_end = offset + @as(usize, @intCast(protected_len)),
+            };
         } else {
             const dest_cid_len: usize = 8;
             if (packet.len < 1 + dest_cid_len) return Error.ZquicError.InvalidPacket;
-            return 1 + dest_cid_len;
+            return .{ .pn_offset = 1 + dest_cid_len, .packet_end = packet.len };
         }
     }
 
@@ -594,7 +733,6 @@ pub const PacketCrypto = struct {
         if (packet_number_len == 0 or packet_number_len > 4) return Error.ZquicError.InvalidPacket;
 
         if (packet_type == .one_rtt) {
-            if (dest_conn_id.len != 8) return Error.ZquicError.InvalidConnectionId;
             const header = try self.allocator.alloc(u8, 1 + dest_conn_id.len + packet_number_len);
             header[0] = 0x40 | (packet_number_len - 1);
             @memcpy(header[1 .. 1 + dest_conn_id.len], dest_conn_id);
@@ -965,7 +1103,7 @@ fn deriveBytes(
     while (written < len) : (counter +%= 1) {
         var hasher = std.crypto.hash.sha2.Sha256.init(.{});
         hasher.update(seed);
-        hasher.update(&[_]u8{ @intFromEnum(level), counter });
+        hasher.update(&[_]u8{ @backingInt(level), counter });
         hasher.update(role);
         hasher.update(purpose);
 
@@ -1336,7 +1474,18 @@ test "packet crypto installs directional RFC 9001 initial keys" {
     const client_initial = try client_crypto.createProtectedRawPacket(.initial, .initial, &original_dcid, &client_scid, client_payload);
     defer allocator.free(client_initial);
 
-    var server_processed = try server_crypto.processProtectedRawPacket(client_initial, null);
+    try std.testing.expectError(
+        error.InvalidPacket,
+        server_crypto.processProtectedRawPacket(client_initial[0 .. client_initial.len - 1], null),
+    );
+
+    const trailing_packet = [_]u8{ 0xe0, 0x00, 0x00, 0x00, 0x01 };
+    const coalesced = try allocator.alloc(u8, client_initial.len + trailing_packet.len);
+    defer allocator.free(coalesced);
+    @memcpy(coalesced[0..client_initial.len], client_initial);
+    @memcpy(coalesced[client_initial.len..], &trailing_packet);
+
+    var server_processed = try server_crypto.processProtectedRawPacket(coalesced, null);
     defer server_processed.deinit(allocator);
     try std.testing.expectEqual(.initial, server_processed.encryption_level);
     try std.testing.expectEqualStrings(client_payload, server_processed.payload);

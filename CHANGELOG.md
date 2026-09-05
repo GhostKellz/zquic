@@ -1,3 +1,156 @@
+## [0.9.17] - 2026-09-04
+
+### Changed
+- Added exact descending ACK ranges, strict packet-number-space ACK processing,
+  RTT/PTO accounting, retained Initial/Handshake CRYPTO retransmission, and
+  obsolete-space discard so acknowledged gaps are never fabricated and old
+  handshake spaces cannot keep recovery armed.
+- The live interop probe now ACKs Initial, Handshake, and application packets,
+  polls the loss timer, bounds incomplete handshakes, and buffers up to eight
+  reordered pre-confirmation 1-RTT datagrams for processing after authenticated
+  Finished.
+- Centralized parsed-frame cleanup and fixed allocation leaks on truncated and
+  successfully parsed variable-length frames.
+- Raised the minimum Zig baseline to `0.17.0-dev.1978+c961124d9` and migrated
+  enum conversions to the current `@backingInt` builtin across the build.
+- Revalidated the default, integration, fuzz, minimal, full-feature, and
+  experimental post-quantum build/test matrix on the new baseline.
+- Docker validation now rebuilds its Compose image before running, uses the
+  invoking UID/GID, and provides that user a writable home so plain Zig
+  commands reliably use their default caches without leaving root-owned output.
+- CI can now be started manually with `workflow_dispatch`, and the consumer
+  smoke test no longer embeds a stale release number in its local archive path
+  or post-tag usage example.
+- Split raw packet-number allocation across Initial, Handshake, and application
+  packet spaces while retaining the existing application-facing facade state.
+- Routed the compatibility TLS server's pending Handshake CRYPTO bytes through
+  the live probe's `SuperConnection` queue and added opt-in qlog gating for the
+  emitted Handshake packet. This is transmission evidence, not handshake
+  confirmation or external TLS interoperability.
+- Added bounded, fragmentation-aware TLS handshake deframing for QUIC CRYPTO
+  streams, routed complete framed live Initial messages into
+  `ComprehensiveTlsContext`, and added native Handshake-level routing coverage
+  with explicitly installed test keys. This established the framing boundary
+  used by the semantic ClientHello negotiation below.
+- Removed dormant references to obsolete TLS error names that became reachable
+  through the live Comprehensive TLS path.
+
+### Added
+- A bounded, probe-only HTTP/3 path that exchanges SETTINGS, accepts static-QPACK
+  `GET /`, and returns a fixed 200 response with DATA and request-stream FIN.
+- Stable HTTP/3 qlog events plus an opt-in Docker gate that verifies the exact
+  response body decoded by ngtcp2/gtlsclient rather than treating process exit
+  or server transmission alone as application success.
+- An independent aioquic status/exact-body gate and non-secret ClientHello
+  rejection-stage evidence for distinguishing transport, TLS-profile, ALPN,
+  and transport-parameter interop boundaries.
+- An independently checked quiche status/headers/exact-body gate, an ephemeral
+  ECDSA P-256 identity selected only when offered, and HTTP/3 request parsing
+  that skips bounded unknown/GREASE frames before the initial HEADERS frame.
+- Deterministic coverage for discontiguous ACK ranges, ACK space isolation,
+  retained-CRYPTO PTO retransmission, packet-space discard, handshake timeout,
+  draining, and close behavior.
+- Stable qlog events and opt-in Docker gates for ACK send/receive, PTO probes,
+  CRYPTO retransmission, and handshake timeout.
+- A complete probe-only TLS 1.3 server flight: EncryptedExtensions with `h3`
+  and QUIC transport parameters, an ephemeral self-signed Ed25519 or ECDSA
+  P-256 certificate, transcript-bound CertificateVerify, and server Finished.
+- RFC 8446 application traffic-secret derivation and RFC 9001 application
+  packet keys, verified against RFC 8448 vectors and hidden until the peer
+  Finished authenticates.
+- Opt-in external gates for protected server Handshake-flight transmission,
+  peer Finished authentication, and successful external 1-RTT decryption.
+- `src/crypto/tls13_key_schedule.zig`: HKDF-Expand-Label, `Derive-Secret`, the
+  TLS 1.3 handshake key schedule (`derived` -> `c hs traffic` / `s hs traffic`),
+  and RFC 9001 `quic key` / `quic iv` / `quic hp` derivation for SHA-256 with
+  AES-128-GCM. Verified against RFC 8448 section 3 vectors. `hkdfExpandLabelSha256`
+  moved here from `src/crypto/enhanced_tls.zig`.
+- `src/crypto/tls13_messages.zig`: strict, length-bounded ClientHello parsing and
+  ServerHello construction for TLS 1.3 with `TLS_AES_128_GCM_SHA256` and X25519.
+  Rejects truncation, integer overflow, any duplicate extension type, trailing
+  bytes, inconsistent `supported_groups` / `key_share` offers, and a ClientHello
+  with no `quic_transport_parameters` extension.
+- `PacketCrypto.installRfc9001HandshakeKeys()` installs independent read and
+  write Handshake packet-protection key sets and pins the level, so
+  `refreshKeysFromTlsContext()` can no longer replace real keys with derived
+  compatibility keys.
+- `SuperConnection` schedules a real transcript-bound ServerHello as Initial
+  CRYPTO at offset zero and reports `server_hello_bytes` and
+  `handshake_keys_installed` in `InitialCryptoFlightResult`.
+- Packet crypto now collects its previously dormant inline tests, fixes generic
+  header-protection round trips and the RFC 9001 server vector, validates
+  directional key lengths, and keeps packet header protection at the packet
+  layer rather than applying it inside the payload AEAD helper.
+
+### Fixed
+- `ComprehensiveTlsContext` now parses and semantically negotiates an external
+  ClientHello, builds a transcript-bound ServerHello, completes the X25519
+  exchange, and derives handshake traffic secrets over `H(ClientHello || ServerHello)`.
+  Parsing and validation happen in temporaries; a rejected ClientHello commits no
+  transcript, peer key share, or negotiated parameter and leaves the context in
+  `failed`.
+- Peer transport parameters now decode from context-owned backing storage,
+  EncryptedExtensions commits atomically after full validation, and bounded
+  CRYPTO reassembly rejects conflicting overlaps.
+- `zquic-interop-probe-server` now keeps per-connection TLS and packet-protection
+  state between datagrams, keyed by destination connection ID and remote address
+  with a fixed connection cap and idle eviction. It answers an accepted
+  ClientHello with a real ServerHello and installs RFC 9001 Handshake keys, and
+  no longer emits synthetic compatibility-TLS bytes in the Handshake space.
+  Initial CONNECTION_CLOSE is now sent only when Handshake keys were not
+  installed.
+- Probe qlog evidence replaces `server_initial_crypto_tx`,
+  `server_handshake_crypto_tx` and `comprehensive_tls_crypto_advanced` with
+  `client_hello_accepted`, `client_hello_rejected`,
+  `server_hello_initial_crypto_tx`, `handshake_keys_installed`,
+  `client_handshake_decrypt_ok`, `connection_state_reused`,
+  `connection_evicted` and `connection_table_full`. No key, IV,
+  header-protection, traffic-secret or shared-secret bytes are ever logged.
+  The Docker gates change accordingly:
+  `ZQUIC_INTEROP_REQUIRE_HANDSHAKE_CRYPTO_TX` and
+  `ZQUIC_INTEROP_REQUIRE_COMPREHENSIVE_TLS_ADVANCE` are replaced by
+  `ZQUIC_INTEROP_REQUIRE_CLIENT_HELLO_ACCEPTED`,
+  `ZQUIC_INTEROP_REQUIRE_HANDSHAKE_KEYS` and
+  `ZQUIC_INTEROP_REQUIRE_CONNECTION_STATE_REUSED`.
+- Corrected QUIC long-header packet delimiting so coalesced datagrams use the
+  encoded Length field instead of authenticating bytes from a later packet.
+- Restricted live Version Negotiation responses to structurally valid packets
+  with unsupported versions instead of responding to arbitrary malformed long
+  headers.
+- Server Ed25519 configuration now parses the leaf certificate and rejects a
+  private key whose public key does not match it.
+- Corrected loss-timeout versus PTO classification and saturated PTO backoff so
+  one expired lost packet cannot create an unbounded probe loop.
+- Closed allocation-cleanup gaps in connection construction, frame parsing,
+  directional-key installation, negotiation state, and TLS message handling.
+- Replaced the legacy CONNECTION_CLOSE builder's borrowed stack payload and
+  partial varint encoding with connection-owned storage and the shared frame
+  serializer.
+- Tightened the probe-only QPACK request parser to reject duplicate required
+  pseudo-headers, a negative Delta Base with zero dynamic-table state, Huffman
+  names it cannot safely classify, and overflowing encoded lengths.
+- External aioquic and quiche response adapters now require exactly one
+  `:status` value equal to 200, matching the strict gate's documented claim.
+
+External evidence from `./dev/docker_validate.sh interop-zquic-server`: Debian
+`gtlsclient` (ngtcp2) accepts the ephemeral probe certificate in insecure mode,
+authenticates the complete server flight, sends a client Finished that zquic
+verifies, and sends 1-RTT packets that zquic decrypts with the transcript-derived
+application keys. It then exchanges SETTINGS and serves a fixed `GET /` that
+gtlsclient decodes as status 200, content length 6, body `zquic\n`, and a clean
+request-stream FIN. Its later idle close reflects the probe's intentionally
+missing graceful connection close. Correct long-header packet delimiting also
+lets aioquic complete the same HTTP/3 exchange. ECDSA P-256 identity selection,
+bounded pre-Finished packet buffering, and unknown HTTP/3 frame handling now
+let quiche independently complete it as well. This is narrow probe evidence,
+not production certificate validation or broad HTTP/3 interoperability.
+
+Release verification on the declared Zig baseline passed 272 stable tests, 315
+post-quantum feature tests, 11 integration steps, 5 fuzz steps, the pre-tag
+consumer smoke, Docker release validation, Valgrind's 5 checks without leaks,
+and the strict three-client interop gate. The immutable archive consumer smoke
+remains a post-tag check.
+
 ## [0.9.16] - 2026-07-08
 
 ### Changed
@@ -1542,5 +1695,5 @@ zig build run-ghostmesh
 - **Scalability**: Designed for thousands of concurrent connections
 - **Integration**: Built for GhostMesh ecosystem with TokiZ async runtime
 
-For detailed API documentation, see [DOCS.md](DOCS.md).
+For current API documentation, see [docs/README.md](docs/README.md).
 For contributing guidelines, see [CONTRIBUTING.md](CONTRIBUTING.md).

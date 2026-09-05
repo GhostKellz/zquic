@@ -187,7 +187,7 @@ pub const MultiplexedConnection = struct {
             .requests_served = std.atomic.Value(u64).init(0),
             .reference_count = std.atomic.Value(u32).init(0),
             .is_available = std.atomic.Value(bool).init(true),
-            .current_priority = std.atomic.Value(u8).init(@intFromEnum(ConnectionPriority.normal)),
+            .current_priority = std.atomic.Value(u8).init(@backingInt(ConnectionPriority.normal)),
             .allocator = allocator,
         };
     }
@@ -312,7 +312,7 @@ pub const MultiplexedConnection = struct {
         _ = self.reference_count.fetchAdd(1, .monotonic);
         _ = self.use_count.fetchAdd(1, .monotonic);
         _ = self.requests_served.fetchAdd(1, .monotonic);
-        _ = self.current_priority.store(@intFromEnum(priority), .monotonic);
+        _ = self.current_priority.store(@backingInt(priority), .monotonic);
     }
 
     /// Check if connection can handle new requests

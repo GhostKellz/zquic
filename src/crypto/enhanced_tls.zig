@@ -6,6 +6,9 @@
 const std = @import("std");
 const zcrypto = @import("zcrypto");
 const Error = @import("../utils/error.zig");
+const KeySchedule = @import("tls13_key_schedule.zig");
+
+const hkdfExpandLabelSha256 = KeySchedule.hkdfExpandLabelSha256;
 
 // Utility function for secure memory zeroing - uses std library implementation
 fn secureZero(data: []u8) void {
@@ -129,40 +132,6 @@ fn deriveRfc9001InitialDirection(keys: *Rfc9001InitialDirection) Error.ZquicErro
     try hkdfExpandLabelSha256(&keys.secret, "quic key", &.{}, &keys.key);
     try hkdfExpandLabelSha256(&keys.secret, "quic iv", &.{}, &keys.iv);
     try hkdfExpandLabelSha256(&keys.secret, "quic hp", &.{}, &keys.header_protection_key);
-}
-
-fn hkdfExpandLabelSha256(
-    secret: *const [32]u8,
-    label: []const u8,
-    context: []const u8,
-    out: []u8,
-) Error.ZquicError!void {
-    const tls_prefix = "tls13 ";
-    const full_label_len = tls_prefix.len + label.len;
-    if (out.len > std.math.maxInt(u16) or full_label_len > std.math.maxInt(u8) or context.len > std.math.maxInt(u8)) {
-        return Error.ZquicError.CryptoError;
-    }
-
-    var info: [2 + 1 + tls_prefix.len + 64 + 1 + 64]u8 = undefined;
-    if (full_label_len > tls_prefix.len + 64 or context.len > 64) {
-        return Error.ZquicError.CryptoError;
-    }
-
-    var offset: usize = 0;
-    std.mem.writeInt(u16, info[offset..][0..2], @intCast(out.len), .big);
-    offset += 2;
-    info[offset] = @intCast(full_label_len);
-    offset += 1;
-    @memcpy(info[offset .. offset + tls_prefix.len], tls_prefix);
-    offset += tls_prefix.len;
-    @memcpy(info[offset .. offset + label.len], label);
-    offset += label.len;
-    info[offset] = @intCast(context.len);
-    offset += 1;
-    @memcpy(info[offset .. offset + context.len], context);
-    offset += context.len;
-
-    std.crypto.kdf.hkdf.HkdfSha256.expand(out, info[0..offset], secret.*);
 }
 
 /// Enhanced cryptographic keys with proper key derivation

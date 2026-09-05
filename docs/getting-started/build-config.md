@@ -124,7 +124,7 @@ pub fn build(b: *std.Build) !void {
 
 The dependency inherits the same Zig toolchain. This release is validated with
 `/opt/zig-dev/zig` and package metadata requires
-`0.17.0-dev.1257+67b05e521` or newer.
+the version declared by `minimum_zig_version` in `build.zig.zon`, or newer.
 
 ## 🔬 Development Tips
 
@@ -135,14 +135,11 @@ The dependency inherits the same Zig toolchain. This release is validated with
 - **Smoke tests** – `./dev/smoke_test.sh` launches HTTP/3 and DoQ demos
 - **Clean builds** – `./dev/clean.sh && zig build -Doptimize=ReleaseFast`
 
-## 📊 Size Expectations
+## Size Measurement
 
-| Config | Approx Size | Notes |
-|--------|-------------|-------|
-| Core only | ~1.3 MB | Async runtime + core QUIC |
-| + HTTP/3 + DoQ | ~3.5 MB | Web edge targets |
-| + Services | ~4.6 MB | Adds GhostBridge/Wraith |
-| + VPN + Monitoring | ~5.5 MB | Full enterprise stack |
+Artifact size depends on target, optimization mode, Zig revision, and enabled
+examples. Measure `zig-out/bin` for the exact release profile instead of relying
+on static size estimates in documentation.
 
 Actual size depends on target triple, optimization mode, and libc choice.
 

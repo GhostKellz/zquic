@@ -1,6 +1,8 @@
 # Feature Overview
 
-ZQUIC ships as a collection of composable subsystems. Every directory under `src/` wires into the build graph through feature flags so you can ship a 1.3 MB QUIC core or a full HTTP/3 + DoQ + VPN control plane.
+ZQUIC ships as a collection of composable subsystems. Build flags select a
+minimal core, the default HTTP/3 and DoQ modules, or opt-in services, VPN,
+monitoring, and post-quantum code.
 
 ## Feature Surface Map
 
@@ -35,10 +37,11 @@ flowchart TD
 
 ```mermaid
 flowchart LR
-    stable["Default stable-ish release surface"] --> core["core QUIC"]
-    stable --> http3["HTTP/3"]
-    stable --> doq["DoQ"]
-    stable --> metrics["Prometheus names"]
+    default_surface["Default compiled surface"] --> core["core QUIC"]
+    default_surface --> http3["HTTP/3"]
+    default_surface --> doq["DoQ"]
+
+    optional_surface["Optional surface"] --> metrics["Prometheus names"]
 
     bounded["Bounded helpers"] --> tls["enhanced/comprehensive TLS helpers"]
     bounded --> zero["0-RTT ticket helpers"]
@@ -54,9 +57,12 @@ flowchart LR
 
 ## Core Transport
 - QUIC v1 handshake, streams, congestion control, and pacing live in `src/core/`.
-- The internal async runtime replaces the old zsync dependency and powers the event loop, timers, and zero-copy packet pipeline.
+- The in-tree async runtime powers the default event loop and timers; zquic does
+  not import zsync at runtime even though package metadata retains its pinned
+  dependency entry.
 - Ecosystem positioning notes against quiche, ngtcp2, MsQuic, and aioquic live in `docs/features/quic-ecosystem.md`.
-- v0.9.15 interop planning and the optional smoke harness are tracked in `docs/features/quic-interop.md`.
+- Current external interop evidence and the optional smoke harness are tracked
+  in `docs/features/quic-interop.md`.
 
 ## SSH/QUIC Integration
 - `src/crypto/ssh_quic.zig` implements [draft-denis-ssh-quic](https://datatracker.ietf.org/doc/draft-denis-ssh-quic/) secret injection.
@@ -81,7 +87,8 @@ flowchart LR
 
 ## DNS-over-QUIC (DoQ)
 - `src/doq/` exposes a DNS resolver/server stack with post-quantum TLS hooks.
-- The server now emits Prometheus metrics for query counts, errors, and active connections so operators can monitor real deployments.
+- The server exposes Prometheus counters for query counts, errors, and active
+  connections; deployments must wire and validate their own exporter path.
 - Current RFC 9250 coverage notes live in `docs/features/http3-doq-compliance.md`.
 
 ## Services

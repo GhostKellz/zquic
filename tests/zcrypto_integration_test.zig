@@ -628,7 +628,7 @@ fn serializeTranscriptTrace(allocator: std.mem.Allocator, transcript: PQHandshak
 
     try appendU16(&buffer, allocator, PQHandshakeTranscript.version);
     try appendU16(&buffer, allocator, transcript.cipher_suite.id());
-    try buffer.append(allocator, @intFromEnum(transcript.role));
+    try buffer.append(allocator, @backingInt(transcript.role));
     try buffer.append(allocator, if (transcript.experimental_crypto) 1 else 0);
     try appendSliceField(&buffer, allocator, transcript.kem_public_key);
     try appendSliceField(&buffer, allocator, transcript.classical_public_key orelse &[_]u8{});

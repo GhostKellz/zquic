@@ -512,7 +512,7 @@ pub const Http3Server = struct {
         try frame_data.ensureTotalCapacity(self.allocator, 64);
 
         // Write frame type (1 byte)
-        try frame_data.append(self.allocator, @as(u8, @intCast(@intFromEnum(frame.frame_type))));
+        try frame_data.append(self.allocator, @as(u8, @intCast(@backingInt(frame.frame_type))));
 
         // Write payload length (variable-length integer)
         try self.writeVarint(&frame_data, frame.payload.len);
@@ -617,7 +617,7 @@ pub const Http3Server = struct {
         if (self.metrics) |metrics| {
             const req_size = active_request.request.getBody().len;
             const resp_size = active_request.response.getBodySize();
-            const status_code = @intFromEnum(active_request.response.status);
+            const status_code = @backingInt(active_request.response.status);
             const success = status_code < 500;
             metrics.recordHttp3Request(req_size, resp_size, active_request.duration(), success);
         }

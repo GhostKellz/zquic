@@ -1,15 +1,15 @@
 # v0.9.17 Release Plan
 
-`v0.9.17` is planned as the next external interop release after the packet-level
-progress in `v0.9.16`. The goal is to move from live Initial-space evidence to
-the first external Handshake-space and HTTP/3 success without blurring fixture
-coverage, native integration coverage, and external implementation evidence.
+`v0.9.17` is the external interop release candidate after the packet-level
+progress in `v0.9.16`. It moves from live Initial-space evidence to external
+Handshake-space and fixed HTTP/3 success without blurring fixture coverage,
+native integration coverage, and external implementation evidence.
 
 ## Target Outcome
 
-The primary target is one maintained external QUIC stack completing a minimal
-HTTP/3 request/response against zquic inside the Docker interop environment.
-Acceptable first-success candidates are quiche, ngtcp2/nghttp3, or aioquic.
+The achieved target is three maintained external QUIC stacks completing the
+same minimal HTTP/3 request/response against zquic inside the Docker interop
+environment: quiche, ngtcp2/nghttp3, and aioquic.
 
 ## Evidence Ladder
 
@@ -24,19 +24,20 @@ flowchart TD
     response --> gate["Strict Docker release gate"]
 
     current -. "already gated" .-> initial["Initial decrypt, CRYPTO, server Initial CRYPTO, encrypted close"]
-    hsflight -. "planned" .-> qlog["qlog event evidence"]
-    response -. "planned" .-> interop["external client success"]
+    hsflight -. "opt-in emission gate added" .-> qlog["qlog event evidence"]
+    response -. "ngtcp2/gtlsclient verified" .-> interop["external client success"]
 ```
 
 ## Milestones
 
 | Milestone | Release evidence |
 |-----------|------------------|
-| Live Handshake-space flight | zquic sends protected Handshake CRYPTO to an external client, with qlog evidence for packet number space and CRYPTO length. |
-| TLS state advancement | live CRYPTO reassembly advances TLS state and installs Handshake then 1-RTT keys at the correct boundaries. |
+| Live Handshake-space flight | The probe sends a complete transcript-bound TLS 1.3 server flight under RFC 9001 Handshake keys. |
+| TLS state advancement | Live CRYPTO reassembly authenticates peer Finished before installing directional 1-RTT keys; ngtcp2/gtlsclient reaches this boundary. |
 | ACK and timer loop | Initial and Handshake ACKs, PTO probes, and CRYPTO retransmission are coherent enough for an external client to continue. |
 | HTTP/3 bootstrap | ALPN `h3`, 1-RTT keys, HTTP/3 control streams, and SETTINGS exchange work in the live path. |
-| Minimal response | at least one external client receives a successful response from a zquic Docker endpoint. |
+| Minimal response | ngtcp2/gtlsclient decodes the probe's 200 response, six-byte body, and request-stream FIN in Docker. |
+| Matrix expansion | aioquic and quiche independently decode the same fixed response; quiche selects the offered ECDSA P-256 identity and tolerates an unknown HTTP/3 GREASE frame before request HEADERS. |
 
 ## Non-Goals
 
@@ -61,6 +62,28 @@ The release remains expected to pass the existing local and Docker validation:
 New gates should be added only when they can distinguish packet-level progress,
 Handshake-space progress, full handshake confirmation, and HTTP/3 response
 success.
+
+Opt-in gates cover progressively stronger handshake outcomes:
+`ZQUIC_INTEROP_REQUIRE_CLIENT_HELLO_ACCEPTED=1` for semantic ClientHello
+negotiation, `ZQUIC_INTEROP_REQUIRE_HANDSHAKE_KEYS=1` for RFC 9001 Handshake key
+installation, and `ZQUIC_INTEROP_REQUIRE_CONNECTION_STATE_REUSED=1` for
+per-connection state retention across datagrams. The stronger
+`ZQUIC_INTEROP_REQUIRE_SERVER_HANDSHAKE_FLIGHT=1`,
+`ZQUIC_INTEROP_REQUIRE_HANDSHAKE_CONFIRMED=1`, and
+`ZQUIC_INTEROP_REQUIRE_APPLICATION_DECRYPT=1` gates cover the complete flight,
+authenticated client Finished, and external 1-RTT decryption. ACK, recovery,
+and timeout instrumentation has separate opt-in gates:
+`ZQUIC_INTEROP_REQUIRE_ACK_SENT=1`,
+`ZQUIC_INTEROP_REQUIRE_ACK_RECEIVED=1`,
+`ZQUIC_INTEROP_REQUIRE_PTO_PROBE=1`,
+`ZQUIC_INTEROP_REQUIRE_CRYPTO_RETRANSMISSION=1`, and
+`ZQUIC_INTEROP_REQUIRE_HANDSHAKE_TIMEOUT=1`. The separate
+`ZQUIC_INTEROP_REQUIRE_HTTP3_RESPONSE=1` gate requires the four HTTP/3 boundary
+events and the exact body downloaded by ngtcp2/gtlsclient. The independent
+`ZQUIC_INTEROP_REQUIRE_AIOQUIC_HTTP3_RESPONSE=1` gate requires aioquic's
+successful status and exact decoded body. The parallel
+`ZQUIC_INTEROP_REQUIRE_QUICHE_HTTP3_RESPONSE=1` gate requires quiche's status,
+headers, exact decoded body, and request-stream FIN.
 
 ## Tracking
 

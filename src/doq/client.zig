@@ -265,7 +265,7 @@ pub const DoQClient = struct {
         query_msg.questions = try self.allocator.alloc(message.DnsQuestion, 1);
         query_msg.questions[0] = message.DnsQuestion{
             .name = try self.allocator.dupe(u8, domain),
-            .qtype = @intFromEnum(record_type),
+            .qtype = @backingInt(record_type),
             .qclass = 1, // IN
         };
 

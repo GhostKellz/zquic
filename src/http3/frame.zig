@@ -70,7 +70,7 @@ pub const FrameHeader = struct {
 
     /// Serialize frame header to bytes
     pub fn serialize(self: *const Self, writer: anytype) !void {
-        try writeVarint(writer, @intFromEnum(self.frame_type));
+        try writeVarint(writer, @backingInt(self.frame_type));
         try writeVarint(writer, self.length);
     }
 };

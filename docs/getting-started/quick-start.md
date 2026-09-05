@@ -1,213 +1,122 @@
 # Quick Start Guide
 
-Get up and running with ZQUIC in minutes.
+## Requirements
 
-## Installation
+Use the Zig version declared by `minimum_zig_version` in `build.zig.zon`, or a
+compatible newer development build.
 
-### Method 1: Zig Package Manager (Recommended)
+## Install
+
+After the `v0.9.17` tag is published:
 
 ```bash
-# Add ZQUIC to your project
-zig fetch --save https://github.com/ghostkellz/zquic/archive/refs/tags/v0.9.14.tar.gz
+zig fetch --save https://github.com/ghostkellz/zquic/archive/refs/tags/v0.9.17.tar.gz
 ```
 
-Add to your `build.zig.zon`:
-```zig
-.dependencies = .{
-    .zquic = .{
-        .url = "https://github.com/ghostkellz/zquic/archive/refs/tags/v0.9.14.tar.gz",
-        .hash = "1234...", // Auto-filled by zig fetch
-    },
-},
-```
-
-### Method 2: Git Clone
+For an unreleased checkout:
 
 ```bash
 git clone https://github.com/ghostkellz/zquic
 cd zquic
+zig build
 ```
 
-## Building
+## Build and Test
 
 ```bash
-# Default build (HTTP/3, DoQ enabled; PQ disabled)
+# Default core + HTTP/3 + DoQ build
 zig build
 
-# Installed binaries (feature flags permitting):
-./zig-out/bin/zquic               # Core demo / toolkit
-./zig-out/bin/zquic-server        # Core QUIC server
-./zig-out/bin/zquic-client        # QUIC client
-./zig-out/bin/zquic-http3-server  # HTTP/3 server with QPACK
-./zig-out/bin/zquic-doq-server    # DNS-over-QUIC demo
+# Native verification
+zig build test --summary all
+zig build integration-tests --summary all
+zig build fuzz-tests --summary all
+
+# Complete local release matrix
+./dev/validate.sh
 ```
 
-## Build Options
-
-Choose your features for optimal size and performance:
+Useful build profiles:
 
 ```bash
-# Minimal build (~1.3 MB)
-zig build -Dhttp3=false -Ddoq=false -Dservices=false -Dvpn=false
+# Minimal core
+zig build -Dhttp3=false -Ddoq=false -Dservices=false -Dvpn=false -Dexamples=false
 
-# Web server build (~3.5 MB)
-zig build -Dhttp3=true -Ddoq=true
-
-# Enterprise build (~5.5 MB)
+# Optional services, VPN, and monitoring
 zig build -Dservices=true -Dvpn=true -Dmonitoring=true
 
-# With experimental post-quantum crypto
-zig build -Dpost-quantum=true -Dexperimental-crypto=true
+# Experimental post-quantum paths
+zig build test -Dpost-quantum=true -Dexperimental-crypto=true
 ```
 
-## Your First QUIC Server
+Installed example binaries are written under `zig-out/bin/`. They demonstrate
+individual modules; they are not a production HTTP/3 client/server pair.
 
-Create `hello_quic.zig`:
+## Import the Package
+
+Add the fetched dependency to your executable module:
+
+```zig
+const zquic_dep = b.dependency("zquic", .{
+    .target = target,
+    .optimize = optimize,
+    .http3 = true,
+    .doq = true,
+    .services = false,
+    .vpn = false,
+    .@"post-quantum" = false,
+    .monitoring = false,
+});
+
+exe.root_module.addImport("zquic", zquic_dep.module("zquic"));
+```
+
+The public core is module-oriented:
 
 ```zig
 const std = @import("std");
 const zquic = @import("zquic");
 
-pub fn main() !void {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    defer _ = gpa.deinit();
-    const allocator = gpa.allocator();
+pub fn example(allocator: std.mem.Allocator) !void {
+    var connection = try zquic.Connection.Connection.init(
+        allocator,
+        .client,
+        .{},
+    );
+    defer connection.deinit();
 
-    // Simple HTTP/3 server configuration
-    const config = zquic.Http3.ServerConfig{
-        .address = "127.0.0.1",
-        .port = 8080,
-        .max_connections = 1000,
-    };
-
-    // Create and start server
-    var server = try zquic.Http3.Http3Server.init(allocator, config);
-    defer server.deinit();
-
-    // Add a simple route
-    try server.get("/", handleHome);
-
-    std.log.info("QUIC server starting on https://127.0.0.1:8080", .{});
-    try server.start();
-}
-
-fn handleHome(req: *zquic.Http3.Request, res: *zquic.Http3.Response) !void {
-    _ = req;
-    try res.json(.{
-        .message = "Hello, QUIC World!",
-    });
+    const stream = try connection.createStream(.client_bidirectional);
+    _ = try stream.write("hello", false);
 }
 ```
 
-Build and run:
-```bash
-zig build-exe hello_quic.zig --deps zquic
-./hello_quic
-```
+See the [Core API Reference](../api/core.md) before using lower-level raw packet
+or TLS helpers; those surfaces have explicit ownership and maturity boundaries.
 
-### Adding Middleware
+## External Interop Probe
 
-`Http3Server.use` wires middleware into the router chain:
-
-```zig
-const NextFn = zquic.Http3.NextFn;
-
-const auth = struct {
-    fn middleware(req: *zquic.Http3.Request, res: *zquic.Http3.Response, next: NextFn) !void {
-        if (req.getHeader("authorization") == null) {
-            res.setStatus(.unauthorized);
-            try res.text("auth required");
-            return;
-        }
-        try next(req, res);
-    }
-}.middleware;
-
-try server.use(zquic.Http3.Middleware.LoggingMiddleware.init(allocator, .info).middleware());
-try server.use(auth);
-try server.router.getWithMiddleware("/secure", handleSecure, &.{auth});
-```
-
-## Your First QUIC Client
-
-Create `hello_client.zig`:
-
-```zig
-const std = @import("std");
-const zquic = @import("zquic");
-
-pub fn main() !void {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    defer _ = gpa.deinit();
-    const allocator = gpa.allocator();
-
-    // Connect to QUIC server
-    const config = zquic.ClientConfig{
-        .server_address = "127.0.0.1",
-        .server_port = 8080,
-    };
-
-    var client = try zquic.Client.init(allocator, config);
-    defer client.deinit();
-
-    // Make request
-    const response = try client.get("/");
-    defer response.deinit();
-
-    std.log.info("Response: {s}", .{response.body});
-}
-```
-
-## Post-Quantum Security (Experimental)
-
-Post-quantum cryptography requires explicit build flags:
+The bounded probe completes one fixed TLS 1.3 and HTTP/3 `GET /` exchange
+against quiche, ngtcp2/gtlsclient, and aioquic:
 
 ```bash
-zig build -Dpost-quantum=true -Dexperimental-crypto=true
+./dev/docker_validate.sh interop-zquic-server
 ```
 
-When enabled, ML-KEM-768 + X25519 hybrid key exchange is available. See [zcrypto Integration](../integrations/zcrypto.md) and [Feature Overview](../features/overview.md) for the current experimental PQ posture.
-
-## Next Steps
-
-- **[Build Configuration](build-config.md)** - Customize your build
-- **[API Reference](../api/core.md)** - Explore the full API
-- **[Feature Overview](../features/overview.md)** - Current module and feature map
-- **[Future Features](../future-features.md)** - Scoped work deferred from the current release line
+This is release evidence for the probe profile, not broad QUIC or production
+certificate-validation support. See [Interop Methodology](../interop/methodology.md).
 
 ## Troubleshooting
 
-### Build Issues
-- Ensure you have Zig 0.17.0-dev.1257+67b05e521 or later
-- Check that zcrypto dependencies are available
-- Ensure repo-local `.zig-cache` and `zig-out` are owned by your user, then rebuild
+- Confirm `zig version` satisfies `build.zig.zon`.
+- Run `zig build --fetch` if dependencies are not cached.
+- Confirm `.zig-cache` and `zig-out` are owned by your user.
+- Use `./dev/consumer_smoke_test.sh` to validate package import from a clean
+  generated consumer.
 
-### Runtime Issues
-- Verify port 8080 is available
-- Check firewall settings for QUIC/UDP traffic
+## Next Steps
 
-### Getting Help
-- Check the [Examples](../examples/) directory
-- Review [API Documentation](../api/)
-- Open an issue on GitHub
-
----
-
-## Recommended Workflow
-
-```bash
-# Format, build, and run tests
-zig fmt src/ docs/ examples/
-./dev/test.sh   # zig build test + integration-tests + fuzz-tests
-```
-
-## Zig 0.17 Migration Notes
-
-Zig 0.17.0-dev introduced notable changes that ZQUIC follows:
-
-- `std.ArrayList` is unmanaged by default - always pass an allocator
-- Use `std.posix.clock_gettime()` for timing
-- `std.io` moved under `std.Io`
-- Temporary directories use `std.testing.tmpDir`
-
-See `archive/ZIG_API_CHANGES.md` for a comprehensive checklist.
+- [Build Configuration](build-config.md)
+- [Core API Reference](../api/core.md)
+- [Feature Overview](../features/overview.md)
+- [Crypto Maturity](../features/crypto-maturity.md)
+- [Release Validation](../architecture/release-validation.md)

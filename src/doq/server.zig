@@ -186,7 +186,7 @@ const DoQConnection = struct {
             const ip_data = [_]u8{ 127, 0, 0, 1 };
             response.answers[0] = message.DnsResourceRecord{
                 .name = try self.allocator.dupe(u8, query.questions[0].name),
-                .rtype = @intFromEnum(message.DnsRecordType.A),
+                .rtype = @backingInt(message.DnsRecordType.A),
                 .rclass = 1, // IN
                 .ttl = 300,
                 .rdlength = 4,
@@ -425,7 +425,7 @@ fn ghostDnsHandler(query: *DnsMessage, allocator: std.mem.Allocator) !DnsMessage
     const ip_data = [_]u8{ 10, 0, 0, 1 }; // Placeholder IP
     response.answers[0] = message.DnsResourceRecord{
         .name = try allocator.dupe(u8, domain),
-        .rtype = @intFromEnum(message.DnsRecordType.A),
+        .rtype = @backingInt(message.DnsRecordType.A),
         .rclass = 1, // IN
         .ttl = 300,
         .rdlength = 4,

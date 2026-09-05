@@ -1,8 +1,9 @@
 # System Overview
 
 ZQUIC is organized as a set of protocol layers over a small UDP/syscall
-boundary. Default builds expose stable QUIC, HTTP/3, DoQ, and monitoring
-surfaces; post-quantum and SSH/QUIC paths remain explicit opt-ins.
+boundary. Default builds compile the core, HTTP/3, and DoQ modules; monitoring,
+services, VPN, and post-quantum paths are opt-ins. Maturity varies by module and
+is not implied by inclusion in the default build.
 
 ## Component Map
 

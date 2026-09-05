@@ -5,7 +5,7 @@
 #   ./dev/consumer_smoke_test.sh
 #
 # Post-tag/archive check:
-#   ZQUIC_URL=https://github.com/ghostkellz/zquic/archive/refs/tags/v0.9.16.tar.gz ./dev/consumer_smoke_test.sh
+#   ZQUIC_URL=https://github.com/ghostkellz/zquic/archive/refs/tags/vX.Y.Z.tar.gz ./dev/consumer_smoke_test.sh
 
 set -e
 ZIG="${ZIG:-/opt/zig-dev/zig}"
@@ -20,11 +20,14 @@ WORK_ROOT="$REPO_ROOT/zig-out/consumer-smoke"
 WORK_DIR="$WORK_ROOT/work"
 rm -rf "$WORK_DIR"
 mkdir -p "$WORK_DIR"
-trap "rm -rf '$WORK_ROOT'" EXIT
+cleanup() {
+    rm -rf "$WORK_ROOT"
+}
+trap cleanup EXIT
 
 echo "[1/5] Creating test project in $WORK_DIR..."
 if [ -z "$ZQUIC_URL" ]; then
-    LOCAL_ARCHIVE="$WORK_DIR/zquic-v0.9.16.tar.gz"
+    LOCAL_ARCHIVE="$WORK_DIR/zquic-local.tar.gz"
     PACKAGE_DIR="$WORK_DIR/zquic"
     echo "  packaging current checkout: $LOCAL_ARCHIVE"
     tar \

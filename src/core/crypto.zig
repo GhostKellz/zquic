@@ -93,15 +93,28 @@ pub const DirectionalKeys = struct {
     /// Initialize directional keys with given cipher suite
     pub fn init(
         allocator: std.mem.Allocator,
-        _: CipherSuite,
+        cipher_suite: CipherSuite,
         aead_key: []const u8,
         aead_iv: []const u8,
         hp_key: []const u8,
     ) !Self {
+        if (aead_key.len != cipher_suite.keyLength() or
+            aead_iv.len != cipher_suite.ivLength() or
+            hp_key.len != cipher_suite.keyLength())
+        {
+            return Error.ZquicError.CryptoError;
+        }
+
+        const owned_key = try allocator.dupe(u8, aead_key);
+        errdefer allocator.free(owned_key);
+        const owned_iv = try allocator.dupe(u8, aead_iv);
+        errdefer allocator.free(owned_iv);
+        const owned_hp = try allocator.dupe(u8, hp_key);
+
         return Self{
-            .aead_key = try allocator.dupe(u8, aead_key),
-            .aead_iv = try allocator.dupe(u8, aead_iv),
-            .hp_key = try allocator.dupe(u8, hp_key),
+            .aead_key = owned_key,
+            .aead_iv = owned_iv,
+            .hp_key = owned_hp,
             .key_phase = 0,
             .allocator = allocator,
         };
@@ -363,26 +376,7 @@ pub const HeaderProtection = struct {
         header: []u8,
         sample: []const u8,
     ) Error.ZquicError!void {
-        if (header.len == 0) return Error.ZquicError.CryptoError;
-
-        var mask: [5]u8 = undefined;
-        try self.generateMask(hp_key, sample, &mask);
-
-        // Apply mask to first byte and packet number bytes
-        const first_byte_mask: u8 = if (header[0] & 0x80 != 0) 0x0F else 0x1F;
-        header[0] ^= mask[0] & first_byte_mask;
-
-        // Determine packet number length and apply mask
-        const pn_length = if (header[0] & 0x80 != 0)
-            @as(usize, (header[0] & 0x03) + 1) // Long header
-        else
-            @as(usize, (header[0] & 0x03) + 1); // Short header
-
-        for (0..pn_length) |i| {
-            if (1 + i < header.len) {
-                header[1 + i] ^= mask[1 + i];
-            }
-        }
+        try self.protectAtPacketNumberOffset(hp_key, header, 1, sample);
     }
 
     pub fn protectAtPacketNumberOffset(
@@ -436,8 +430,7 @@ pub const HeaderProtection = struct {
         header: []u8,
         sample: []const u8,
     ) Error.ZquicError!void {
-        // Same operation as protect - XOR is its own inverse
-        try self.protect(hp_key, header, sample);
+        try self.unprotectAtPacketNumberOffset(hp_key, header, 1, sample);
     }
 };
 
@@ -481,11 +474,11 @@ pub const QuicCrypto = struct {
         remote_keys: DirectionalKeys,
     ) void {
         // Clean up existing keys if any
-        if (self.keys[@intFromEnum(level)]) |*existing| {
+        if (self.keys[@backingInt(level)]) |*existing| {
             existing.deinit();
         }
 
-        self.keys[@intFromEnum(level)] = KeyPair{
+        self.keys[@backingInt(level)] = KeyPair{
             .local = local_keys,
             .remote = remote_keys,
             .cipher_suite = self.aead.cipher_suite,
@@ -495,7 +488,7 @@ pub const QuicCrypto = struct {
 
     /// Get keys for encryption level
     pub fn getKeys(self: *Self, level: EncryptionLevel) ?*KeyPair {
-        return if (self.keys[@intFromEnum(level)]) |*kp| kp else null;
+        return if (self.keys[@backingInt(level)]) |*kp| kp else null;
     }
 
     /// Encrypt outgoing packet
@@ -522,16 +515,10 @@ pub const QuicCrypto = struct {
             output[header.len..],
         );
 
-        // Copy header and apply header protection
+        // Header protection is applied by the packet layer after the full QUIC
+        // header and ciphertext are assembled. Keeping this primitive AEAD-only
+        // avoids protecting a copied header that its callers immediately discard.
         @memcpy(output[0..header.len], header);
-        const sample_offset = header.len + 4; // Typically 4 bytes into encrypted payload
-        if (sample_offset + 16 <= header.len + ciphertext_len) {
-            try self.hp.protect(
-                keys.local.hp_key,
-                output[0..header.len],
-                output[sample_offset .. sample_offset + 16],
-            );
-        }
 
         return header.len + ciphertext_len;
     }
@@ -548,17 +535,8 @@ pub const QuicCrypto = struct {
         const keys = self.getKeys(level) orelse return Error.ZquicError.CryptoError;
         if (header_len == 0 or header_len > packet.len) return Error.ZquicError.CryptoError;
 
-        // Remove header protection first
-        const sample_offset = header_len + 4;
-        if (sample_offset + 16 <= packet.len) {
-            try self.hp.unprotect(
-                keys.remote.hp_key,
-                packet[0..header_len],
-                packet[sample_offset .. sample_offset + 16],
-            );
-        }
-
-        // Decrypt payload
+        // The packet layer removes header protection before passing the
+        // authenticated header to this AEAD primitive.
         return self.aead.decrypt(
             keys.remote.aead_key,
             keys.remote.aead_iv,
@@ -772,12 +750,12 @@ test "RFC 9001 Appendix A Initial packet header protection vectors" {
     try hp.generateMask(&keys.server.header_protection_key, &server_sample, &server_mask);
     try std.testing.expectEqualSlices(u8, &expected_server_mask, &server_mask);
 
-    const server_unprotected = try hexToArray(19, "c1000000010008f067a5502a4262b50040750001");
-    const server_protected = try hexToArray(19, "cf000000010008f067a5502a4262b5004075c0d9");
+    const server_unprotected = try hexToArray(20, "c1000000010008f067a5502a4262b50040750001");
+    const server_protected = try hexToArray(20, "cf000000010008f067a5502a4262b5004075c0d9");
     var protected_server_header = server_unprotected;
-    try hp.protectAtPacketNumberOffset(&keys.server.header_protection_key, &protected_server_header, 17, &server_sample);
+    try hp.protectAtPacketNumberOffset(&keys.server.header_protection_key, &protected_server_header, 18, &server_sample);
     try std.testing.expectEqualSlices(u8, &server_protected, &protected_server_header);
-    try hp.unprotectAtPacketNumberOffset(&keys.server.header_protection_key, &protected_server_header, 17, &server_sample);
+    try hp.unprotectAtPacketNumberOffset(&keys.server.header_protection_key, &protected_server_header, 18, &server_sample);
     try std.testing.expectEqualSlices(u8, &server_unprotected, &protected_server_header);
 }
 

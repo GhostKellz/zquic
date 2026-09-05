@@ -6,6 +6,7 @@ ARG QUICHE_REF=0.29.2
 ARG MSQUIC_REF=v2.5.9
 ENV RUSTUP_HOME=/usr/local/rustup
 ENV CARGO_HOME=/usr/local/cargo
+ENV HOME=/home/zquic
 ENV CARGO_BUILD_JOBS=4
 ENV CMAKE_BUILD_PARALLEL_LEVEL=4
 ENV MAKEFLAGS=-j4
@@ -63,5 +64,9 @@ RUN git clone --depth 1 --branch "$MSQUIC_REF" --recurse-submodules https://gith
     && rm -rf /opt/src/msquic
 
 WORKDIR /workspace
+
+# The runtime container uses the invoking host UID/GID. Its normal home keeps
+# default tool caches writable without polluting the bind-mounted checkout.
+RUN install -d -m 0777 /home/zquic
 
 CMD ["bash"]

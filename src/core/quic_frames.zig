@@ -46,7 +46,7 @@ pub const FrameType = enum(u64) {
     datagram_len = 0x31,
 
     pub fn isStreamFrame(self: FrameType) bool {
-        const type_val = @intFromEnum(self);
+        const type_val = @backingInt(self);
         return type_val >= 0x08 and type_val <= 0x0f;
     }
 
@@ -173,6 +173,22 @@ pub const Frame = union(FrameType) {
 
     pub fn isAckEliciting(self: Frame) bool {
         return self.getType().isAckEliciting();
+    }
+
+    /// Release storage owned by a frame returned from `parse`.
+    pub fn deinit(self: *Frame, allocator: std.mem.Allocator) void {
+        switch (self.*) {
+            .ack => |ack| ack.deinit(allocator),
+            .ack_ecn => |ack_ecn| ack_ecn.ack_frame.deinit(allocator),
+            .crypto => |crypto| allocator.free(crypto.data),
+            .new_token => |new_token| allocator.free(new_token.token),
+            .stream, .stream_fin, .stream_len, .stream_len_fin, .stream_off, .stream_off_fin, .stream_off_len, .stream_off_len_fin => |stream| allocator.free(stream.data),
+            .new_connection_id => |new_connection_id| allocator.free(new_connection_id.connection_id),
+            .connection_close => |connection_close| allocator.free(connection_close.reason_phrase),
+            .connection_close_app => |connection_close| allocator.free(connection_close.reason_phrase),
+            .datagram, .datagram_len => |datagram| allocator.free(datagram.data),
+            else => {},
+        }
     }
 
     pub fn serialize(self: Frame, writer: anytype) !void {
@@ -328,6 +344,7 @@ pub const AckFrame = struct {
         const first_ack_range = try readVarint(reader);
 
         const ack_ranges = try allocator.alloc(AckRange, ack_range_count);
+        errdefer allocator.free(ack_ranges);
         for (ack_ranges) |*range| {
             range.gap = try readVarint(reader);
             range.ack_range_length = try readVarint(reader);
@@ -378,6 +395,7 @@ pub const AckEcnFrame = struct {
 
     pub fn parse(reader: anytype, allocator: std.mem.Allocator) !AckEcnFrame {
         const ack_frame = try AckFrame.parse(reader, allocator);
+        errdefer ack_frame.deinit(allocator);
         const ect0_count = try readVarint(reader);
         const ect1_count = try readVarint(reader);
         const ecn_ce_count = try readVarint(reader);
@@ -480,6 +498,7 @@ pub const CryptoFrame = struct {
         const length = try readVarint(reader);
 
         const data = try allocator.alloc(u8, length);
+        errdefer allocator.free(data);
         try reader.readSliceAll(data);
 
         return CryptoFrame{
@@ -506,6 +525,7 @@ pub const NewTokenFrame = struct {
     pub fn parse(reader: anytype, allocator: std.mem.Allocator) !NewTokenFrame {
         const token_length = try readVarint(reader);
         const token = try allocator.alloc(u8, token_length);
+        errdefer allocator.free(token);
         try reader.readSliceAll(token);
 
         return NewTokenFrame{ .token = token };
@@ -564,6 +584,7 @@ pub const StreamFrame = struct {
         const data_length = if (has_length) try readVarint(reader) else 0;
 
         const data = try allocator.alloc(u8, data_length);
+        errdefer allocator.free(data);
         try reader.readSliceAll(data);
 
         return StreamFrame{
@@ -764,6 +785,7 @@ pub const NewConnectionIdFrame = struct {
         const connection_id_length = try reader.takeByte();
 
         const connection_id = try allocator.alloc(u8, connection_id_length);
+        errdefer allocator.free(connection_id);
         try reader.readSliceAll(connection_id);
 
         var stateless_reset_token: [16]u8 = undefined;
@@ -868,6 +890,7 @@ pub const ConnectionCloseFrame = struct {
         const reason_phrase_length = try readVarint(reader);
 
         const reason_phrase = try allocator.alloc(u8, reason_phrase_length);
+        errdefer allocator.free(reason_phrase);
         try reader.readSliceAll(reason_phrase);
 
         return ConnectionCloseFrame{
@@ -902,6 +925,7 @@ pub const ConnectionCloseAppFrame = struct {
         const reason_phrase_length = try readVarint(reader);
 
         const reason_phrase = try allocator.alloc(u8, reason_phrase_length);
+        errdefer allocator.free(reason_phrase);
         try reader.readSliceAll(reason_phrase);
 
         return ConnectionCloseAppFrame{
@@ -956,6 +980,7 @@ pub const DatagramFrame = struct {
         const data_length = if (has_length) try readVarint(reader) else 0;
 
         const data = try allocator.alloc(u8, data_length);
+        errdefer allocator.free(data);
         try reader.readSliceAll(data);
 
         return DatagramFrame{
@@ -985,7 +1010,10 @@ pub const FrameParser = struct {
 
     pub fn parseFrames(self: *FrameParser, data: []const u8) ![]Frame {
         var frames: std.ArrayListUnmanaged(Frame) = .empty;
-        errdefer frames.deinit(self.allocator);
+        errdefer {
+            for (frames.items) |*frame| frame.deinit(self.allocator);
+            frames.deinit(self.allocator);
+        }
 
         var reader = Io.Reader.fixed(data);
 
@@ -996,7 +1024,11 @@ pub const FrameParser = struct {
                     else => return err,
                 }
             };
-            try frames.append(self.allocator, frame);
+            frames.append(self.allocator, frame) catch |err| {
+                var owned = frame;
+                owned.deinit(self.allocator);
+                return err;
+            };
 
             if (reader.seek >= reader.end) break;
         }

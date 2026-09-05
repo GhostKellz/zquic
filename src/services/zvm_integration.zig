@@ -196,7 +196,7 @@ pub const WasmExecutionResult = struct {
         offset += 8;
 
         // Status
-        buffer[offset] = @intFromEnum(self.status);
+        buffer[offset] = @backingInt(self.status);
         offset += 1;
 
         // Return value
@@ -237,7 +237,7 @@ pub const WasmExecutionResult = struct {
         offset += 8;
 
         // Status
-        const status = @as(ExecutionStatus, @enumFromInt(data[offset]));
+        const status = @as(ExecutionStatus, @fromBackingInt(@intCast(data[offset])));
         offset += 1;
 
         // Return value

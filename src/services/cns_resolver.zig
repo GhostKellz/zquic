@@ -143,8 +143,8 @@ pub const DnsQuestion = struct {
 
     pub fn serialize(self: *const DnsQuestion, writer: anytype) !void {
         try self.writeDomainName(writer, self.name);
-        try writer.writeInt(u16, @intFromEnum(self.qtype), .big);
-        try writer.writeInt(u16, @intFromEnum(self.qclass), .big);
+        try writer.writeInt(u16, @backingInt(self.qtype), .big);
+        try writer.writeInt(u16, @backingInt(self.qclass), .big);
     }
 
     fn writeDomainName(self: *const DnsQuestion, writer: anytype, name: []const u8) !void {
@@ -195,8 +195,8 @@ pub const DnsResourceRecord = struct {
 
     pub fn serialize(self: *const DnsResourceRecord, writer: anytype) !void {
         try self.writeDomainName(writer, self.name);
-        try writer.writeInt(u16, @intFromEnum(self.rtype), .big);
-        try writer.writeInt(u16, @intFromEnum(self.rclass), .big);
+        try writer.writeInt(u16, @backingInt(self.rtype), .big);
+        try writer.writeInt(u16, @backingInt(self.rclass), .big);
         try writer.writeInt(u32, self.ttl, .big);
         try writer.writeInt(u16, @intCast(self.data.len), .big);
         try writer.writeAll(self.data);
@@ -651,9 +651,9 @@ pub const CnsResolver = struct {
         response.header.flags.ra = 1; // Recursion available
 
         if (answers.len > 0) {
-            response.header.flags.rcode = @intFromEnum(DnsResponseCode.NoError);
+            response.header.flags.rcode = @backingInt(DnsResponseCode.NoError);
         } else {
-            response.header.flags.rcode = @intFromEnum(DnsResponseCode.NXDomain);
+            response.header.flags.rcode = @backingInt(DnsResponseCode.NXDomain);
         }
 
         response.header.qdcount = 1;
