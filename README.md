@@ -46,7 +46,7 @@ The source archive for a tagged release can be added to another Zig project
 with:
 
 ```bash
-zig fetch --save https://github.com/ghostkellz/zquic/archive/refs/tags/v0.9.17.tar.gz
+zig fetch --save https://github.com/ghostkellz/zquic/archive/refs/tags/v0.9.18.tar.gz
 ```
 
 ## Public Surface

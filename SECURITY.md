@@ -4,10 +4,10 @@
 
 | Version | Status |
 |---------|--------|
-| `0.9.17` | Supported after release |
-| `0.9.16` | Supported |
+| `0.9.18` | Supported after release |
+| `0.9.17` | Supported |
 | `main` | Best effort |
-| `<= 0.9.15` | Not supported |
+| `<= 0.9.16` | Not supported |
 
 Security fixes are targeted at the current release line first.
 

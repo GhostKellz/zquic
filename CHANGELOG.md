@@ -1,3 +1,15 @@
+## [0.9.18] - 2026-10-18
+
+### Changed
+- Raised the minimum Zig baseline to `0.18.0-dev.253+16d31ceed`.
+- Updated `zcrypto` to v1.0.8 and `zsync` to v0.8.7, which restore builds on
+  that baseline.
+
+### Fixed
+- Handshake integration tests no longer `try` the now-infallible
+  `X25519.KeyPair.generateDeterministic`, which stopped compiling on current
+  Zig nightlies.
+
 ## [0.9.17] - 2026-09-04
 
 ### Changed

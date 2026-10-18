@@ -7,10 +7,10 @@ compatible newer development build.
 
 ## Install
 
-After the `v0.9.17` tag is published:
+After the `v0.9.18` tag is published:
 
 ```bash
-zig fetch --save https://github.com/ghostkellz/zquic/archive/refs/tags/v0.9.17.tar.gz
+zig fetch --save https://github.com/ghostkellz/zquic/archive/refs/tags/v0.9.18.tar.gz
 ```
 
 For an unreleased checkout:

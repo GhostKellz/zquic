@@ -2413,7 +2413,7 @@ const HandshakeFixture = struct {
         try self.server_packets.installRfc9001ServerInitialKeys(dcid);
 
         const private_seed: [32]u8 = @splat(key_seed);
-        self.client_keys = try std.crypto.dh.X25519.KeyPair.generateDeterministic(private_seed);
+        self.client_keys = std.crypto.dh.X25519.KeyPair.generateDeterministic(private_seed);
 
         var client_hello_opts = opts;
         if (client_hello_opts.key_share_bytes == null) {
@@ -2735,7 +2735,7 @@ test "integration: server flight authenticates peer Finished before exposing app
     try tls.setServerQuicTransportContext(&.{ 1, 2, 3, 4 }, &.{ 1, 2, 3, 4 });
 
     const seed: [std.crypto.dh.X25519.seed_length]u8 = @splat(0x44);
-    const client_keypair = try std.crypto.dh.X25519.KeyPair.generateDeterministic(seed);
+    const client_keypair = std.crypto.dh.X25519.KeyPair.generateDeterministic(seed);
     var body_buffer: [1024]u8 = undefined;
     const body = try Tls13Messages.buildTestClientHello(&body_buffer, .{
         .key_share_bytes = &client_keypair.public_key,
@@ -2848,7 +2848,7 @@ test "integration: P-256-only ClientHello selects a DER CertificateVerify" {
     try tls.setServerQuicTransportContext(&.{ 1, 2, 3, 4 }, &.{ 5, 6, 7, 8 });
 
     const seed: [std.crypto.dh.X25519.seed_length]u8 = @splat(0x51);
-    const client_keypair = try std.crypto.dh.X25519.KeyPair.generateDeterministic(seed);
+    const client_keypair = std.crypto.dh.X25519.KeyPair.generateDeterministic(seed);
     var body_buffer: [1024]u8 = undefined;
     const body = try Tls13Messages.buildTestClientHello(&body_buffer, .{
         .key_share_bytes = &client_keypair.public_key,
