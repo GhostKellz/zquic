@@ -1,4 +1,4 @@
-## [Unreleased]
+## [0.9.19] - 2026-10-21
 
 ### Fixed
 - Update zcrypto to v1.0.9 for Zig build API compatibility.
