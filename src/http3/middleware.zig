@@ -53,9 +53,9 @@ fn getConfig(request: *const Request) MiddlewareConfig {
 
 /// CORS (Cross-Origin Resource Sharing) middleware
 pub const CorsMiddleware = struct {
-    allowed_origins: std.ArrayListUnmanaged([]const u8),
-    allowed_methods: std.ArrayListUnmanaged([]const u8),
-    allowed_headers: std.ArrayListUnmanaged([]const u8),
+    allowed_origins: std.ArrayList([]const u8),
+    allowed_methods: std.ArrayList([]const u8),
+    allowed_headers: std.ArrayList([]const u8),
     allow_credentials: bool,
     max_age: ?u32,
     allocator: std.mem.Allocator,

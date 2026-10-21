@@ -46,7 +46,7 @@ pub const UdpMultiplexer = struct {
 
     // Async operation support
     receive_buffer: []u8,
-    send_queue: std.ArrayListUnmanaged(OutboundPacket),
+    send_queue: std.ArrayList(OutboundPacket),
 
     // Statistics
     packets_received: u64 = 0,

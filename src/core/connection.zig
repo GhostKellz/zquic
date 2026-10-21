@@ -359,7 +359,7 @@ fn nowMicrosU64() u64 {
 const CryptoReassemblyBuffer = struct {
     const max_buffered_bytes = 1024 * 1024;
 
-    data: std.ArrayListUnmanaged(u8) = .empty,
+    data: std.ArrayList(u8) = .empty,
     consumed: usize = 0,
 
     pub fn deinit(self: *CryptoReassemblyBuffer, allocator: std.mem.Allocator) void {
@@ -444,14 +444,14 @@ pub const SuperConnection = struct {
     next_stream_id: u64,
 
     // Internal packet queues
-    incoming_packets: std.ArrayListUnmanaged(Packet.Packet),
-    outgoing_packets: std.ArrayListUnmanaged(Packet.Packet),
+    incoming_packets: std.ArrayList(Packet.Packet),
+    outgoing_packets: std.ArrayList(Packet.Packet),
     /// Backs payload slices placed in the legacy packet queues by this
     /// connection. External packets remain caller-owned.
-    owned_control_payloads: std.ArrayListUnmanaged([]u8),
-    incoming_raw_packets: std.ArrayListUnmanaged(OwnedRawPacket),
-    outgoing_raw_packets: std.ArrayListUnmanaged(OwnedRawPacket),
-    stream_events: std.ArrayListUnmanaged(StreamEvent),
+    owned_control_payloads: std.ArrayList([]u8),
+    incoming_raw_packets: std.ArrayList(OwnedRawPacket),
+    outgoing_raw_packets: std.ArrayList(OwnedRawPacket),
+    stream_events: std.ArrayList(StreamEvent),
     crypto_reassembly: [3]CryptoReassemblyBuffer,
     retained_crypto: [3]RetainedCrypto,
     packet_spaces: PacketSpace.PacketSpaceManager,
@@ -1063,7 +1063,7 @@ pub const SuperConnection = struct {
     ) Error.ZquicError!void {
         if (ack.largest_acknowledged < ack.first_ack_range) return Error.ZquicError.ProtocolViolation;
 
-        var ranges: std.ArrayListUnmanaged(PacketSpace.AckRange) = .empty;
+        var ranges: std.ArrayList(PacketSpace.AckRange) = .empty;
         defer ranges.deinit(self.allocator);
 
         try ranges.append(self.allocator, .{
@@ -2227,8 +2227,8 @@ pub const Connection = struct {
 
 /// Connection pool for managing multiple connections
 pub const SuperConnectionPool = struct {
-    available: std.ArrayListUnmanaged(*SuperConnection),
-    active: std.ArrayListUnmanaged(*SuperConnection),
+    available: std.ArrayList(*SuperConnection),
+    active: std.ArrayList(*SuperConnection),
     allocator: std.mem.Allocator,
     stats: PoolStats,
     mutex: SpinMutex,

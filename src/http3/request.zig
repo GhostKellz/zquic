@@ -58,7 +58,7 @@ pub const Version = enum {
 
 /// HTTP request headers
 pub const Headers = struct {
-    fields: std.ArrayListUnmanaged(HeaderField),
+    fields: std.ArrayList(HeaderField),
     allocator: std.mem.Allocator,
 
     const Self = @This();
@@ -174,7 +174,7 @@ pub const Request = struct {
     version: Version,
     headers: Headers,
     query_params: QueryParams,
-    body: std.ArrayListUnmanaged(u8),
+    body: std.ArrayList(u8),
     context: RequestContext,
     allocator: std.mem.Allocator,
 

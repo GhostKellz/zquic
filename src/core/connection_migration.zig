@@ -98,7 +98,7 @@ pub const PathInfo = struct {
 
 /// Connection ID management for migration
 pub const ConnectionIdManager = struct {
-    active_connection_ids: std.ArrayListUnmanaged(ConnectionIdEntry),
+    active_connection_ids: std.ArrayList(ConnectionIdEntry),
     next_sequence_number: u64,
     retire_prior_to: u64,
     active_connection_id_limit: u64,
@@ -295,7 +295,7 @@ pub const PathValidator = struct {
     }
 
     pub fn cleanupExpiredValidations(self: *PathValidator) void {
-        var expired_keys: std.ArrayListUnmanaged(u64) = .empty;
+        var expired_keys: std.ArrayList(u64) = .empty;
         defer expired_keys.deinit(self.allocator);
 
         var iterator = self.active_validations.iterator();
@@ -311,7 +311,7 @@ pub const PathValidator = struct {
     }
 
     pub fn retryValidations(self: *PathValidator) ![]PathChallengeFrame {
-        var challenges: std.ArrayListUnmanaged(PathChallengeFrame) = .empty;
+        var challenges: std.ArrayList(PathChallengeFrame) = .empty;
         errdefer challenges.deinit(self.allocator);
 
         var iterator = self.active_validations.iterator();
@@ -329,7 +329,7 @@ pub const PathValidator = struct {
 /// Connection migration manager
 pub const ConnectionMigrator = struct {
     current_path: PathInfo,
-    candidate_paths: std.ArrayListUnmanaged(PathInfo),
+    candidate_paths: std.ArrayList(PathInfo),
     migration_state: MigrationState,
     path_validator: PathValidator,
     connection_id_manager: ConnectionIdManager,
@@ -369,7 +369,7 @@ pub const ConnectionMigrator = struct {
             return Error.ZquicError.ConnectionMigrationDisabled;
         }
 
-        var challenges: std.ArrayListUnmanaged(PathChallengeFrame) = .empty;
+        var challenges: std.ArrayList(PathChallengeFrame) = .empty;
         errdefer challenges.deinit(self.allocator);
 
         for (self.candidate_paths.items) |*path| {
@@ -640,8 +640,8 @@ test "migration rejects disabled probing and handles nat rebinding challenge" {
 
 /// 0-RTT (Zero Round Trip Time) manager
 pub const ZeroRTTManager = struct {
-    session_tickets: std.ArrayListUnmanaged(SessionTicket),
-    early_data_buffer: std.ArrayListUnmanaged(u8),
+    session_tickets: std.ArrayList(SessionTicket),
+    early_data_buffer: std.ArrayList(u8),
     max_early_data_size: u32,
     early_data_accepted: bool,
     early_data_state: EarlyDataState,
@@ -827,7 +827,7 @@ pub const MigrationAndZeroRTTManager = struct {
     }
 
     pub fn generateMigrationFrames(self: *MigrationAndZeroRTTManager) ![]Frame {
-        var frames: std.ArrayListUnmanaged(Frame) = .empty;
+        var frames: std.ArrayList(Frame) = .empty;
         errdefer frames.deinit(self.allocator);
 
         // Generate path challenge frames

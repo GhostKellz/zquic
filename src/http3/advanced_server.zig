@@ -271,8 +271,8 @@ pub const CircuitBreaker = struct {
 
 /// Connection pool for backend connections
 pub const ConnectionPool = struct {
-    connections: std.ArrayListUnmanaged(PooledConnection),
-    available_connections: std.ArrayListUnmanaged(usize),
+    connections: std.ArrayList(PooledConnection),
+    available_connections: std.ArrayList(usize),
     max_size: u32,
     allocator: std.mem.Allocator,
 
@@ -451,7 +451,7 @@ pub const BackendStats = struct {
 /// Load balancer implementation
 pub const LoadBalancer = struct {
     algorithm: LoadBalancingAlgorithm,
-    backends: std.ArrayListUnmanaged(BackendServer),
+    backends: std.ArrayList(BackendServer),
     current_index: u32,
     hash_ring: ?ConsistentHashRing,
     allocator: std.mem.Allocator,
@@ -654,7 +654,7 @@ pub const LoadBalancerStats = struct {
 /// Consistent hash ring for consistent hashing load balancing
 pub const ConsistentHashRing = struct {
     nodes: std.AutoHashMapUnmanaged(u64, []const u8),
-    sorted_hashes: std.ArrayListUnmanaged(u64),
+    sorted_hashes: std.ArrayList(u64),
     allocator: std.mem.Allocator,
 
     pub fn init(alloc: std.mem.Allocator) ConsistentHashRing {
@@ -686,7 +686,7 @@ pub const ConsistentHashRing = struct {
     }
 
     pub fn removeNode(self: *ConsistentHashRing, node: []const u8) void {
-        var hashes_to_remove: std.ArrayListUnmanaged(u64) = .empty;
+        var hashes_to_remove: std.ArrayList(u64) = .empty;
         defer hashes_to_remove.deinit(self.allocator);
 
         var iterator = self.nodes.iterator();
@@ -790,7 +790,7 @@ pub const AdvancedHttp3Server = struct {
 
     // Middleware and routing
     router: Router,
-    middleware_stack: std.ArrayListUnmanaged(Middleware),
+    middleware_stack: std.ArrayList(Middleware),
 
     // Performance monitoring
     stats: ServerStats,
@@ -979,7 +979,7 @@ pub const AdvancedHttp3Server = struct {
     }
 
     fn closeAndReleaseConnections(self: *Self) !void {
-        var ids: std.ArrayListUnmanaged(u64) = .empty;
+        var ids: std.ArrayList(u64) = .empty;
         defer ids.deinit(self.allocator);
 
         var iterator = self.connections.iterator();
@@ -1239,7 +1239,7 @@ pub const ConnectionContext = struct {
     }
 
     pub fn pruneClosedStreams(self: *ConnectionContext) !void {
-        var closed_stream_ids: std.ArrayListUnmanaged(u64) = .empty;
+        var closed_stream_ids: std.ArrayList(u64) = .empty;
         defer closed_stream_ids.deinit(self.allocator);
 
         var iterator = self.active_streams.iterator();
@@ -1290,7 +1290,7 @@ pub const ServerStats = struct {
 
 /// Metrics collector for performance monitoring
 pub const MetricsCollector = struct {
-    request_durations: std.ArrayListUnmanaged(u64),
+    request_durations: std.ArrayList(u64),
     status_codes: std.AutoHashMapUnmanaged(u16, u64),
     allocator: std.mem.Allocator,
 
@@ -1376,7 +1376,7 @@ pub const HealthMonitor = struct {
 
 /// Router for HTTP/3 requests
 pub const Router = struct {
-    routes: std.ArrayListUnmanaged(Route),
+    routes: std.ArrayList(Route),
     allocator: std.mem.Allocator,
 
     const Route = struct {

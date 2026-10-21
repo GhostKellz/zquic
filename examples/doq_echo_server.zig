@@ -271,7 +271,7 @@ fn handleMXRecord(query: *const zquic.DoQ.Message.DnsMessage, domain: []const u8
     const mx_domain = try std.fmt.allocPrint(allocator, "mail.{s}", .{domain});
     defer allocator.free(mx_domain);
 
-    var mx_data: std.ArrayListUnmanaged(u8) = .empty;
+    var mx_data: std.ArrayList(u8) = .empty;
     defer mx_data.deinit(allocator);
 
     // Priority (10)

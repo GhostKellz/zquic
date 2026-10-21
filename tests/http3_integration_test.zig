@@ -6,7 +6,7 @@ const zquic = @import("zquic");
 const Http3 = zquic.Http3;
 const Error = zquic.Error;
 const NextFn = *const fn (*Http3.Request, *Http3.Response) Error.ZquicError!void;
-const MiddlewareLog = std.ArrayListUnmanaged(u8);
+const MiddlewareLog = std.ArrayList(u8);
 
 const QpackFixtureHeader = struct {
     name: []const u8,

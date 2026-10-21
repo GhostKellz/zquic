@@ -33,8 +33,8 @@
     // internet connectivity.
     .dependencies = .{
         .zcrypto = .{
-            .url = "https://github.com/ghostkellz/zcrypto/archive/refs/tags/v1.0.8.tar.gz",
-            .hash = "zcrypto-1.0.8-rgQAI5T3HwCVpIR1RvutLJKai6UrzPojEKYuvR3Sg_xw",
+            .url = "https://github.com/ghostkellz/zcrypto/archive/refs/tags/v1.0.9.tar.gz",
+            .hash = "zcrypto-1.0.9-rgQAI_34HwDdrp2GIRT9-KV9uUM2IyIto9S_xNKeCMm_",
         },
         .zsync = .{
             .url = "https://github.com/ghostkellz/zsync/archive/refs/tags/v0.8.7.tar.gz",

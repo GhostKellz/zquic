@@ -252,7 +252,7 @@ pub const VectorizedIO = struct {
 /// High-performance memory pool with zero-copy capabilities
 pub const ZeroCopyPool = struct {
     buffers: std.ArrayList(ZeroCopyBuffer),
-    available_buffers: std.ArrayListUnmanaged(usize),
+    available_buffers: std.ArrayList(usize),
     buffer_size: usize,
     max_buffers: usize,
     allocator: std.mem.Allocator,
@@ -1094,9 +1094,9 @@ pub const ZeroCopyPacketPool = struct {
     large_buffers: std.ArrayList(ZeroCopyBuffer),
     medium_buffers: std.ArrayList(ZeroCopyBuffer),
     small_buffers: std.ArrayList(ZeroCopyBuffer),
-    available_large: std.ArrayListUnmanaged(usize),
-    available_medium: std.ArrayListUnmanaged(usize),
-    available_small: std.ArrayListUnmanaged(usize),
+    available_large: std.ArrayList(usize),
+    available_medium: std.ArrayList(usize),
+    available_small: std.ArrayList(usize),
     allocator: std.mem.Allocator,
 
     const LARGE_SIZE = 9000; // Jumbo frames
@@ -1147,7 +1147,7 @@ pub const ZeroCopyPacketPool = struct {
     fn acquireBufferFromPool(
         self: *ZeroCopyPacketPool,
         buffers: *std.ArrayList(ZeroCopyBuffer),
-        available: *std.ArrayListUnmanaged(usize),
+        available: *std.ArrayList(usize),
         buffer_size: usize,
     ) !ZeroCopyBuffer {
         // Try to get from available buffers first

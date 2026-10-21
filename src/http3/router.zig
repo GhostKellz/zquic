@@ -52,7 +52,7 @@ pub const RouteParams = struct {
 /// Route pattern matching and parameter extraction
 pub const RoutePattern = struct {
     pattern: []const u8,
-    segments: std.ArrayListUnmanaged(Segment),
+    segments: std.ArrayList(Segment),
     allocator: std.mem.Allocator,
 
     const Segment = struct {
@@ -155,7 +155,7 @@ pub const Route = struct {
     method: Method,
     pattern: RoutePattern,
     handler: HandlerFn,
-    middleware: std.ArrayListUnmanaged(MiddlewareFn),
+    middleware: std.ArrayList(MiddlewareFn),
     allocator: std.mem.Allocator,
 
     const Self = @This();
@@ -198,8 +198,8 @@ pub const Route = struct {
 
 /// Router for managing routes and handling requests
 pub const Router = struct {
-    routes: std.ArrayListUnmanaged(Route),
-    global_middleware: std.ArrayListUnmanaged(MiddlewareFn),
+    routes: std.ArrayList(Route),
+    global_middleware: std.ArrayList(MiddlewareFn),
     not_found_handler: ?HandlerFn,
     error_handler: ?*const fn (*Request, *Response, Error.ZquicError) Error.ZquicError!void,
     allocator: std.mem.Allocator,
@@ -394,7 +394,7 @@ pub const Router = struct {
     }
 
     fn allowedMethodsForPath(self: *Self, path: []const u8) ![]const u8 {
-        var methods: std.ArrayListUnmanaged([]const u8) = .empty;
+        var methods: std.ArrayList([]const u8) = .empty;
         defer methods.deinit(self.allocator);
 
         var params = RouteParams.init(self.allocator);
@@ -418,7 +418,7 @@ pub const Router = struct {
             }
         }
 
-        var out: std.ArrayListUnmanaged(u8) = .empty;
+        var out: std.ArrayList(u8) = .empty;
         errdefer out.deinit(self.allocator);
         for (methods.items, 0..) |method, i| {
             if (i > 0) try out.appendSlice(self.allocator, ", ");
@@ -553,7 +553,7 @@ fn setTestRequestPath(request: *Request, path: []const u8) !void {
 
 const TestHelpers = struct {
     const MiddlewareState = struct {
-        log: *std.ArrayListUnmanaged(u8),
+        log: *std.ArrayList(u8),
         allocator: std.mem.Allocator,
     };
 
@@ -694,7 +694,7 @@ test "router middleware executes global then route" {
     var response = Response.init(allocator, 1);
     defer response.deinit();
 
-    var call_order = std.ArrayListUnmanaged(u8).empty;
+    var call_order = std.ArrayList(u8).empty;
     defer call_order.deinit(allocator);
 
     var state = TestHelpers.MiddlewareState{ .log = &call_order, .allocator = allocator };
@@ -740,7 +740,7 @@ test "router middleware can short circuit handler" {
     var response = Response.init(allocator, 2);
     defer response.deinit();
 
-    var call_order = std.ArrayListUnmanaged(u8).empty;
+    var call_order = std.ArrayList(u8).empty;
     defer call_order.deinit(allocator);
 
     var state = TestHelpers.MiddlewareState{ .log = &call_order, .allocator = allocator };

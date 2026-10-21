@@ -7,7 +7,7 @@ const Error = @import("../utils/error.zig");
 
 /// QPACK decoder
 pub const QpackDecoder = struct {
-    dynamic_table: std.ArrayListUnmanaged(HeaderField),
+    dynamic_table: std.ArrayList(HeaderField),
     max_table_capacity: u32,
     max_header_count: usize = 256,
     max_header_block_size: usize = 64 * 1024,
@@ -115,7 +115,7 @@ pub const QpackEncoder = struct {
 
     pub fn encode(self: *QpackEncoder, headers: []const HeaderField, allocator: std.mem.Allocator) Error.ZquicError![]u8 {
         _ = self;
-        var buffer: std.ArrayListUnmanaged(u8) = .empty;
+        var buffer: std.ArrayList(u8) = .empty;
         defer buffer.deinit(allocator);
 
         try writeVarint(&buffer, allocator, headers.len);
@@ -265,7 +265,7 @@ test "qpack rejects duplicate pseudo headers" {
     try std.testing.expectError(Error.ZquicError.HeaderError, decoder.decode(&duplicate_path, allocator));
 }
 
-fn writeVarint(buffer: *std.ArrayListUnmanaged(u8), allocator: std.mem.Allocator, value: usize) !void {
+fn writeVarint(buffer: *std.ArrayList(u8), allocator: std.mem.Allocator, value: usize) !void {
     if (value < 64) {
         try buffer.append(allocator, @intCast(value));
     } else if (value < 16384) {

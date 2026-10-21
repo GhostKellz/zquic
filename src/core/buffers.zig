@@ -276,7 +276,7 @@ pub const SendBuffer = struct {
         acked: bool,
     };
 
-    segments: std.ArrayListUnmanaged(Segment),
+    segments: std.ArrayList(Segment),
     next_offset: u64,
     allocator: std.mem.Allocator,
 
@@ -325,7 +325,7 @@ pub const SendBuffer = struct {
 
     /// Get unacknowledged segments for retransmission
     pub fn getUnacked(self: *Self, allocator: std.mem.Allocator) ![]Segment {
-        var unacked: std.ArrayListUnmanaged(Segment) = .empty;
+        var unacked: std.ArrayList(Segment) = .empty;
         defer unacked.deinit(allocator);
 
         for (self.segments.items) |segment| {
@@ -380,7 +380,7 @@ pub const RecvBuffer = struct {
         data: []u8,
     };
 
-    chunks: std.ArrayListUnmanaged(Chunk),
+    chunks: std.ArrayList(Chunk),
     next_expected: u64,
     allocator: std.mem.Allocator,
 

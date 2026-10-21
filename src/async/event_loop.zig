@@ -29,7 +29,7 @@ pub const EventHandler = struct {
 /// Simple event loop using poll()
 pub const EventLoop = struct {
     handlers: std.AutoHashMapUnmanaged(posix.fd_t, EventHandler),
-    poll_fds: std.ArrayListUnmanaged(posix.pollfd),
+    poll_fds: std.ArrayList(posix.pollfd),
     running: bool,
     allocator: std.mem.Allocator,
 
@@ -203,7 +203,7 @@ pub const Timer = struct {
 
 /// Timer wheel for efficient timer management
 pub const TimerWheel = struct {
-    timers: std.ArrayListUnmanaged(Timer),
+    timers: std.ArrayList(Timer),
     allocator: std.mem.Allocator,
 
     const Self = @This();

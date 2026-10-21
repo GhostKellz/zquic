@@ -11,8 +11,8 @@ const PacketCryptoMod = @import("../core/packet_crypto.zig");
 /// Handshake manager that coordinates QUIC and TLS
 pub const HandshakeManager = struct {
     tls_context: Tls.TlsContext,
-    crypto_buffer: std.ArrayListUnmanaged(u8),
-    handshake_crypto_buffer: std.ArrayListUnmanaged(u8),
+    crypto_buffer: std.ArrayList(u8),
+    handshake_crypto_buffer: std.ArrayList(u8),
     handshake_complete: bool,
     allocator: std.mem.Allocator,
 
@@ -103,7 +103,7 @@ pub const HandshakeManager = struct {
     fn pendingCryptoBufferForLevel(
         self: *Self,
         level: PacketCryptoMod.EncryptionLevel,
-    ) *std.ArrayListUnmanaged(u8) {
+    ) *std.ArrayList(u8) {
         return switch (level) {
             .handshake => if (self.handshake_crypto_buffer.items.len > 0 or self.tls_context.is_server)
                 &self.handshake_crypto_buffer

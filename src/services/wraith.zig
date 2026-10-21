@@ -126,7 +126,7 @@ pub const LoadBalancingAlgorithm = enum {
 
 /// Backend pool for load balancing
 pub const BackendPool = struct {
-    backends: std.ArrayListUnmanaged(BackendServer),
+    backends: std.ArrayList(BackendServer),
     algorithm: LoadBalancingAlgorithm,
     current_index: usize, // For round-robin
     allocator: std.mem.Allocator,
@@ -178,7 +178,7 @@ pub const BackendPool = struct {
         if (self.backends.items.len == 0) return null;
 
         // Filter healthy backends
-        var healthy_backends: std.ArrayListUnmanaged(*BackendServer) = .{};
+        var healthy_backends: std.ArrayList(*BackendServer) = .{};
         defer healthy_backends.deinit(self.allocator);
 
         for (self.backends.items) |*backend| {
@@ -826,7 +826,7 @@ fn proxyHandler(req: *Request, res: *Response) !void {
     try res.setHeader("X-Response-Time-Microseconds", time_str);
 
     // Read and forward response body
-    var response_body: std.ArrayListUnmanaged(u8) = .{};
+    var response_body: std.ArrayList(u8) = .{};
     defer response_body.deinit(allocator);
 
     const reader = backend_request.reader();

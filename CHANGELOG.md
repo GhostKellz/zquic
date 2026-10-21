@@ -1,3 +1,11 @@
+## [Unreleased]
+
+### Fixed
+- Update zcrypto to v1.0.9 for Zig build API compatibility.
+- Replace the removed `std.ArrayListUnmanaged` alias with `std.ArrayList`.
+- Build the nightly Valgrind target for a baseline CPU to avoid unsupported
+  native instructions.
+
 ## [0.9.18] - 2026-10-18
 
 ### Changed

@@ -327,7 +327,7 @@ pub fn encodeLengthPrefixedMessage(allocator: std.mem.Allocator, dns_message: []
 
 /// Parse one or more RFC 9250 length-prefixed DNS messages from a QUIC stream.
 pub fn parseLengthPrefixedMessages(allocator: std.mem.Allocator, stream_data: []const u8) ![]StreamMessage {
-    var messages: std.ArrayListUnmanaged(StreamMessage) = .empty;
+    var messages: std.ArrayList(StreamMessage) = .empty;
     errdefer messages.deinit(allocator);
 
     var offset: usize = 0;
@@ -375,7 +375,7 @@ fn encodeDomainName(name: []const u8, _: std.mem.Allocator, writer: anytype) !vo
 /// Decode domain name from DNS wire format with compression pointer support (RFC 1035)
 /// message_data is the complete DNS message for resolving compression pointers
 fn decodeDomainName(allocator: std.mem.Allocator, reader: anytype, message_data: []const u8) ![]u8 {
-    var parts: std.ArrayListUnmanaged([]u8) = .empty;
+    var parts: std.ArrayList([]u8) = .empty;
     defer {
         // Free any remaining parts on error/cleanup
         for (parts.items) |part| {

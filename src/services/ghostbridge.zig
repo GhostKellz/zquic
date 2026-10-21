@@ -214,8 +214,8 @@ pub const GrpcStream = struct {
     method: GrpcMethod,
     quic_stream: *QuicStream,
     state: StreamState,
-    send_buffer: std.ArrayListUnmanaged(u8),
-    recv_buffer: std.ArrayListUnmanaged(u8),
+    send_buffer: std.ArrayList(u8),
+    recv_buffer: std.ArrayList(u8),
     allocator: std.mem.Allocator,
 
     const StreamState = enum {

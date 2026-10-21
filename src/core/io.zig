@@ -225,7 +225,7 @@ pub const PacketWriter = struct {
 /// QUIC stream reader for application data
 pub const StreamReader = struct {
     stream_id: u64,
-    buffer: std.ArrayListUnmanaged(u8),
+    buffer: std.ArrayList(u8),
     offset: usize,
     closed: bool,
     allocator: std.mem.Allocator,
@@ -300,7 +300,7 @@ pub const StreamReader = struct {
 /// QUIC stream writer for application data
 pub const StreamWriter = struct {
     stream_id: u64,
-    send_buffer: std.ArrayListUnmanaged(u8),
+    send_buffer: std.ArrayList(u8),
     closed: bool,
     allocator: std.mem.Allocator,
 

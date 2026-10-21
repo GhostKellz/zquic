@@ -83,8 +83,8 @@ pub const AsyncCryptoResult = union(enum) {
 
 /// Asynchronous crypto processor using internal queue
 pub const AsyncCryptoProcessor = struct {
-    operation_queue: std.ArrayListUnmanaged(AsyncCryptoOp),
-    result_queue: std.ArrayListUnmanaged(AsyncCryptoResult),
+    operation_queue: std.ArrayList(AsyncCryptoOp),
+    result_queue: std.ArrayList(AsyncCryptoResult),
     allocator: std.mem.Allocator,
     is_running: bool,
     worker_count: u32,

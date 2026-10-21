@@ -50,8 +50,8 @@ pub const RuntimeStats = struct {
 
 /// Connection pool for reusing connections
 pub const ConnectionPool = struct {
-    connections: std.ArrayListUnmanaged(*Connection.Connection),
-    available: std.ArrayListUnmanaged(usize),
+    connections: std.ArrayList(*Connection.Connection),
+    available: std.ArrayList(usize),
     config: PoolConfig,
     allocator: std.mem.Allocator,
     mutex: SpinMutex,

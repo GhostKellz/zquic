@@ -168,7 +168,7 @@ const ConnectionTable = struct {
     allocator: std.mem.Allocator,
     identity: *const zquic.Tls13Identity.EphemeralIdentity,
     p256_identity: *const zquic.Tls13Identity.EphemeralP256Identity,
-    entries: std.ArrayListUnmanaged(*ProbeConnection) = .empty,
+    entries: std.ArrayList(*ProbeConnection) = .empty,
 
     fn deinit(self: *ConnectionTable) void {
         for (self.entries.items) |connection| connection.destroy();

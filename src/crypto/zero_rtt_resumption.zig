@@ -480,7 +480,7 @@ pub const ZeroRttSessionManager = struct {
 
     /// Cleanup expired sessions
     pub fn cleanupExpiredSessions(self: *Self) !void {
-        var expired_tickets: std.ArrayListUnmanaged([16]u8) = .empty;
+        var expired_tickets: std.ArrayList([16]u8) = .empty;
         defer expired_tickets.deinit(self.allocator);
 
         var iterator = self.sessions.iterator();
@@ -512,7 +512,7 @@ pub const ZeroRttContext = struct {
     early_data_accepted: bool,
     early_data_rejected: bool,
     session_ticket: ?SessionTicket,
-    early_data_buffer: std.ArrayListUnmanaged(u8),
+    early_data_buffer: std.ArrayList(u8),
     max_early_data: u32,
     early_data_sent: u32,
     allocator: std.mem.Allocator,

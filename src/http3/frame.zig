@@ -119,7 +119,7 @@ pub const HeadersFrame = struct {
 
 /// HTTP/3 SETTINGS frame
 pub const SettingsFrame = struct {
-    settings: std.ArrayListUnmanaged(struct { id: u64, value: u64 }),
+    settings: std.ArrayList(struct { id: u64, value: u64 }),
 
     const Self = @This();
 
@@ -236,7 +236,7 @@ pub const GoawayFrame = struct {
 
 /// HTTP/3 frame parser
 pub const FrameParser = struct {
-    buffer: std.ArrayListUnmanaged(u8),
+    buffer: std.ArrayList(u8),
     state: ParserState,
     current_frame_type: ?FrameType,
     current_frame_length: u64,
@@ -267,7 +267,7 @@ pub const FrameParser = struct {
     pub fn processData(self: *Self, data: []const u8, allocator: std.mem.Allocator) Error.ZquicError![]Frame {
         try self.buffer.appendSlice(allocator, data);
 
-        var frames: std.ArrayListUnmanaged(Frame) = .empty;
+        var frames: std.ArrayList(Frame) = .empty;
 
         while (true) {
             switch (self.state) {

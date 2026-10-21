@@ -1009,7 +1009,7 @@ pub const FrameParser = struct {
     }
 
     pub fn parseFrames(self: *FrameParser, data: []const u8) ![]Frame {
-        var frames: std.ArrayListUnmanaged(Frame) = .empty;
+        var frames: std.ArrayList(Frame) = .empty;
         errdefer {
             for (frames.items) |*frame| frame.deinit(self.allocator);
             frames.deinit(self.allocator);

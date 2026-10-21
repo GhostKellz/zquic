@@ -48,10 +48,8 @@ jobs:
         run: |
           set -euo pipefail
           if command -v valgrind >/dev/null 2>&1; then
-            if [ ! -x "zig-out/bin/zquic" ]; then
-              echo "zquic binary not built; rerunning zig build"
-              zig build
-            fi
+            # Native CPU features can include instructions Valgrind cannot decode.
+            zig build -Dcpu=baseline
             valgrind --leak-check=full --error-exitcode=42 zig-out/bin/zquic >/dev/null
           else
             echo "valgrind not installed on runner; skipping leak check"

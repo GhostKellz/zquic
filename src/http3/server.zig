@@ -105,8 +105,8 @@ pub const SuperHttp3Server = struct {
     allocator: std.mem.Allocator,
 
     // Request/response queues
-    request_queue: std.ArrayListUnmanaged(Request),
-    response_queue: std.ArrayListUnmanaged(Response),
+    request_queue: std.ArrayList(Request),
+    response_queue: std.ArrayList(Response),
 
     is_running: bool = false,
 
@@ -220,7 +220,7 @@ pub const Http3Server = struct {
     config: SuperServerConfig,
     stats: SuperServerStats,
     connections: std.StringHashMapUnmanaged(*ConnectionContext),
-    middleware_stack: std.ArrayListUnmanaged(Middleware.MiddlewareFn),
+    middleware_stack: std.ArrayList(Middleware.MiddlewareFn),
     middleware_config: Middleware.MiddlewareConfig,
     running: bool = false,
     metrics: ?*PrometheusMetrics = null,
@@ -507,7 +507,7 @@ pub const Http3Server = struct {
         const stream = connection.getStream(stream_id) orelse return Error.ZquicError.StreamNotFound;
 
         // Encode the frame with type and length
-        var frame_data: std.ArrayListUnmanaged(u8) = .empty;
+        var frame_data: std.ArrayList(u8) = .empty;
         defer frame_data.deinit(self.allocator);
         try frame_data.ensureTotalCapacity(self.allocator, 64);
 
@@ -528,7 +528,7 @@ pub const Http3Server = struct {
     }
 
     /// Write a variable-length integer as defined in RFC 9000
-    fn writeVarint(self: *Self, writer: *std.ArrayListUnmanaged(u8), value: usize) !void {
+    fn writeVarint(self: *Self, writer: *std.ArrayList(u8), value: usize) !void {
         if (value < 64) {
             try writer.append(self.allocator, @intCast(value));
         } else if (value < 16384) {
@@ -591,7 +591,7 @@ pub const Http3Server = struct {
 
     /// Cleanup expired connections
     pub fn cleanupExpiredConnections(self: *Self) void {
-        var to_remove: std.ArrayListUnmanaged([]const u8) = .empty;
+        var to_remove: std.ArrayList([]const u8) = .empty;
         defer to_remove.deinit(self.allocator);
         to_remove.ensureTotalCapacity(self.allocator, 10) catch return;
 

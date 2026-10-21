@@ -94,9 +94,9 @@ pub const SuperStream = struct {
     allocator: std.mem.Allocator,
 
     // Data buffers
-    read_buffer: std.ArrayListUnmanaged(u8),
+    read_buffer: std.ArrayList(u8),
     read_start: usize, // Offset to avoid memmove on every read
-    write_buffer: std.ArrayListUnmanaged(u8),
+    write_buffer: std.ArrayList(u8),
     write_start: usize,
     bytes_flushed: u64,
 

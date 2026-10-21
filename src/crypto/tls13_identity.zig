@@ -95,7 +95,7 @@ pub const EphemeralP256Identity = struct {
     }
 };
 
-fn appendLength(out: *std.ArrayListUnmanaged(u8), allocator: std.mem.Allocator, len: usize) Error.ZquicError!void {
+fn appendLength(out: *std.ArrayList(u8), allocator: std.mem.Allocator, len: usize) Error.ZquicError!void {
     if (len < 128) {
         out.append(allocator, @intCast(len)) catch return Error.ZquicError.OutOfMemory;
     } else if (len <= std.math.maxInt(u8)) {
@@ -108,7 +108,7 @@ fn appendLength(out: *std.ArrayListUnmanaged(u8), allocator: std.mem.Allocator, 
 }
 
 fn appendTlv(
-    out: *std.ArrayListUnmanaged(u8),
+    out: *std.ArrayList(u8),
     allocator: std.mem.Allocator,
     tag: u8,
     value: []const u8,
@@ -123,14 +123,14 @@ fn wrapOwned(
     tag: u8,
     value: []const u8,
 ) Error.ZquicError![]u8 {
-    var out: std.ArrayListUnmanaged(u8) = .empty;
+    var out: std.ArrayList(u8) = .empty;
     errdefer out.deinit(allocator);
     try appendTlv(&out, allocator, tag, value);
     return out.toOwnedSlice(allocator) catch Error.ZquicError.OutOfMemory;
 }
 
 fn buildName(allocator: std.mem.Allocator) Error.ZquicError![]u8 {
-    var attribute: std.ArrayListUnmanaged(u8) = .empty;
+    var attribute: std.ArrayList(u8) = .empty;
     defer attribute.deinit(allocator);
     try appendTlv(&attribute, allocator, 0x06, &.{ 0x55, 0x04, 0x03 });
     try appendTlv(&attribute, allocator, 0x0c, "zquic interop");
@@ -147,7 +147,7 @@ fn buildSubjectPublicKeyInfo(
     public_key: *const [Ed25519.PublicKey.encoded_length]u8,
 ) Error.ZquicError![]u8 {
     const algorithm_identifier = [_]u8{ 0x30, 0x05, 0x06, 0x03, 0x2b, 0x65, 0x70 };
-    var content: std.ArrayListUnmanaged(u8) = .empty;
+    var content: std.ArrayList(u8) = .empty;
     defer content.deinit(allocator);
     content.appendSlice(allocator, &algorithm_identifier) catch return Error.ZquicError.OutOfMemory;
 
@@ -176,7 +176,7 @@ fn buildP256SubjectPublicKeyInfo(
         0x03, 0x01,
         0x07,
     };
-    var content: std.ArrayListUnmanaged(u8) = .empty;
+    var content: std.ArrayList(u8) = .empty;
     defer content.deinit(allocator);
     content.appendSlice(allocator, &algorithm_identifier) catch return Error.ZquicError.OutOfMemory;
 
@@ -220,7 +220,7 @@ fn buildCertificate(
     const spki = try buildSubjectPublicKeyInfo(allocator, &public_key);
     defer allocator.free(spki);
 
-    var tbs_content: std.ArrayListUnmanaged(u8) = .empty;
+    var tbs_content: std.ArrayList(u8) = .empty;
     defer tbs_content.deinit(allocator);
     tbs_content.appendSlice(allocator, &version_v3) catch return Error.ZquicError.OutOfMemory;
     try appendTlv(&tbs_content, allocator, 0x02, serial);
@@ -235,7 +235,7 @@ fn buildCertificate(
     const signature = key_pair.sign(tbs, null) catch return Error.ZquicError.CryptoError;
     const signature_bytes = signature.toBytes();
 
-    var certificate_content: std.ArrayListUnmanaged(u8) = .empty;
+    var certificate_content: std.ArrayList(u8) = .empty;
     defer certificate_content.deinit(allocator);
     certificate_content.appendSlice(allocator, tbs) catch return Error.ZquicError.OutOfMemory;
     certificate_content.appendSlice(allocator, &algorithm_identifier) catch return Error.ZquicError.OutOfMemory;
@@ -278,7 +278,7 @@ fn buildP256Certificate(
     const spki = try buildP256SubjectPublicKeyInfo(allocator, key_pair.public_key);
     defer allocator.free(spki);
 
-    var tbs_content: std.ArrayListUnmanaged(u8) = .empty;
+    var tbs_content: std.ArrayList(u8) = .empty;
     defer tbs_content.deinit(allocator);
     tbs_content.appendSlice(allocator, &version_v3) catch return Error.ZquicError.OutOfMemory;
     try appendTlv(&tbs_content, allocator, 0x02, serial);
@@ -297,7 +297,7 @@ fn buildP256Certificate(
     var signature_der_storage: [EcdsaP256.Signature.der_encoded_length_max]u8 = undefined;
     const signature_der = signature.toDer(&signature_der_storage);
 
-    var certificate_content: std.ArrayListUnmanaged(u8) = .empty;
+    var certificate_content: std.ArrayList(u8) = .empty;
     defer certificate_content.deinit(allocator);
     certificate_content.appendSlice(allocator, tbs) catch return Error.ZquicError.OutOfMemory;
     certificate_content.appendSlice(allocator, &signature_algorithm) catch return Error.ZquicError.OutOfMemory;

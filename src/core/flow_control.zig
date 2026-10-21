@@ -253,8 +253,8 @@ pub const FlowController = struct {
     connection_fc: ConnectionFlowControl,
     bidi_stream_limit: StreamLimit,
     uni_stream_limit: StreamLimit,
-    stream_fc_map: std.ArrayListUnmanaged(StreamEntry),
-    pending_frames: std.ArrayListUnmanaged(PendingFlowControlFrame),
+    stream_fc_map: std.ArrayList(StreamEntry),
+    pending_frames: std.ArrayList(PendingFlowControlFrame),
     allocator: std.mem.Allocator,
 
     const Self = @This();
@@ -348,7 +348,7 @@ pub const FlowController = struct {
 
     /// Get streams that need MAX_STREAM_DATA updates
     pub fn getStreamsNeedingUpdates(self: *Self, allocator: std.mem.Allocator) ![]u64 {
-        var streams_needing_updates: std.ArrayListUnmanaged(u64) = .empty;
+        var streams_needing_updates: std.ArrayList(u64) = .empty;
 
         for (self.stream_fc_map.items) |*entry| {
             if (entry.fc.shouldSendMaxStreamData()) {

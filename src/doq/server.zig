@@ -213,7 +213,7 @@ pub const DoQServer = struct {
     allocator: std.mem.Allocator,
 
     // Query handling queue
-    pending_queries: std.ArrayListUnmanaged(PendingQuery),
+    pending_queries: std.ArrayList(PendingQuery),
     is_running: bool = false,
     start_time: i64,
     metrics: ?*PrometheusMetrics = null,

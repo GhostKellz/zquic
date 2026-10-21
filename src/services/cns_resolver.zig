@@ -217,10 +217,10 @@ pub const DnsResourceRecord = struct {
 /// DNS message
 pub const DnsMessage = struct {
     header: DnsHeader,
-    questions: std.ArrayListUnmanaged(DnsQuestion),
-    answers: std.ArrayListUnmanaged(DnsResourceRecord),
-    authorities: std.ArrayListUnmanaged(DnsResourceRecord),
-    additionals: std.ArrayListUnmanaged(DnsResourceRecord),
+    questions: std.ArrayList(DnsQuestion),
+    answers: std.ArrayList(DnsResourceRecord),
+    authorities: std.ArrayList(DnsResourceRecord),
+    additionals: std.ArrayList(DnsResourceRecord),
     allocator: std.mem.Allocator,
 
     pub fn init(allocator: std.mem.Allocator) DnsMessage {
@@ -371,7 +371,7 @@ pub const BlockchainResolver = struct {
 /// DNS cache entry
 pub const CacheEntry = struct {
     question: DnsQuestion,
-    answers: std.ArrayListUnmanaged(DnsResourceRecord),
+    answers: std.ArrayList(DnsResourceRecord),
     expiry_time: i64,
     hit_count: u32,
 

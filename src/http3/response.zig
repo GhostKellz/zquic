@@ -103,7 +103,7 @@ pub const StatusCode = enum(u16) {
 
 /// Response headers management
 pub const ResponseHeaders = struct {
-    fields: std.ArrayListUnmanaged(HeaderField),
+    fields: std.ArrayList(HeaderField),
     allocator: std.mem.Allocator,
 
     const Self = @This();
@@ -224,7 +224,7 @@ pub const CookieOptions = struct {
 pub const Response = struct {
     status: StatusCode,
     headers: ResponseHeaders,
-    body: std.ArrayListUnmanaged(u8),
+    body: std.ArrayList(u8),
     allocator: std.mem.Allocator,
     stream_id: u64,
     is_sent: bool = false,
@@ -376,7 +376,7 @@ pub const Response = struct {
 
     /// Generate HTTP/3 frames for this response
     pub fn generateFrames(self: *Self, allocator: std.mem.Allocator) ![]Frame.Frame {
-        var frames: std.ArrayListUnmanaged(Frame.Frame) = .empty;
+        var frames: std.ArrayList(Frame.Frame) = .empty;
 
         // Set content-length if not already set
         if (self.headers.get("content-length") == null) {
@@ -384,7 +384,7 @@ pub const Response = struct {
         }
 
         // Add pseudo-headers for HTTP/3
-        var all_headers: std.ArrayListUnmanaged(HeaderField) = .empty;
+        var all_headers: std.ArrayList(HeaderField) = .empty;
         defer {
             for (all_headers.items) |*field| {
                 field.deinit();

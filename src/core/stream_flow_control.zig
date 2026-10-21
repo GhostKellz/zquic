@@ -267,7 +267,7 @@ pub const StreamPriorityInfo = struct {
     incremental: bool, // HTTP/3 incremental flag
     weight: u32,
     parent_stream_id: ?u64, // For dependency trees
-    children: std.ArrayListUnmanaged(u64),
+    children: std.ArrayList(u64),
 
     // Scheduling state
     bytes_scheduled: u64,
@@ -327,8 +327,8 @@ pub const StreamPriorityInfo = struct {
 pub const StreamScheduler = struct {
     algorithm: SchedulingAlgorithm,
     streams: std.AutoHashMapUnmanaged(u64, StreamPriorityInfo),
-    ready_streams: std.ArrayListUnmanaged(u64),
-    blocked_streams: std.ArrayListUnmanaged(u64),
+    ready_streams: std.ArrayList(u64),
+    blocked_streams: std.ArrayList(u64),
 
     // Round-robin state
     current_round_robin_index: usize,
@@ -567,7 +567,7 @@ pub const StreamScheduler = struct {
     }
 
     fn selectFromTree(self: *StreamScheduler, parent_stream_id: ?u64) ?u64 {
-        var candidates: std.ArrayListUnmanaged(u64) = .empty;
+        var candidates: std.ArrayList(u64) = .empty;
         defer candidates.deinit(self.allocator);
 
         // Find streams with the specified parent
@@ -755,7 +755,7 @@ pub const FlowControlManager = struct {
     }
 
     pub fn generateFlowControlUpdates(self: *FlowControlManager) ![]Frame {
-        var frames: std.ArrayListUnmanaged(Frame) = .empty;
+        var frames: std.ArrayList(Frame) = .empty;
         errdefer frames.deinit(self.allocator);
 
         // Check connection-level flow control

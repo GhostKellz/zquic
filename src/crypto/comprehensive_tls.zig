@@ -744,8 +744,8 @@ pub const ComprehensiveTlsContext = struct {
     zero_rtt_keys: ?CryptoKeys,
 
     // Certificate chain
-    certificate_chain: std.ArrayListUnmanaged(Certificate),
-    peer_certificate_chain: std.ArrayListUnmanaged(Certificate),
+    certificate_chain: std.ArrayList(Certificate),
+    peer_certificate_chain: std.ArrayList(Certificate),
 
     // Session resumption
     session_ticket: ?SessionTicket,
@@ -757,8 +757,8 @@ pub const ComprehensiveTlsContext = struct {
     negotiated_alpn: ?[]const u8,
 
     // Handshake transcript
-    handshake_transcript: std.ArrayListUnmanaged(u8),
-    quic_crypto_buffer: std.ArrayListUnmanaged(u8),
+    handshake_transcript: std.ArrayList(u8),
+    quic_crypto_buffer: std.ArrayList(u8),
 
     // Key exchange materials
     private_key: ?[]const u8,
@@ -786,9 +786,9 @@ pub const ComprehensiveTlsContext = struct {
     /// ServerHello bytes owed to the peer, framed as a TLS handshake message and
     /// already appended to the transcript. Cleared once the QUIC layer has
     /// scheduled them.
-    pending_handshake_crypto: std.ArrayListUnmanaged(u8),
+    pending_handshake_crypto: std.ArrayList(u8),
     /// EncryptedExtensions..Finished owed in Handshake-space CRYPTO.
-    pending_server_flight_crypto: std.ArrayListUnmanaged(u8),
+    pending_server_flight_crypto: std.ArrayList(u8),
 
     // Post-quantum support
     pq_private_key: ?[]const u8,
@@ -1325,19 +1325,19 @@ pub const ComprehensiveTlsContext = struct {
         return null;
     }
 
-    fn appendU16(out: *std.ArrayListUnmanaged(u8), allocator: std.mem.Allocator, value: u16) Error.ZquicError!void {
+    fn appendU16(out: *std.ArrayList(u8), allocator: std.mem.Allocator, value: u16) Error.ZquicError!void {
         out.appendSlice(allocator, &.{ @truncate(value >> 8), @truncate(value) }) catch
             return Error.ZquicError.OutOfMemory;
     }
 
-    fn appendU24(out: *std.ArrayListUnmanaged(u8), allocator: std.mem.Allocator, value: usize) Error.ZquicError!void {
+    fn appendU24(out: *std.ArrayList(u8), allocator: std.mem.Allocator, value: usize) Error.ZquicError!void {
         if (value > std.math.maxInt(u24)) return Error.ZquicError.PacketTooLarge;
         out.appendSlice(allocator, &.{ @truncate(value >> 16), @truncate(value >> 8), @truncate(value) }) catch
             return Error.ZquicError.OutOfMemory;
     }
 
     fn appendFramedHandshake(
-        out: *std.ArrayListUnmanaged(u8),
+        out: *std.ArrayList(u8),
         allocator: std.mem.Allocator,
         message_type: u8,
         body: []const u8,
@@ -1375,7 +1375,7 @@ pub const ComprehensiveTlsContext = struct {
         const iscid = self.server_initial_source_connection_id orelse return Error.ZquicError.InvalidState;
         const alpn = self.negotiated_alpn orelse return Error.ZquicError.InvalidState;
 
-        var flight: std.ArrayListUnmanaged(u8) = .empty;
+        var flight: std.ArrayList(u8) = .empty;
         defer flight.deinit(self.allocator);
 
         // EncryptedExtensions: selected ALPN and server QUIC transport params.
@@ -1387,7 +1387,7 @@ pub const ComprehensiveTlsContext = struct {
         }, &tp_writer);
         const encoded_tp = std.Io.Writer.buffered(&tp_writer);
 
-        var extensions: std.ArrayListUnmanaged(u8) = .empty;
+        var extensions: std.ArrayList(u8) = .empty;
         defer extensions.deinit(self.allocator);
         try appendU16(&extensions, self.allocator, @backingInt(TlsExtensionType.application_layer_protocol_negotiation));
         try appendU16(&extensions, self.allocator, @intCast(2 + 1 + alpn.len));
@@ -1398,14 +1398,14 @@ pub const ComprehensiveTlsContext = struct {
         try appendU16(&extensions, self.allocator, @intCast(encoded_tp.len));
         extensions.appendSlice(self.allocator, encoded_tp) catch return Error.ZquicError.OutOfMemory;
 
-        var encrypted_extensions: std.ArrayListUnmanaged(u8) = .empty;
+        var encrypted_extensions: std.ArrayList(u8) = .empty;
         defer encrypted_extensions.deinit(self.allocator);
         try appendU16(&encrypted_extensions, self.allocator, @intCast(extensions.items.len));
         encrypted_extensions.appendSlice(self.allocator, extensions.items) catch return Error.ZquicError.OutOfMemory;
         try appendFramedHandshake(&flight, self.allocator, 8, encrypted_extensions.items);
 
         // Certificate: empty request context and a bounded DER chain.
-        var certificate_list: std.ArrayListUnmanaged(u8) = .empty;
+        var certificate_list: std.ArrayList(u8) = .empty;
         defer certificate_list.deinit(self.allocator);
         switch (self.signature_algorithm) {
             .ed25519 => for (self.certificate_chain.items) |certificate| {
@@ -1421,7 +1421,7 @@ pub const ComprehensiveTlsContext = struct {
             },
             else => return Error.ZquicError.NotSupported,
         }
-        var certificate_body: std.ArrayListUnmanaged(u8) = .empty;
+        var certificate_body: std.ArrayList(u8) = .empty;
         defer certificate_body.deinit(self.allocator);
         certificate_body.append(self.allocator, 0) catch return Error.ZquicError.OutOfMemory;
         try appendU24(&certificate_body, self.allocator, certificate_list.items.len);
@@ -1437,7 +1437,7 @@ pub const ComprehensiveTlsContext = struct {
         signed_content[64 + context.len] = 0;
         @memcpy(signed_content[65 + context.len ..], &cert_verify_hash);
 
-        var certificate_verify: std.ArrayListUnmanaged(u8) = .empty;
+        var certificate_verify: std.ArrayList(u8) = .empty;
         defer certificate_verify.deinit(self.allocator);
         switch (self.signature_algorithm) {
             .ed25519 => {

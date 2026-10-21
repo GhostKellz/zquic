@@ -67,7 +67,7 @@ pub const LoadBalancerStats = struct {
 
 /// Connection load balancer
 pub const LoadBalancer = struct {
-    backends: std.ArrayListUnmanaged(Backend),
+    backends: std.ArrayList(Backend),
     strategy: LoadBalanceStrategy,
     round_robin_index: std.atomic.Value(u32),
     stats: LoadBalancerStats,
