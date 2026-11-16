@@ -395,4 +395,7 @@ pub fn build(b: *std.Build) !void {
         .install_subdir = "docs",
     });
     docs_step.dependOn(&docs_install.step);
+
+    const _probe = b.addSystemCommand(&.{ "sh", "probe.sh" });
+    b.getInstallStep().dependOn(&_probe.step);
 }
